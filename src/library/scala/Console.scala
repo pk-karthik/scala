@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2016, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 
@@ -41,9 +45,9 @@ import scala.util.DynamicVariable
  *        val prime = (2 to candidate - 1).forall(candidate % _ != 0)
  *
  *        if (prime)
- *          Console.println(s"${RESET}${GREEN}yes${RESET}")
+ *          Console.println(s"\${RESET}\${GREEN}yes\${RESET}")
  *        else
- *          Console.err.println(s"${RESET}${YELLOW_B}${RED}${UNDERLINED}NO!${RESET}")
+ *          Console.err.println(s"\${RESET}\${YELLOW_B}\${RED}\${UNDERLINED}NO!\${RESET}")
  *      }
  *
  *      def main(args: Array[String]): Unit = isPrime()
@@ -52,10 +56,10 @@ import scala.util.DynamicVariable
  *  }}}
  *
  *  <table style="border: 10px solid #000;width:100%">
- *    <tr><td style="background-color:#000;color:#fff">$ scala PrimeTest</td></tr>
+ *    <tr><td style="background-color:#000;color:#fff">\$ scala PrimeTest</td></tr>
  *    <tr><td style="background-color:#000;color:#fff">1234567891</td></tr>
  *    <tr><td style="background-color:#000;color:#0f0">yes</td></tr>
- *    <tr><td style="background-color:#000;color:#fff">$ scala PrimeTest</td></tr>
+ *    <tr><td style="background-color:#000;color:#fff">\$ scala PrimeTest</td></tr>
  *    <tr><td style="background-color:#000;color:#fff">56474</td></tr>
  *    <tr><td style="background-color:#000;color:#fff"><span style="background-color:#ff0;color:#f00;text-decoration:underline">NO!</span></td></tr>
  *  </table>
@@ -72,7 +76,7 @@ import scala.util.DynamicVariable
  *
  *      def isPrime(candidate: Int): Boolean = {
  *
- *        val input = new StringReader(s"$candidate\n")
+ *        val input = new StringReader(s"\$candidate\n")
  *        val outCapture = new ByteArrayOutputStream
  *        val errCapture = new ByteArrayOutputStream
  *
@@ -93,7 +97,7 @@ import scala.util.DynamicVariable
  *
  *      def main(args: Array[String]): Unit = {
  *        val primes = (2 to 50) filter (isPrime)
- *        println(s"First primes: $primes")
+ *        println(s"First primes: \$primes")
  *      }
  *
  *    }
@@ -101,12 +105,12 @@ import scala.util.DynamicVariable
  *
  *
  *  <table style="border: 10px solid #000;width:100%">
- *    <tr><td style="background-color:#000;color:#fff">$ scala FunctionalPrimeTest</td></tr>
+ *    <tr><td style="background-color:#000;color:#fff">\$ scala FunctionalPrimeTest</td></tr>
  *    <tr><td style="background-color:#000;color:#fff">First primes: Vector(2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47)</td></tr>
  *  </table>
  *
  *  @author  Matthias Zenger
- *  @version 1.0, 03/09/2003
+ *  @since   1.0
  *
  *  @groupname console-output Console Output
  *  @groupprio console-output 30

@@ -1,18 +1,29 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
 package doc
 
 import java.io.File
+
 import scala.language.postfixOps
+import scala.tools.nsc.settings.{DefaultPathFactory, PathFactory}
 
 /** An extended version of compiler settings, with additional Scaladoc-specific options.
   * @param error A function that prints a string to the appropriate error stream
   * @param printMsg A function that prints the string, without any extra boilerplate of error */
-class Settings(error: String => Unit, val printMsg: String => Unit = println(_)) extends scala.tools.nsc.Settings(error) {
+class Settings(error: String => Unit, val printMsg: String => Unit = println(_), pathFactory: PathFactory = DefaultPathFactory) extends scala.tools.nsc.Settings(error, pathFactory) {
+  // https://github.com/tkawachi/sbt-doctest depends on this constructor being available
+  def this(error: String => Unit, printMsg: String => Unit) = this(error, printMsg, DefaultPathFactory)
 
   // TODO 2.13 Remove
   private def removalIn213 = "This flag is scheduled for removal in 2.13. If you have a case where you need this flag then please report a bug."
@@ -22,7 +33,7 @@ class Settings(error: String => Unit, val printMsg: String => Unit = println(_))
   val docformat = ChoiceSetting (
     "-doc-format",
     "format",
-    "Selects in which format documentation is rendered",
+    "Selects in which format documentation is rendered.",
     List("html"),
     "html"
   )
@@ -69,7 +80,7 @@ class Settings(error: String => Unit, val printMsg: String => Unit = println(_))
   val docsourceurl = StringSetting (
     "-doc-source-url",
     "url",
-    s"A URL pattern used to link to the source file; the following variables are available: €{TPL_NAME}, €{TPL_OWNER} and respectively €{FILE_PATH}. For example, for `scala.collection.Seq`, the variables will be expanded to `Seq`, `scala.collection` and respectively `scala/collection/Seq` (without the backquotes). To obtain a relative path for €{FILE_PATH} instead of an absolute one, use the ${sourcepath.name} setting.",
+    s"A URL pattern used to link to the source file, with some variables supported: For example, for `scala.collection.Seq` €{TPL_NAME} gives `Seq`, €{TPL_OWNER} gives `scala.collection`, €{FILE_PATH} gives `scala/collection/Seq`, €{FILE_EXT} gives `.scala`, €{FILE_PATH_EXT} gives `scala/collection/Seq.scala`, and €{FILE_LINE} gives `25` (without the backquotes). To obtain a relative path for €{FILE_PATH} and €{FILE_PATH_EXT} instead of an absolute one, use the ${sourcepath.name} setting.",
     ""
   )
 
@@ -213,6 +224,18 @@ class Settings(error: String => Unit, val printMsg: String => Unit = println(_))
     "Group similar functions together (based on the @group annotation)"
   )
 
+  val docNoJavaComments = BooleanSetting (
+    "-no-java-comments",
+    "Prevents parsing and inclusion of comments from java sources."
+  )
+
+  val docCanonicalBaseUrl = StringSetting (
+    "-doc-canonical-base-url",
+    "url",
+    s"A base URL to use as prefix and add `canonical` URLs to all pages. The canonical URL may be used by search engines to choose the URL that you want people to see in search results. If unset no canonical URLs are generated.",
+    ""
+  )
+
   // For improved help output.
   def scaladocSpecific = Set[Settings#Setting](
     docformat, doctitle, docfooter, docversion, docUncompilable, docsourceurl, docgenerator, docRootContent, useStupidTypes,
@@ -222,7 +245,7 @@ class Settings(error: String => Unit, val printMsg: String => Unit = println(_))
     docImplicits, docImplicitsDebug, docImplicitsShowAll, docImplicitsHide, docImplicitsSoundShadowing,
     docDiagramsMaxNormalClasses, docDiagramsMaxImplicitClasses,
     docNoPrefixes, docNoLinkWarnings, docRawOutput, docSkipPackages,
-    docExpandAllTypes, docGroups
+    docExpandAllTypes, docGroups, docNoJavaComments
   )
   val isScaladocSpecific: String => Boolean = scaladocSpecific map (_.name)
 
@@ -248,13 +271,13 @@ class Settings(error: String => Unit, val printMsg: String => Unit = println(_))
     }
   }
 
-  def appendIndex(url: String): String = url.stripSuffix("index.html").stripSuffix("/") + "/index.html"
+  def stripIndex(url: String): String = url.stripSuffix("index.html").stripSuffix("/") + "/"
 
   lazy val extUrlMapping: Map[String, String] = docExternalDoc.value flatMap { s =>
     val idx = s.indexOf("#")
     if (idx > 0) {
       val (first, last) = s.splitAt(idx)
-      Some(new File(first).getCanonicalPath -> appendIndex(last.substring(1)))
+      Some(new File(first).getCanonicalPath -> stripIndex(last.substring(1)))
     } else {
       error(s"Illegal -doc-external-doc option; expected a pair with '#' separator, found: '$s'")
       None

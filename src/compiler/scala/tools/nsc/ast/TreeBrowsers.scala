@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala
@@ -73,7 +80,7 @@ abstract class TreeBrowsers {
   }
 
   /** Tree model for abstract syntax trees */
-  class ASTTreeModel(val program: Tree) extends TreeModel {
+  class ASTTreeModel(val program: ProgramTree) extends TreeModel {
     var listeners: List[TreeModelListener] = Nil
 
     /** Add a listener to this tree */
@@ -272,6 +279,29 @@ abstract class TreeBrowsers {
         }
       )
       jmView add jmiCollapse
+      val jmiGoto = new JMenuItem(
+        new AbstractAction("Go to unit") {
+          putValue(Action.ACCELERATOR_KEY, KeyStroke.getKeyStroke(KeyEvent.VK_N, menuKey, false))
+          override def actionPerformed(actionEvent: ActionEvent) {
+            val query = JOptionPane.showInputDialog("Go to unit:", frame.getOwner)
+            if (query ne null) { // "Cancel" returns null
+              val units = treeModel.program.units
+              units.find(_.unit.source.file.name startsWith query) foreach { unit =>
+                // skip through 1-ary trees
+                def expando(tree: Tree): List[Tree] = tree.children match {
+                  case only :: Nil => only :: expando(only)
+                  case other => tree :: Nil
+                }
+
+                val path = new TreePath((treeModel.getRoot :: unit :: expando(unit.unit.body)).toArray[AnyRef]) // targ necessary to disambiguate Object and Object[] ctors
+                jTree.expandPath(path)
+                jTree.setSelectionPath(path)
+              }
+            }
+          }
+        }
+      )
+      jmView add jmiGoto
       add(jmView)
     }
 
@@ -298,6 +328,7 @@ abstract class TreeBrowsers {
         case _ =>
           str.append("tree.id: ").append(t.id)
           str.append("\ntree.pos: ").append(t.pos)
+          str.append(TreeInfo.attachments(t, "tree"))
           str.append("\nSymbol: ").append(TreeInfo.symbolText(t))
           str.append("\nSymbol owner: ").append(
             if ((t.symbol ne null) && t.symbol != NoSymbol)
@@ -516,12 +547,23 @@ abstract class TreeBrowsers {
       val s = t.symbol
 
       if ((s ne null) && (s != NoSymbol)) {
-        var str = s.flagString
-        if (s.isStaticMember) str = str + " isStatic "
-        (str + " annotations: " + s.annotations.mkString("", " ", "")
-          + (if (s.isTypeSkolem) "\ndeSkolemized annotations: " + s.deSkolemize.annotations.mkString("", " ", "") else ""))
+        val str = new StringBuilder(s.flagString)
+        if (s.isStaticMember) str ++= " isStatic "
+        str ++= " annotations: "
+        str ++= s.annotations.mkString("", " ", "")
+        if (s.isTypeSkolem) {
+          str ++= "\ndeSkolemized annotations: "
+          str ++= s.deSkolemize.annotations.mkString("", " ", "")
+        }
+        str ++= attachments(s, "")
+        str.toString
       }
       else ""
+    }
+
+    def attachments(t: Attachable, pre: String): String = {
+      if (t.attachments.isEmpty) ""
+      else t.attachments.all.mkString(s"\n$pre attachments:\n   ","\n   ","")
     }
   }
 
@@ -557,12 +599,12 @@ abstract class TreeBrowsers {
       case WildcardType => "WildcardType()"
       case NoType => "NoType()"
       case NoPrefix => "NoPrefix()"
-      case ThisType(s) => "ThisType(" + s.name + ")"
+      case ThisType(s) => "ThisType(" + s.nameString + ")"
 
       case SingleType(pre, sym) =>
         Document.group(
           Document.nest(4, "SingleType(" :/:
-                      toDocument(pre) :: ", " :/: sym.name.toString :: ")")
+                      toDocument(pre) :: ", " :/: sym.nameString :: ")")
         )
 
       case ConstantType(value) =>
@@ -572,7 +614,7 @@ abstract class TreeBrowsers {
         Document.group(
           Document.nest(4, "TypeRef(" :/:
                         toDocument(pre) :: ", " :/:
-                        sym.name.toString + sym.idString :: ", " :/:
+                        sym.nameString :: ", " :/:
                         "[ " :: toDocument(args) ::"]" :: ")")
         )
 
@@ -593,7 +635,7 @@ abstract class TreeBrowsers {
         Document.group(
           Document.nest(4,"ClassInfoType(" :/:
                         toDocument(parents) :: ", " :/:
-                        clazz.name.toString + clazz.idString :: ")")
+                        clazz.nameString :: ")")
         )
 
       case MethodType(params, result) =>
@@ -642,6 +684,13 @@ abstract class TreeBrowsers {
           Document.nest(4, "SuperType(" :/:
                         toDocument(thistpe) :/: ", " :/:
                         toDocument(supertpe) ::")"))
+
+      case ErasedValueType(clazz, erased) =>
+        Document.group(
+          Document.nest(4, "ErasedValueType(" :/:
+                        clazz.nameString :/: ", " :/:
+                        toDocument(erased) :: ")"))
+
       case _ =>
         sys.error("Unknown case: " + t.toString +", "+ t.getClass)
     }

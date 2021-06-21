@@ -1,10 +1,22 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala.tools.nsc
 package transform
 
 abstract class Statics extends Transform with ast.TreeDSL {
   import global._
 
-  class StaticsTransformer extends Transformer {
+  trait StaticsTransformer extends Transformer {
     /** generate a static constructor with symbol fields inits, or an augmented existing static ctor
       */
     def staticConstructor(body: List[Tree], localTyper: analyzer.Typer, pos: Position)(newStaticInits: List[Tree]): Tree =

@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2007-2013 LAMP/EPFL
- * @author  Manohar Jonnalagedda
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
@@ -12,7 +19,7 @@ import scala.collection._
 
 /** A Scaladoc comment and all its tags.
   *
-  * '''Note:''' the only instantiation site of this class is in [[CommentFactory]].
+  * '''Note:''' the only instantiation site of this class is in [[model.CommentFactory]].
   *
   * @author Manohar Jonnalagedda
   * @author Gilles Dubochet */
@@ -28,7 +35,7 @@ abstract class Comment {
         case Chain(list) =>
           list foreach scan
         case tag: HtmlTag => {
-          if (stack.length > 0 && tag.canClose(stack.last)) {
+          if (stack.nonEmpty && tag.canClose(stack.last)) {
             stack.remove(stack.length-1)
           } else {
             tag.close match {

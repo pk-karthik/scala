@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala.reflect.reify
 package codegen
 
@@ -73,7 +85,7 @@ trait GenSymbols {
        */
       val hasPackagelessParent = sym.ownerChain.tail.tail exists (_.isEmptyPackageClass)
       if (sym.isStatic && (sym.isClass || sym.isModule) && !hasPackagelessParent) {
-        // SI-6238: if applicable, emit references to StandardDefinitions instead of staticClass/staticModule calls
+        // scala/bug#6238: if applicable, emit references to StandardDefinitions instead of staticClass/staticModule calls
         val resolver = if (sym.isType) nme.staticClass else nme.staticModule
         mirrorMirrorCall(resolver, reify(sym.fullName))
       } else {

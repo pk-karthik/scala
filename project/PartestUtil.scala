@@ -1,3 +1,5 @@
+package scala.build
+
 import sbt._
 import sbt.complete._, Parser._, Parsers._
 
@@ -8,7 +10,7 @@ object PartestUtil {
     private def testCaseFinder = (testBase / srcPath).*(AllPassFilter).*(testCaseFilter)
     private val basePaths = allTestCases.map(_._2.split('/').take(3).mkString("/") + "/").distinct
 
-    def allTestCases = testCaseFinder.pair(relativeTo(globalBase))
+    def allTestCases = testCaseFinder.pair(io.Path.relativeTo(globalBase))
     def basePathExamples = new FixedSetExamples(basePaths)
     private def equiv(f1: File, f2: File) = f1.getCanonicalFile == f2.getCanonicalFile
     def parentChain(f: File): Iterator[File] =
@@ -24,18 +26,23 @@ object PartestUtil {
       isParentOf(testBase / srcPath, f, 2) || isParentOf(f, testBase / srcPath, Int.MaxValue)
     }
   }
+
+  def testFilePaths(globalBase: File, testBase: File): Seq[java.io.File] =
+    (new TestFiles("files", globalBase, testBase)).allTestCases.map(_._1)
+
   /** A parser for the custom `partest` command */
   def partestParser(globalBase: File, testBase: File): Parser[String] = {
     val knownUnaryOptions = List(
       "--pos", "--neg", "--run", "--jvm", "--res", "--ant", "--scalap", "--specialized",
-      "--scalacheck", "--instrumented", "--presentation", "--failed", "--update-check",
-      "--show-diff", "--verbose", "--terse", "--debug", "--version", "--self-test", "--help")
+      "--instrumented", "--presentation", "--failed", "--update-check", "--no-exec",
+      "--show-diff", "--show-log", "--verbose", "--terse", "--debug", "--version", "--help")
     val srcPathOption = "--srcpath"
+    val compilerPathOption = "--compilerpath"
     val grepOption = "--grep"
 
     // HACK: if we parse `--srcpath scaladoc`, we overwrite this var. The parser for test file paths
     // then lazily creates the examples based on the current value.
-    // TODO is there a cleaner way to do this with SBT's parser infrastructure?
+    // TODO is there a cleaner way to do this with sbt's parser infrastructure?
     var srcPath = "files"
     var _testFiles: TestFiles = null
     def testFiles = {
@@ -51,22 +58,32 @@ object PartestUtil {
     val Grep = {
       def expandGrep(x: String): Seq[String] = {
         val matchingFileContent = try {
-          val Pattern = ("(?i)" + x).r
+          import scala.util.matching.Regex
+          val re = raw"(?i)${Regex.quote(x)}".r
           testFiles.allTestCases.filter {
             case (testFile, testPath) =>
-              val assocFiles = List(".check", ".flags").map(testFile.getParentFile / _)
+              def sibling(suffix: String) = {
+                val name = testFile.name
+                val prefix = name.lastIndexOf('.') match {
+                  case -1 => name
+                  case i  => name.substring(0, i)
+                }
+                val next = prefix + suffix
+                testFile.getParentFile / next
+              }
+              val assocFiles = List(".check", ".flags").map(sibling)
               val sourceFiles = if (testFile.isFile) List(testFile) else testFile.**(AllPassFilter).get.toList
               val allFiles = testFile :: assocFiles ::: sourceFiles
-              allFiles.exists { f => f.exists && f.isFile && Pattern.findFirstIn(IO.read(f)).isDefined }
+              allFiles.exists(f => f.isFile && re.findFirstIn(IO.read(f)).isDefined)
           }
         } catch {
           case _: Throwable => Nil
         }
         val matchingFileName = try {
           val filter = GlobFilter("*" + x + "*")
-          testFiles.allTestCases.filter(x => filter.accept(x._1.name))
+          testFiles.allTestCases.filter(x => filter.accept(x._1.asFile.getPath))
         } catch {
-          case t: Throwable => Nil
+          case _: Throwable => Nil
         }
         (matchingFileContent ++ matchingFileName).map(_._2).distinct.sorted
       }
@@ -81,12 +98,20 @@ object PartestUtil {
       token(grepOption <~ Space) ~> token(globOrPattern, tokenCompletion)
     }
 
-    val SrcPath = ((token(srcPathOption) <~ Space) ~ token(StringBasic.examples(Set("files", "pending", "scaladoc")))) map {
+    val SrcPath = ((token(srcPathOption) <~ Space) ~ token(StringBasic.examples(Set("files", "scaladoc", "async")))) map {
       case opt ~ path =>
         srcPath = path
         opt + " " + path
     }
-    val P = oneOf(knownUnaryOptions.map(x => token(x))) | SrcPath | TestPathParser | Grep
-    (Space ~> repsep(P, oneOrMore(Space))).map(_.mkString(" ")).?.map(_.getOrElse("")) <~ OptSpace
+
+   val CompilerPath = ((token(compilerPathOption) <~ Space) ~ token(NotSpace)) map {
+     case opt ~ path =>
+       opt + " " + path
+   }
+
+    val ScalacOptsParser = (token("-Dpartest.scalac_opts=") ~ token(NotSpace)) map { case opt ~ v => opt + v }
+
+    val P = oneOf(knownUnaryOptions.map(x => token(x))) | SrcPath | CompilerPath | TestPathParser | Grep | ScalacOptsParser
+    (Space ~> repsep(P, oneOrMore(Space))).map(_.mkString(" ")).?.map(_.getOrElse(""))
   }
 }

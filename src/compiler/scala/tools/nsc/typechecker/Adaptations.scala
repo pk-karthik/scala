@@ -1,10 +1,19 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Paul Phillips
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
 package typechecker
+
+import scala.tools.nsc.Reporting.WarningCategory
 
 /** This trait provides logic for assessing the validity of argument
  *  adaptations, such as tupling, unit-insertion, widening, etc.  Such
@@ -23,8 +32,6 @@ trait Adaptations {
 
   trait Adaptation {
     self: Typer =>
-
-    import runDefinitions._
 
     def checkValidAdaptation(t: Tree, args: List[Tree]): Boolean = {
       def applyArg = t match {
@@ -60,8 +67,8 @@ trait Adaptations {
         // they are used limits our ability to enforce anything sensible until
         // an opt-in compiler option is given.
         oneArgObject && !(
-             isStringAddition(t.symbol)
-          || isArrowAssoc(t.symbol)
+             currentRun.runDefinitions.isStringAddition(t.symbol)
+          || currentRun.runDefinitions.isArrowAssoc(t.symbol)
           || t.symbol.name == nme.equals_
           || t.symbol.name == nme.EQ
           || t.symbol.name == nme.NE
@@ -69,7 +76,7 @@ trait Adaptations {
       }
 
       if (settings.noAdaptedArgs)
-        context.warning(t.pos, adaptWarningMessage("No automatic adaptation here: use explicit parentheses."))
+        context.warning(t.pos, adaptWarningMessage("No automatic adaptation here: use explicit parentheses."), WarningCategory.LintAdaptedArgs)
       else if (args.isEmpty) {
         if (settings.future)
           context.error(t.pos, adaptWarningMessage("Adaptation of argument list by inserting () has been removed.", showAdaptation = false))
@@ -80,7 +87,9 @@ trait Adaptations {
           context.deprecationWarning(t.pos, t.symbol, adaptWarningMessage(msg), "2.11.0")
         }
       } else if (settings.warnAdaptedArgs)
-        context.warning(t.pos, adaptWarningMessage(s"Adapting argument list by creating a ${args.size}-tuple: this may not be what you want."))
+        context.warning(t.pos, adaptWarningMessage(
+          s"Adapting argument list by creating a ${args.size}-tuple: this may not be what you want."),
+          WarningCategory.LintAdaptedArgs)
 
       // return `true` if the adaptation should be kept
       !(settings.noAdaptedArgs || (args.isEmpty && settings.future))

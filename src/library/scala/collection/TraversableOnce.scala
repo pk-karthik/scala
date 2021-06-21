@@ -1,19 +1,24 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
 
-import mutable.{ Buffer, Builder, ArrayBuffer }
+import mutable.{ArrayBuffer, Buffer, Builder}
 import generic.CanBuildFrom
-import scala.annotation.unchecked.{ uncheckedVariance => uV }
-import scala.language.{implicitConversions, higherKinds}
+import scala.annotation.unchecked.{uncheckedVariance => uV}
+import scala.language.{higherKinds, implicitConversions}
 import scala.reflect.ClassTag
+import scala.runtime.AbstractFunction1
 
 /** A template trait for collections which can be traversed either once only
  *  or one or more times.
@@ -21,7 +26,6 @@ import scala.reflect.ClassTag
  *
  *  @author Martin Odersky
  *  @author Paul Phillips
- *  @version 2.8
  *  @since   2.8
  *
  *  @define coll traversable or iterator
@@ -62,6 +66,21 @@ import scala.reflect.ClassTag
 trait TraversableOnce[+A] extends Any with GenTraversableOnce[A] {
   self =>
 
+  // A note on `isEmpty`: it is documented in GenTraversableOnce as required to
+  // not consume any elements.  However, when (in scala/scala#8732) we tried
+  // to add some `isEmpty` checks in this file for efficiency, we found that:
+  // * in our own standard library, at least one subclass implemented
+  //   `isEmpty` as `size == 0`, making it problematic to call `isEmpty`
+  //   from `size` in this file
+  // * in the community build, at least one repo had a subclass where `isEmpty`
+  //   consumed elements, making it problematic to call `isEmpty` in this file
+  //   from other methods such as `count`, `foldLeft`, and `addString`
+  // Because it is now so late (2.12.11) in the 2.12.x series, we have chosen
+  // to avoid adding `isEmpty` calls here, figuring that the breakage isn't
+  // worth the presumably slight performance gain.  (And note that in 2.13.x,
+  // `TraversableOnce` no longer even exists, and `IterableOnce#isEmpty` is
+  // deprecated.)
+
   //TODO 2.12: Remove these methods. They are already defined in GenTraversableOnce
   /* Self-documenting abstract methods. */
   def foreach[U](f: A => U): Unit
@@ -97,25 +116,41 @@ trait TraversableOnce[+A] extends Any with GenTraversableOnce[A] {
 
   // for internal use
   protected[this] def reversed = {
-    var elems: List[A] = Nil
-    self foreach (elems ::= _)
-    elems
+    //avoid the LazyRef as we don't have an @eager object
+    class reverser extends AbstractFunction1[A, Unit] {
+      var elems: List[A] = Nil
+      override def apply(v1: A): Unit = elems ::= v1
+    }
+    val reverser = new reverser
+    self foreach reverser
+    reverser.elems
   }
 
   def size: Int = {
-    var result = 0
-    for (x <- self) result += 1
-    result
+    //we can't guard with isEmpty as some implementation have
+    // def isEmpty = size == 0
+
+    //avoid the LazyRef as we don't have an @eager object
+    class counter extends AbstractFunction1[A, Unit] {
+      var result = 0
+      override def apply(v1: A): Unit = result += 1
+    }
+    val counter = new counter
+    self foreach counter
+    counter.result
   }
 
   def nonEmpty: Boolean = !isEmpty
 
   def count(p: A => Boolean): Int = {
-    var cnt = 0
-    for (x <- this)
-      if (p(x)) cnt += 1
-
-    cnt
+    //avoid the LazyRef as we don't have an @eager object
+    class counter extends AbstractFunction1[A, Unit] {
+      var result = 0
+      override def apply(v1: A): Unit = if (p(v1)) result += 1
+    }
+    val counter = new counter
+    this foreach counter
+    counter.result
   }
 
   /** Finds the first element of the $coll for which the given partial
@@ -148,14 +183,21 @@ trait TraversableOnce[+A] extends Any with GenTraversableOnce[A] {
     None
   }
 
+  @deprecated("Use foldLeft instead of /:", "2.12.10")
   def /:[B](z: B)(op: (B, A) => B): B = foldLeft(z)(op)
 
+  @deprecated("Use foldRight instead of :\\", "2.12.10")
   def :\[B](z: B)(op: (A, B) => B): B = foldRight(z)(op)
 
   def foldLeft[B](z: B)(op: (B, A) => B): B = {
-    var result = z
-    this foreach (x => result = op(result, x))
-    result
+    //avoid the LazyRef as we don't have an @eager object
+    class folder extends AbstractFunction1[A, Unit] {
+      var result = z
+      override def apply(v1: A): Unit = result = op(result,v1)
+    }
+    val folder = new folder
+    this foreach folder
+    folder.result
   }
 
   def foldRight[B](z: B)(op: (A, B) => B): B =
@@ -179,17 +221,21 @@ trait TraversableOnce[+A] extends Any with GenTraversableOnce[A] {
     if (isEmpty)
       throw new UnsupportedOperationException("empty.reduceLeft")
 
-    var first = true
-    var acc: B = 0.asInstanceOf[B]
+    //avoid the LazyRef as we don't have an @eager object
+    class reducer extends AbstractFunction1[A, Unit] {
+      var first = true
+      var acc: B = null.asInstanceOf[B]
 
-    for (x <- self) {
-      if (first) {
-        acc = x
-        first = false
-      }
-      else acc = op(acc, x)
+      override def apply(x: A): Unit =
+        if (first) {
+          acc = x
+          first = false
+        }
+        else acc = op(acc, x)
     }
-    acc
+    val reducer = new reducer
+    self foreach reducer
+    reducer.acc
   }
 
   def reduceRight[B >: A](op: (A, B) => B): B = {
@@ -235,37 +281,47 @@ trait TraversableOnce[+A] extends Any with GenTraversableOnce[A] {
     if (isEmpty)
       throw new UnsupportedOperationException("empty.maxBy")
 
-    var maxF: B = null.asInstanceOf[B]
-    var maxElem: A = null.asInstanceOf[A]
-    var first = true
-
-    for (elem <- self) {
-      val fx = f(elem)
-      if (first || cmp.gt(fx, maxF)) {
-        maxElem = elem
-        maxF = fx
-        first = false
+    //avoid the LazyRef as we don't have an @eager object
+    class maxer extends AbstractFunction1[A, Unit] {
+      var maxF: B = null.asInstanceOf[B]
+      var maxElem: A = null.asInstanceOf[A]
+      var first = true
+      override def apply(elem: A): Unit = {
+        val fx = f(elem)
+        if (first || cmp.gt(fx, maxF)) {
+          maxElem = elem
+          maxF = fx
+          first = false
+        }
       }
+
     }
-    maxElem
+    val maxer = new maxer
+    self foreach maxer
+    maxer.maxElem
   }
   def minBy[B](f: A => B)(implicit cmp: Ordering[B]): A = {
     if (isEmpty)
       throw new UnsupportedOperationException("empty.minBy")
 
-    var minF: B = null.asInstanceOf[B]
-    var minElem: A = null.asInstanceOf[A]
-    var first = true
-
-    for (elem <- self) {
-      val fx = f(elem)
-      if (first || cmp.lt(fx, minF)) {
-        minElem = elem
-        minF = fx
-        first = false
+    //avoid the LazyRef as we don't have an @eager object
+    class miner extends AbstractFunction1[A, Unit] {
+      var minF: B = null.asInstanceOf[B]
+      var minElem: A = null.asInstanceOf[A]
+      var first = true
+      override def apply(elem: A): Unit = {
+        val fx = f(elem)
+        if (first || cmp.lt(fx, minF)) {
+          minElem = elem
+          minF = fx
+          first = false
+        }
       }
+
     }
-    minElem
+    val miner = new miner
+    self foreach miner
+    miner.minElem
   }
 
   /** Copies all elements of this $coll to a buffer.
@@ -313,9 +369,7 @@ trait TraversableOnce[+A] extends Any with GenTraversableOnce[A] {
 
   def toMap[T, U](implicit ev: A <:< (T, U)): immutable.Map[T, U] = {
     val b = immutable.Map.newBuilder[T, U]
-    for (x <- self)
-      b += x
-
+    b ++= seq.asInstanceOf[TraversableOnce[(T, U)]]
     b.result()
   }
 
@@ -351,21 +405,24 @@ trait TraversableOnce[+A] extends Any with GenTraversableOnce[A] {
    *  @return      the string builder `b` to which elements were appended.
    */
   def addString(b: StringBuilder, start: String, sep: String, end: String): StringBuilder = {
-    var first = true
-
     b append start
-    for (x <- self) {
-      if (first) {
-        b append x
-        first = false
-      }
-      else {
-        b append sep
-        b append x
+
+    class appender extends AbstractFunction1[A, Unit] {
+      var first = true
+      override def apply(x: A): Unit = {
+        if (first) {
+          b append x
+          first = false
+        }
+        else {
+          b append sep
+          b append x
+        }
       }
     }
+    val appender = new appender
+    self foreach appender
     b append end
-
     b
   }
 

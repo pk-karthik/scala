@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala
@@ -8,10 +15,13 @@ package tools.nsc
 package transform
 
 import scala.annotation.tailrec
-
 import symtab.Flags._
 import scala.collection.mutable
+import scala.collection.mutable.ListBuffer
 import scala.reflect.internal.util.ListOfNil
+import scala.tools.nsc.Reporting.WarningCategory
+
+import PartialFunction.cond
 
 /*<export> */
 /** - uncurry all symbol and tree types (@see UnCurryPhase) -- this includes normalizing all proper types.
@@ -27,6 +37,8 @@ import scala.reflect.internal.util.ListOfNil
  *  - for every repeated Scala parameter `x: T*' --> x: Seq[T].
  *  - for every repeated Java parameter `x: T...' --> x: Array[T], except:
  *    if T is an unbounded abstract type, replace --> x: Array[Object]
+ *  - for every method defining repeated parameters annotated with @varargs, generate
+ *    a synthetic Java-style vararg method
  *  - for every argument list that corresponds to a repeated Scala parameter
  *       (a_1, ..., a_n) => (Seq(a_1, ..., a_n))
  *  - for every argument list that corresponds to a repeated Java parameter
@@ -41,9 +53,11 @@ import scala.reflect.internal.util.ListOfNil
  *
  *      meth(x_1,..., try { x_i } catch { ..}, .. x_b0) ==>
  *        {
- *          def liftedTry$1 = try { x_i } catch { .. }
- *          meth(x_1, .., liftedTry$1(), .. )
+ *          def liftedTry\$1 = try { x_i } catch { .. }
+ *          meth(x_1, .., liftedTry\$1(), .. )
  *        }
+ *  - remove calls to elidable methods and replace their bodies with NOPs when elide-below
+ *    requires it
  */
 /*</export> */
 abstract class UnCurry extends InfoTransform
@@ -72,12 +86,12 @@ abstract class UnCurry extends InfoTransform
     private val noApply           = mutable.HashSet[Tree]()
     private val newMembers        = mutable.Map[Symbol, mutable.Buffer[Tree]]()
 
-    // Expand `Function`s in constructors to class instance creation (SI-6666, SI-8363)
+    // Expand `Function`s in constructors to class instance creation (scala/bug#6666, scala/bug#8363)
     // We use Java's LambdaMetaFactory (LMF), which requires an interface for the sam's owner
     private def mustExpandFunction(fun: Function) = {
       // (TODO: Can't use isInterface, yet, as it hasn't been updated for the new trait encoding)
       val canUseLambdaMetaFactory = (fun.attachments.get[SAMFunction] match {
-        case Some(SAMFunction(userDefinedSamTp, sam)) =>
+        case Some(SAMFunction(userDefinedSamTp, sam, _)) =>
           // LambdaMetaFactory cannot mix in trait members for us, or instantiate classes -- only pure interfaces need apply
           erasure.compilesToPureInterface(erasure.javaErasure(userDefinedSamTp).typeSymbol) &&
           // impl restriction -- we currently use the boxed apply, so not really useful to allow specialized sam types (https://github.com/scala/scala/pull/4971#issuecomment-198119167)
@@ -118,6 +132,7 @@ abstract class UnCurry extends InfoTransform
     def isByNameRef(tree: Tree) = (
          tree.isTerm
       && (tree.symbol ne null)
+      && !(tree.symbol.hasPackageFlag || tree.isInstanceOf[This] || tree.isInstanceOf[Super])
       && isByName(tree.symbol)
       && !byNameArgs(tree)
     )
@@ -126,7 +141,7 @@ abstract class UnCurry extends InfoTransform
 
     /** The type of a non-local return expression with given argument type */
     private def nonLocalReturnExceptionType(argtype: Type) =
-      appliedType(NonLocalReturnControlClass, argtype)
+      appliedType(NonLocalReturnControlClass, argtype :: Nil)
 
     /** A hashmap from method symbols to non-local return keys */
     private val nonLocalReturnKeys = perRunCaches.newMap[Symbol, Symbol]()
@@ -134,7 +149,7 @@ abstract class UnCurry extends InfoTransform
     /** Return non-local return key for given method */
     private def nonLocalReturnKey(meth: Symbol) =
       nonLocalReturnKeys.getOrElseUpdate(meth,
-        meth.newValue(unit.freshTermName("nonLocalReturnKey"), meth.pos, SYNTHETIC) setInfo ObjectTpe
+        meth.newValue(unit.freshTermName(nme.NON_LOCAL_RETURN_KEY_STRING), meth.pos, SYNTHETIC) setInfo ObjectTpe
       )
 
     /** Generate a non-local return throw with given return expression from given method.
@@ -186,7 +201,7 @@ abstract class UnCurry extends InfoTransform
           cdef <- catches
           if catchesThrowable(cdef) && !isSyntheticCase(cdef)
         } {
-          reporter.warning(body.pos, "catch block may intercept non-local return from " + meth)
+          runReporting.warning(body.pos, "catch block may intercept non-local return from " + meth, WarningCategory.Other, meth)
         }
 
         Block(List(keyDef), tryCatch)
@@ -197,10 +212,10 @@ abstract class UnCurry extends InfoTransform
 
     /**  Transform a function node (x_1,...,x_n) => body of type FunctionN[T_1, .., T_N, R] to
      *
-     *    class $anon() extends AbstractFunctionN[T_1, .., T_N, R] with Serializable {
+     *    class \$anon() extends AbstractFunctionN[T_1, .., T_N, R] with Serializable {
      *      def apply(x_1: T_1, ..., x_N: T_n): R = body
      *    }
-     *    new $anon()
+     *    new \$anon()
      *
      */
     def transformFunction(fun: Function): Tree =
@@ -227,7 +242,7 @@ abstract class UnCurry extends InfoTransform
           liftedMethod.updateAttachment(DelambdafyTarget)
         }
 
-        val typedNewFun = localTyper.typedPos(fun.pos)(Block(liftedMethod, super.transform(newFun)))
+        val typedNewFun = localTyper.typedPos(fun.pos)(Block(liftedMethod :: Nil, super.transform(newFun)))
         if (mustExpand) {
           val Block(stats, expr : Function) = typedNewFun
           treeCopy.Block(typedNewFun, stats, gen.expandFunction(localTyper)(expr, inConstructorFlag))
@@ -262,10 +277,10 @@ abstract class UnCurry extends InfoTransform
           assert(toArraySym != NoSymbol)
           def getClassTag(tp: Type): Tree = {
             val tag = localTyper.resolveClassTag(tree.pos, tp)
-            // Don't want bottom types getting any further than this (SI-4024)
+            // Don't want bottom types getting any further than this (scala/bug#4024)
             if (tp.typeSymbol.isBottomClass) getClassTag(AnyTpe)
             else if (!tag.isEmpty) tag
-            else if (tp.bounds.hi ne tp) getClassTag(tp.bounds.hi)
+            else if (tp.upperBound ne tp) getClassTag(tp.upperBound)
             else localTyper.TyperErrorGen.MissingClassTagError(tree, tp)
           }
           def traversableClassTag(tpe: Type): Tree = {
@@ -281,10 +296,16 @@ abstract class UnCurry extends InfoTransform
           }
         }
 
+        /* Java-style varargs = expects `Array` rather than `Seq`
+         * Note that `fun.isJavaDefined` is not good enough because
+         * if we override a varargs method defined in Java, `superaccessors`
+         * will make us a superaccessor which also takes `Array` rather than `Seq`.
+         * See scala/bug#10368 */
+        val javaStyleVarArgs = isJavaVarArgsMethod(fun)
         var suffix: Tree =
           if (treeInfo isWildcardStarArgList args) {
             val Typed(tree, _) = args.last
-            if (isJava)
+            if (javaStyleVarArgs)
               if (tree.tpe.typeSymbol == ArrayClass) tree
               else sequenceToArray(tree)
             else
@@ -293,7 +314,7 @@ abstract class UnCurry extends InfoTransform
           }
           else {
             def mkArray = mkArrayValue(args drop (formals.length - 1), varargsElemType)
-            if (isJava) mkArray
+            if (javaStyleVarArgs) mkArray
             else if (args.isEmpty) gen.mkNil  // avoid needlessly double-wrapping an empty argument list
             else arrayToSequence(mkArray, varargsElemType)
           }
@@ -326,7 +347,7 @@ abstract class UnCurry extends InfoTransform
             case body =>
               val thunkFun = localTyper.typedPos(body.pos)(Function(Nil, body)).asInstanceOf[Function]
               log(s"Change owner from $currentOwner to ${thunkFun.symbol} in ${thunkFun.body}")
-              thunkFun.body.changeOwner((currentOwner, thunkFun.symbol))
+              thunkFun.body.changeOwner(currentOwner, thunkFun.symbol)
               transformFunction(thunkFun)
           }
         }
@@ -338,12 +359,16 @@ abstract class UnCurry extends InfoTransform
      *  the whole tree with it.
      */
     private def replaceElidableTree(tree: Tree): Tree = {
+      def elisionOf(t: Type): Tree = t.typeSymbol match {
+        case StringClass => Literal(Constant("")) setType t
+        case _ => gen.mkZero(t)
+      }
       tree match {
         case DefDef(_,_,_,_,_,rhs) =>
-          val rhs1 = if (rhs == EmptyTree) rhs else Block(Nil, gen.mkZero(rhs.tpe)) setType rhs.tpe
+          val rhs1 = if (rhs == EmptyTree) rhs else Block(Nil, elisionOf(rhs.tpe)) setType rhs.tpe
           deriveDefDef(tree)(_ => rhs1) setSymbol tree.symbol setType tree.tpe
         case _ =>
-          gen.mkZero(tree.tpe) setType tree.tpe
+          elisionOf(tree.tpe)
       }
     }
 
@@ -359,7 +384,7 @@ abstract class UnCurry extends InfoTransform
      *  mark the method symbol SYNCHRONIZED for bytecode generation.
      *
      *  Delambdafy targets are deemed ineligible as the Delambdafy phase will
-     *  replace `this.synchronized` with `$this.synchronzed` now that it emits
+     *  replace `this.synchronized` with `\$this.synchronized` now that it emits
      *  all lambda impl methods as static.
      */
     private def translateSynchronized(tree: Tree) = tree match {
@@ -384,9 +409,9 @@ abstract class UnCurry extends InfoTransform
       /* Transform tree `t` to { def f = t; f } where `f` is a fresh name */
       def liftTree(tree: Tree) = {
         debuglog("lifting tree at: " + (tree.pos))
-        val sym = currentOwner.newMethod(unit.freshTermName("liftedTree"), tree.pos)
+        val sym = currentOwner.newMethod(unit.freshTermName(nme.LIFTED_TREE), tree.pos, Flag.ARTIFACT)
         sym.setInfo(MethodType(List(), tree.tpe))
-        tree.changeOwner(currentOwner -> sym)
+        tree.changeOwner(currentOwner, sym)
         localTyper.typedPos(tree.pos)(Block(
           List(DefDef(sym, ListOfNil, tree)),
           Apply(Ident(sym), Nil)
@@ -406,12 +431,21 @@ abstract class UnCurry extends InfoTransform
       def isLiftedLambdaMethod(funSym: Symbol) =
         funSym.isArtifact && funSym.name.containsName(nme.ANON_FUN_NAME) && funSym.isLocalToBlock
 
+      def checkIsElisible(sym: Symbol): Boolean =
+        (sym ne null) && sym.elisionLevel.exists { level =>
+          if (sym.isMethod) level < settings.elidebelow.value
+          else {
+            if (currentRun.isScala213) reporter.error(sym.pos, s"${sym.name}: Only methods can be marked @elidable!")
+            false
+          }
+        }
+
       val result =
-        if ((sym ne null) && sym.elisionLevel.exists(_ < settings.elidebelow.value))
+        if (checkIsElisible(sym))
           replaceElidableTree(tree)
         else translateSynchronized(tree) match {
           case dd @ DefDef(mods, name, tparams, _, tpt, rhs) =>
-            // Remove default argument trees from parameter ValDefs, SI-4812
+            // Remove default argument trees from parameter ValDefs, scala/bug#4812
             val vparamssNoRhs = dd.vparamss mapConserve (_ mapConserve {p =>
               treeCopy.ValDef(p, p.mods, p.name, p.tpt, EmptyTree)
             })
@@ -439,15 +473,15 @@ abstract class UnCurry extends InfoTransform
                 super.transform(treeCopy.DefDef(dd, mods, name, tparams, vparamssNoRhs, tpt, rhs))
               }
             }
-          case ValDef(_, _, _, rhs) =>
+          case ValDef(mods, _, _, rhs) =>
             if (sym eq NoSymbol) throw new IllegalStateException("Encountered Valdef without symbol: "+ tree + " in "+ unit)
-            if (!sym.owner.isSourceMethod)
+            if (!sym.owner.isSourceMethod || mods.isLazy)
               withNeedLift(needLift = true) { super.transform(tree) }
             else
               super.transform(tree)
 
           case Apply(fn, args) =>
-            val needLift = needTryLift || !fn.symbol.isLabel // SI-6749, no need to lift in args to label jumps.
+            val needLift = needTryLift || !fn.symbol.isLabel // scala/bug#6749, no need to lift in args to label jumps.
             withNeedLift(needLift) {
               val formals = fn.tpe.paramTypes
               treeCopy.Apply(tree, transform(fn), transformTrees(transformArgs(tree.pos, fn.symbol, args, formals)))
@@ -510,8 +544,11 @@ abstract class UnCurry extends InfoTransform
           case MethodType(_, _)           => tree
           case tp                         => tree setType MethodType(Nil, tp.resultType)
         }
-        if (tree.symbol.isMethod && !tree.tpe.isInstanceOf[PolyType])
-          gen.mkApplyIfNeeded(removeNullary())
+        val sym = tree.symbol
+        // our info transformer may not have run yet, so duplicate flag logic instead of forcing it to run
+        val isMethodExitingUncurry = (sym hasFlag METHOD) || (sym hasFlag MODULE) && !sym.isStatic
+        if (isMethodExitingUncurry && !tree.tpe.isInstanceOf[PolyType])
+          gen.mkApplyIfNeeded(removeNullary()) // apply () if tree.tpe has zero-arg MethodType
         else if (tree.isType)
           TypeTree(tree.tpe) setPos tree.pos
         else
@@ -574,11 +611,18 @@ abstract class UnCurry extends InfoTransform
               case None    => literalRhsIfConst
             }
           )
-          addJavaVarargsForwarders(dd, flatdd)
+          // Only class members can reasonably be called from Java due to name mangling.
+          // Additionally, the Uncurry info transformer only adds a forwarder symbol to class members,
+          // since the other symbols are not part of the ClassInfoType (see reflect.internal.transform.UnCurry)
+          if (dd.symbol.owner.isClass)
+            addJavaVarargsForwarders(dd, flatdd)
+          else
+            flatdd
 
         case tree: Try =>
-          if (tree.catches exists (cd => !treeInfo.isCatchCase(cd)))
-            devWarning("VPM BUG - illegal try/catch " + tree.catches)
+          devWarningIf(tree.catches exists (!treeInfo.isCatchCase(_))) {
+            "VPM BUG - illegal try/catch " + tree.catches
+          }
           tree
 
         case Apply(Apply(fn, args), args1) =>
@@ -614,7 +658,7 @@ abstract class UnCurry extends InfoTransform
      * This violates the principle that each compiler phase should produce trees that
      * can be retyped (see [[scala.tools.nsc.typechecker.TreeCheckers]]), and causes
      * a practical problem in `erasure`: it is not able to correctly determine if
-     * such a signature overrides a corresponding signature in a parent. (SI-6443).
+     * such a signature overrides a corresponding signature in a parent. (scala/bug#6443).
      *
      * This transformation erases the dependent method types by:
      *   - Widening the formal parameter type to existentially abstract
@@ -626,15 +670,10 @@ abstract class UnCurry extends InfoTransform
      * For the example above, this results in:
      *
      * {{{
-     *   def foo(a: A, b: a.B forSome { val a: A }): a.B = { val b$1 = b.asInstanceOf[a.B]; b$1; b$1 }
+     *   def foo(a: A, b: a.B forSome { val a: A }): a.B = { val b\$1 = b.asInstanceOf[a.B]; b\$1; b\$1 }
      * }}}
      */
     private object dependentParamTypeErasure {
-      sealed abstract class ParamTransform {
-        def param: ValDef
-      }
-      final case class Identity(param: ValDef) extends ParamTransform
-      final case class Packed(param: ValDef, tempVal: ValDef) extends ParamTransform
 
       def isDependent(dd: DefDef): Boolean =
         enteringUncurry {
@@ -647,10 +686,23 @@ abstract class UnCurry extends InfoTransform
        */
       def erase(dd: DefDef): (List[List[ValDef]], Tree) = {
         import dd.{ vparamss, rhs }
-        val paramTransforms: List[ParamTransform] =
-          map2(vparamss.flatten, dd.symbol.info.paramss.flatten) { (p, infoParam) =>
+        val (allParams, packedParamsSyms, tempVals): (List[ValDef], List[Symbol], List[ValDef]) = {
+
+          val allParamsBuf: ListBuffer[ValDef] = ListBuffer.empty
+          val packedParamsSymsBuf: ListBuffer[Symbol] = ListBuffer.empty
+          val tempValsBuf: ListBuffer[ValDef] = ListBuffer.empty
+
+          def addPacked(param: ValDef, tempVal: ValDef): Unit = {
+            allParamsBuf += param
+            if (rhs != EmptyTree) {
+              packedParamsSymsBuf += param.symbol
+              tempValsBuf         += tempVal
+            }
+          }
+
+          def addParamTransform(p: ValDef, infoParam: Symbol): Unit = {
             val packedType = infoParam.info
-            if (packedType =:= p.symbol.info) Identity(p)
+            if (packedType =:= p.symbol.info) allParamsBuf += p
             else {
               // The Uncurry info transformer existentially abstracted over value parameters
               // from the previous parameter lists.
@@ -665,7 +717,7 @@ abstract class UnCurry extends InfoTransform
               // declared type and assign this to a synthetic val. Later, we'll patch
               // the method body to refer to this, rather than the parameter.
               val tempVal: ValDef = {
-                // SI-9442: using the "uncurry-erased" type (the one after the uncurry phase) can lead to incorrect
+                // scala/bug#9442: using the "uncurry-erased" type (the one after the uncurry phase) can lead to incorrect
                 // tree transformations. For example, compiling:
                 // ```
                 //   def foo(c: Ctx)(l: c.Tree): Unit = {
@@ -683,7 +735,7 @@ abstract class UnCurry extends InfoTransform
                 //
                 // So what we need to do is to use the pre-uncurry type when creating `l$1`, which is `c.Tree` and is
                 // correct. Now, there are two additional problems:
-                // 1. when varargs and byname params are involved, the uncurry transformation desugares these special
+                // 1. when varargs and byname params are involved, the uncurry transformation desugars these special
                 //    cases to actual typerefs, eg:
                 //    ```
                 //           T*  ~> Seq[T] (Scala-defined varargs)
@@ -702,23 +754,26 @@ abstract class UnCurry extends InfoTransform
                       tpe
                   }
                 val info = info0.normalize
-                val tempValName = unit freshTermName (p.name + "$")
+                val tempValName = unit freshTermName (p.name.toStringWithSuffix("$"))
                 val newSym = dd.symbol.newTermSymbol(tempValName, p.pos, SYNTHETIC).setInfo(info)
                 atPos(p.pos)(ValDef(newSym, gen.mkAttributedCast(Ident(p.symbol), info)))
               }
-              Packed(newParam, tempVal)
+              addPacked(newParam, tempVal)
             }
           }
 
-        val allParams = paramTransforms map (_.param)
-        val (packedParams, tempVals) = paramTransforms.collect {
-          case Packed(param, tempVal) => (param, tempVal)
-        }.unzip
+          val viter = vparamss.iterator.flatten
+          val piter = dd.symbol.info.paramss.iterator.flatten
+          while (viter.hasNext && piter.hasNext)
+            addParamTransform(viter.next, piter.next)
+
+          (allParamsBuf.toList, packedParamsSymsBuf.toList, tempValsBuf.toList)
+        }
 
         val rhs1 = if (rhs == EmptyTree || tempVals.isEmpty) rhs else {
           localTyper.typedPos(rhs.pos) {
             // Patch the method body to refer to the temp vals
-            val rhsSubstituted = rhs.substituteSymbols(packedParams map (_.symbol), tempVals map (_.symbol))
+            val rhsSubstituted = rhs.substituteSymbols(packedParamsSyms, tempVals.map(_.symbol))
             // The new method body: { val p$1 = p.asInstanceOf[<dependent type>]; ...; <rhsSubstituted> }
             Block(tempVals, rhsSubstituted)
           }
@@ -732,84 +787,67 @@ abstract class UnCurry extends InfoTransform
       if (dd.symbol.isConstructor)
         reporter.error(dd.symbol.pos, "A constructor cannot be annotated with a `varargs` annotation.")
       else {
-        val hasRepeated = mexists(dd.symbol.paramss)(sym => definitions.isRepeatedParamType(sym.tpe))
-        if (!hasRepeated) reporter.error(dd.symbol.pos, "A method without repeated parameters cannot be annotated with the `varargs` annotation.")
+        val ok = cond(dd.symbol.paramss.filter(_.nonEmpty)) {
+          case initPs :+ lastPs =>
+            initPs.forall(!definitions.isVarArgsList(_)) && definitions.isVarArgsList(lastPs)
+        }
+        if (!ok)
+          reporter.error(dd.pos, "A method annotated with @varargs must have a single repeated parameter in its last parameter list.")
       }
 
-    /* Called during post transform, after the method argument lists have been flattened.
-     * It looks for the method in the `repeatedParams` map, and generates a Java-style
+    /**
+     * Called during post transform, after the method argument lists have been flattened.
+     * It looks for the forwarder symbol in the symbol attachments and generates a Java-style
      * varargs forwarder.
+     *
+     * @note The Java-style varargs method symbol is generated in the Uncurry info transformer. If the
+     *       symbol can't be found this method reports a warning and carries on.
+     * @see  [[scala.reflect.internal.transform.UnCurry]]
      */
     private def addJavaVarargsForwarders(dd: DefDef, flatdd: DefDef): DefDef = {
       if (!dd.symbol.hasAnnotation(VarargsClass) || !enteringUncurry(mexists(dd.symbol.paramss)(sym => definitions.isRepeatedParamType(sym.tpe))))
         return flatdd
 
-      def toArrayType(tp: Type): Type = {
-        val arg = elementType(SeqClass, tp)
-        // to prevent generation of an `Object` parameter from `Array[T]` parameter later
-        // as this would crash the Java compiler which expects an `Object[]` array for varargs
-        //   e.g.        def foo[T](a: Int, b: T*)
-        //   becomes     def foo[T](a: Int, b: Array[Object])
-        //   instead of  def foo[T](a: Int, b: Array[T]) ===> def foo[T](a: Int, b: Object)
-        arrayType(
-          if (arg.typeSymbol.isTypeParameterOrSkolem) ObjectTpe
-          else arg
-        )
+      val forwSym: Symbol = {
+        currentClass.info // make sure the info is up to date, so the varargs forwarder symbol has been generated
+        flatdd.symbol.attachments.get[VarargsSymbolAttachment] match {
+          case Some(VarargsSymbolAttachment(sym)) => sym
+          case None =>
+            runReporting.warning(dd.pos, s"Could not generate Java varargs forwarder for ${flatdd.symbol}. Please file a bug.", WarningCategory.Other, dd.symbol)
+            return flatdd
+        }
       }
 
-      val theTyper   = typer.atOwner(dd, currentClass)
-      val flatparams = flatdd.symbol.paramss.head
+      val newPs = forwSym.tpe.params
       val isRepeated = enteringUncurry(dd.symbol.info.paramss.flatten.map(sym => definitions.isRepeatedParamType(sym.tpe)))
+      val oldPs = flatdd.symbol.paramss.head
 
-      // create the type
-      val forwformals = map2(flatparams, isRepeated) {
-        case (p, true) => toArrayType(p.tpe)
-        case (p, false)=> p.tpe
-      }
-      val forwresult = dd.symbol.tpe_*.finalResultType
-      val forwformsyms = map2(forwformals, flatparams)((tp, oldparam) =>
-        currentClass.newValueParameter(oldparam.name.toTermName, oldparam.pos).setInfo(tp)
-      )
-      def mono = MethodType(forwformsyms, forwresult)
-      val forwtype = dd.symbol.tpe match {
-        case MethodType(_, _) => mono
-        case PolyType(tps, _) => PolyType(tps, mono)
-      }
+      val theTyper = typer.atOwner(dd, currentClass)
+      val forwTree = theTyper.typedPos(dd.pos) {
+        val seqArgs = map3(newPs, oldPs, isRepeated)((param, oldParam, isRep) => {
+          if (!isRep) Ident(param)
+          else {
+            val parTp = elementType(ArrayClass, param.tpe)
+            val wrap = gen.mkWrapArray(Ident(param), parTp)
+            param.attachments.get[TypeParamVarargsAttachment] match {
+              case Some(TypeParamVarargsAttachment(tp)) => gen.mkCast(wrap, seqType(tp))
+              case _ => wrap
+            }
+          }
+        })
 
-      // create the symbol
-      val forwsym = currentClass.newMethod(dd.name.toTermName, dd.pos, VARARGS | SYNTHETIC | flatdd.symbol.flags) setInfo forwtype
-      def forwParams = forwsym.info.paramss.flatten
-
-      // create the tree
-      val forwtree = theTyper.typedPos(dd.pos) {
-        val locals = map3(forwParams, flatparams, isRepeated) {
-          case (_, fp, false)       => null
-          case (argsym, fp, true)   =>
-            Block(Nil,
-              gen.mkCast(
-                gen.mkWrapArray(Ident(argsym), elementType(ArrayClass, argsym.tpe)),
-                seqType(elementType(SeqClass, fp.tpe))
-              )
-            )
-        }
-        val seqargs = map2(locals, forwParams) {
-          case (null, argsym) => Ident(argsym)
-          case (l, _)         => l
-        }
-        val end = if (forwsym.isConstructor) List(UNIT) else Nil
-
-        DefDef(forwsym, BLOCK(Apply(gen.mkAttributedRef(flatdd.symbol), seqargs) :: end : _*))
+        val forwCall = Apply(gen.mkAttributedRef(flatdd.symbol), seqArgs)
+        DefDef(forwSym, if (forwSym.isConstructor) Block(List(forwCall), UNIT) else forwCall)
       }
 
       // check if the method with that name and those arguments already exists in the template
-      currentClass.info.member(forwsym.name).alternatives.find(s => s != forwsym && s.tpe.matches(forwsym.tpe)) match {
-        case Some(s) => reporter.error(dd.symbol.pos,
-                                   "A method with a varargs annotation produces a forwarder method with the same signature "
-                                   + s.tpe + " as an existing method.")
+      enteringUncurry(currentClass.info.member(forwSym.name).alternatives.find(s => s != forwSym && s.tpe.matches(forwSym.tpe))) match {
+        case Some(s) =>
+          reporter.error(dd.symbol.pos,
+            s"A method annotated with @varargs produces a forwarder method with the same signature ${s.tpe} as an existing method.")
         case None =>
           // enter symbol into scope
-          currentClass.info.decls enter forwsym
-          addNewMember(forwtree)
+          addNewMember(forwTree)
       }
 
       flatdd

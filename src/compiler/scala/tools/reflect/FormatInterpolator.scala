@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala.tools.reflect
 
 import scala.reflect.macros.runtime.Context
@@ -19,7 +31,6 @@ abstract class FormatInterpolator {
   @inline private def truly(body: => Unit): Boolean = { body ; true }
   @inline private def falsely(body: => Unit): Boolean = { body ; false }
 
-  private def fail(msg: String) = c.abort(c.enclosingPosition, msg)
   private def bail(msg: String) = global.abort(msg)
 
   def interpolate: Tree = c.macroApplication match {
@@ -93,8 +104,8 @@ abstract class FormatInterpolator {
               case '\n' => "\\n"
               case '\f' => "\\f"
               case '\r' => "\\r"
-              case '\"' => "${'\"'}" /* avoid lint warn */ +
-                " or a triple-quoted literal \"\"\"with embedded \" or \\u0022\"\"\""  // $" in future
+              case '\"' => "$" /* avoid lint warn */ +
+                "{'\"'} or a triple-quoted literal \"\"\"with embedded \" or \\u0022\"\"\""
               case '\'' => "'"
               case '\\' => """\\"""
               case x    => "\\u%04x" format x
@@ -117,7 +128,7 @@ abstract class FormatInterpolator {
               c.error(errPoint, msg("unsupported"))
               s0
             } else {
-              currentRun.reporting.deprecationWarning(errPoint, msg("deprecated"), "2.11.0")
+              currentRun.reporting.deprecationWarning(errPoint, msg("deprecated"), "2.11.0", site = "", origin = "")
               try StringContext.treatEscapes(s0) catch escapeHatch
             }
           }

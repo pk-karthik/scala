@@ -1,12 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
-
-
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -22,7 +24,6 @@ import mutable.Builder
  *
  *  @author Sean McDirmid
  *  @author Martin Odersky
- *  @version 2.8
  *  @since   2.4
  *  @define Coll immutable.SortedMap
  *  @define coll immutable sorted map
@@ -41,6 +42,7 @@ self =>
   override def updated [B1 >: B](key: A, value: B1): SortedMap[A, B1] = this + ((key, value))
   override def keySet: immutable.SortedSet[A] = new DefaultKeySortedSet
 
+  @SerialVersionUID(112809526508924148L)
   protected class DefaultKeySortedSet extends super.DefaultKeySortedSet with immutable.SortedSet[A] {
     override def + (elem: A): SortedSet[A] =
       if (this(elem)) this
@@ -101,6 +103,24 @@ self =>
     override def valuesIteratorFrom(start : A) = self valuesIteratorFrom start map f
   }
 
+  override def equals(that: Any): Boolean = that match {
+    case _ if this eq that.asInstanceOf[AnyRef] => true
+    case sm: SortedMap[k, v] if sm.ordering == this.ordering =>
+      (sm canEqual this) &&
+        (this.size == sm.size) && {
+        val i1 = this.iterator
+        val i2 = sm.iterator
+        var allEqual = true
+        while (allEqual && i1.hasNext)
+          allEqual = i1.next() == i2.next()
+        allEqual
+      }
+    // copy/pasted from super.equals for binary compat reasons!
+    case that: GenMap[b, _] =>
+      GenMap.mapEquals(this, that)
+    case _ =>
+      false && super.equals(that) // generate unused super accessor for binary compatibility (scala/scala#9311)
+  }
 }
 
 /** $factoryInfo
@@ -111,6 +131,8 @@ object SortedMap extends ImmutableSortedMapFactory[SortedMap] {
   /** $sortedMapCanBuildFromInfo */
   implicit def canBuildFrom[A, B](implicit ord: Ordering[A]): CanBuildFrom[Coll, (A, B), SortedMap[A, B]] = new SortedMapCanBuildFrom[A, B]
   def empty[A, B](implicit ord: Ordering[A]): SortedMap[A, B] = TreeMap.empty[A, B]
+
+  override def newBuilder[A, B](implicit ord: Ordering[A]): mutable.Builder[(A, B), SortedMap[A, B]] = TreeMap.newBuilder[A, B]
 
   private[collection] trait Default[A, +B] extends SortedMap[A, B] with scala.collection.SortedMap.Default[A, B] {
   self =>

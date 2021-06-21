@@ -1,3 +1,15 @@
+/*
+ * Scala classfile decoder (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala.tools.scalap
 package scalax
 package util
@@ -9,8 +21,6 @@ import java.beans.Introspector
  */
 
 object StringUtil {
-
-  def trimStart(s: String, prefix: String) = if (s != null && s.startsWith(prefix)) s.substring(prefix.length) else s
 
   def decapitalize(s: String) = Introspector.decapitalize(s)
 

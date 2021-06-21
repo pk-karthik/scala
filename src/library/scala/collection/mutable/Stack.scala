@@ -1,12 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
-
-
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -43,7 +45,6 @@ object Stack extends SeqFactory[Stack] {
  *
  *  @author  Matthias Zenger
  *  @author  Martin Odersky
- *  @version 2.8
  *  @since   1
  *  @see [[http://docs.scala-lang.org/overviews/collections/concrete-mutable-collection-classes.html#stacks "Scala's Collection Library overview"]]
  *  section on `Stacks` for more information.
@@ -54,6 +55,7 @@ object Stack extends SeqFactory[Stack] {
  *  @define mayNotTerminateInf
  *  @define willNotTerminateInf
  */
+@deprecated("Stack is an inelegant and potentially poorly-performing wrapper around List. Use a List assigned to a var instead.", "2.12.0")
 class Stack[A] private (var elems: List[A])
 extends AbstractSeq[A]
    with Seq[A]

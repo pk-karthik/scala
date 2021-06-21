@@ -1,12 +1,19 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala
 package tools.nsc
 
-import io.{ AbstractFile, Directory, File, Path }
+import io.{Directory, File, Path}
 import java.io.IOException
 import scala.tools.nsc.classpath.DirectoryClassPath
 import scala.tools.nsc.reporters.{Reporter,ConsoleReporter}
@@ -17,7 +24,7 @@ import util.Exceptional.unwrap
  *  For example, here is a complete Scala script on Unix:
  *  {{{
  *    #!/bin/sh
- *    exec scala "$0" "$@"
+ *    exec scala "\$0" "\$@"
  *    !#
  *    Console.println("Hello, world!")
  *    args.toList foreach Console.println
@@ -60,12 +67,15 @@ class ScriptRunner extends HasCompileSocket {
    */
   private def compileWithDaemon(settings: GenericRunnerSettings, scriptFileIn: String) = {
     val scriptFile       = Path(scriptFileIn).toAbsolute.path
-    val compSettingNames = new Settings(sys.error).visibleSettings.toList map (_.name)
-    val compSettings     = settings.visibleSettings.toList filter (compSettingNames contains _.name)
+    val compSettingNames = new Settings(sys.error).visibleSettings map (_.name)
+    val compSettings     = settings.visibleSettings filter (compSettingNames contains _.name)
     val coreCompArgs     = compSettings flatMap (_.unparse)
     val compArgs         = coreCompArgs ++ List("-Xscript", scriptMain(settings), scriptFile)
 
-    CompileSocket getOrCreateSocket "" match {
+    // TODO: untangle this mess of top-level objects with their own little view of the mutable world of settings
+    compileSocket.verbose = settings.verbose.value
+
+    compileSocket getOrCreateSocket "" match {
       case Some(sock) => compileOnServer(sock, compArgs)
       case _          => false
     }
@@ -75,10 +85,10 @@ class ScriptRunner extends HasCompileSocket {
     Global(settings, reporter)
 
   /** Compile a script and then run the specified closure with
-    * a classpath for the compiled script.
-    *
-    * @return true if compilation and the handler succeeds, false otherwise.
-    */
+   *  a classpath for the compiled script.
+   *
+   *  @return true if compilation and the handler succeeds, false otherwise.
+   */
   private def withCompiledScript(
     settings: GenericRunnerSettings,
     scriptFile: String)
@@ -97,7 +107,7 @@ class ScriptRunner extends HasCompileSocket {
 
       settings.outdir.value = compiledPath.path
 
-      if (settings.nc) {
+      if (!settings.useCompDaemon) {
         /* Setting settings.script.value informs the compiler this is not a
          * self contained compilation unit.
          */
@@ -173,20 +183,20 @@ class ScriptRunner extends HasCompileSocket {
     }
   }
 
-  /** Run a script file with the specified arguments and compilation
-   *  settings.
+  /** Run a script file with the specified arguments and compilation settings.
    *
-   * @return true if compilation and execution succeeded, false otherwise.
+   *  @return true if compilation and execution succeeded, false otherwise.
    */
-  def runScript(
-    settings: GenericRunnerSettings,
-    scriptFile: String,
-    scriptArgs: List[String]): Boolean =
-  {
-    if (File(scriptFile).isFile)
-      withCompiledScript(settings, scriptFile) { runCompiled(settings, _, scriptArgs) }
-    else
-      throw new IOException("no such file: " + scriptFile)
+  def runScript(settings: GenericRunnerSettings, scriptFile: String, scriptArgs: List[String]): Boolean = {
+    def checkedScript = {
+      val f = File(scriptFile)
+      if (!f.exists) throw new IOException(s"no such file: $scriptFile")
+      if (!f.canRead) throw new IOException(s"can't read: $scriptFile")
+      if (f.isDirectory) throw new IOException(s"can't compile a directory: $scriptFile")
+      if (!settings.nc && !f.isFile) throw new IOException(s"compile server requires a regular file: $scriptFile")
+      scriptFile
+    }
+    withCompiledScript(settings, checkedScript) { runCompiled(settings, _, scriptArgs) }
   }
 
   /** Calls runScript and catches the enumerated exceptions, routing

@@ -1,17 +1,79 @@
-/* NSC -- new Scala compiler
- * Copyright 2007-2013 LAMP/EPFL
- * @author  David Bernard, Manohar Jonnalagedda
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala
 package tools.nsc.doc.html
 
 import scala.tools.nsc.doc.model._
-import scala.tools.nsc.doc.base.comment
+import scala.tools.nsc.doc.base.comment._
 import java.io.{FileOutputStream, File}
 import scala.reflect.NameTransformer
 import java.nio.channels.Channels
 import java.io.Writer
+
+object Page {
+  def inlineToStr(inl: Inline): String = inl match {
+    case Chain(items) => items flatMap (inlineToStr(_)) mkString ""
+    case Italic(in) => inlineToStr(in)
+    case Bold(in) => inlineToStr(in)
+    case Underline(in) => inlineToStr(in)
+    case Superscript(in) => inlineToStr(in)
+    case Subscript(in) => inlineToStr(in)
+    case Link(raw, title) => inlineToStr(title)
+    case Monospace(in) => inlineToStr(in)
+    case Text(text) => text
+    case Summary(in) => inlineToStr(in)
+    case HtmlTag(tag) => "<[^>]*>".r.replaceAllIn(tag, "")
+    case EntityLink(in, _) => inlineToStr(in)
+  }
+
+  def inlineToStrForTitleTag(inl: Inline): String =
+    inlineToStr(inl).split("\n").map(_.trim).mkString(" ")
+
+  def templateToPath(tpl: TemplateEntity): List[String] = {
+    def doName(tpl: TemplateEntity): String =
+      (if (tpl.inPackageObject) "package$$" else "") + NameTransformer.encode(tpl.name) + (if (tpl.isObject) "$" else "")
+    def downPacks(pack: TemplateEntity): List[String] =
+      if (pack.isRootPackage) Nil else (doName(pack) :: downPacks(pack.inTemplate))
+    def downInner(nme: String, tpl: TemplateEntity): (String, TemplateEntity) = {
+      if(tpl.inTemplate.isPackage) {
+        (nme + ".html", tpl.inTemplate)
+      } else {
+        downInner(doName(tpl.inTemplate) + "$" + nme, tpl.inTemplate)
+      }
+    }
+    val (file, pack) =
+      if(tpl.isPackage) {
+        ("index.html", tpl)
+      } else {
+        downInner(doName(tpl), tpl)
+      }
+    file :: downPacks(pack)
+  }
+
+  def makeUrl(baseUrl : String, path : List[String]) : String = baseUrl.stripSuffix("/") + "/" + path.reverse.mkString("/")
+
+  /** A relative link from a page's path to some destination path.
+    * @param destPath The path that the link will point to. */
+  def relativeLinkTo(thisPagePath: List[String], destPath: List[String]): String = {
+    def relativize(from: List[String], to: List[String]): List[String] = (from, to) match {
+      case (f :: fs, t :: ts) if (f == t) => // both paths are identical to that point
+        relativize(fs, ts)
+      case (fss, tss) =>
+        List.fill(fss.length - 1)("..") ::: tss
+    }
+    relativize(thisPagePath.reverse, destPath.reverse).mkString("/")
+  }
+}
 
 abstract class Page {
   thisPage =>
@@ -66,56 +128,20 @@ abstract class Page {
       case _ => sys.error("Cannot create kind for: " + mbr + " of class " + mbr.getClass)
     }
 
-  def templateToPath(tpl: TemplateEntity): List[String] = {
-    def doName(tpl: TemplateEntity): String =
-      (if (tpl.inPackageObject) "package$$" else "") + NameTransformer.encode(tpl.name) + (if (tpl.isObject) "$" else "")
-    def downPacks(pack: Package): List[String] =
-      if (pack.isRootPackage) Nil else (doName(pack) :: downPacks(pack.inTemplate))
-    def downInner(nme: String, tpl: TemplateEntity): (String, Package) = {
-      tpl.inTemplate match {
-        case inPkg: Package => (nme + ".html", inPkg)
-        case inTpl => downInner(doName(inTpl) + "$" + nme, inTpl)
-      }
-    }
-    val (file, pack) =
-      tpl match {
-        case p: Package => ("index.html", p)
-        case _ => downInner(doName(tpl), tpl)
-      }
-    file :: downPacks(pack)
-  }
+  def templateToPath(tpl: TemplateEntity): List[String] = Page.templateToPath(tpl)
 
   /** A relative link from this page to some destination class entity.
     * @param destClass The class or object entity that the link will point to. */
   def relativeLinkTo(destClass: TemplateEntity): String =
-    relativeLinkTo(templateToPath(destClass))
+    Page.relativeLinkTo(thisPage.path, templateToPath(destClass))
 
-  /** A relative link from this page to some destination path.
+  /** A relative link from a page's path to some destination path.
     * @param destPath The path that the link will point to. */
-  def relativeLinkTo(destPath: List[String]): String = {
-    def relativize(from: List[String], to: List[String]): List[String] = (from, to) match {
-      case (f :: fs, t :: ts) if (f == t) => // both paths are identical to that point
-        relativize(fs, ts)
-      case (fss, tss) =>
-        List.fill(fss.length - 1)("..") ::: tss
-    }
-    relativize(thisPage.path.reverse, destPath.reverse).mkString("/")
-  }
+  def relativeLinkTo(destPath: List[String]): String =
+    Page.relativeLinkTo(thisPage.path, destPath)
 
   def hasCompanion(mbr: TemplateEntity): Boolean = mbr match {
     case dtpl: DocTemplateEntity => dtpl.companion.isDefined
     case _ => false
-  }
-
-  protected def inlineToStr(inl: comment.Inline): String = inl match {
-    case comment.Chain(items) => items flatMap (inlineToStr(_)) mkString ""
-    case comment.Italic(in) => inlineToStr(in)
-    case comment.Bold(in) => inlineToStr(in)
-    case comment.Underline(in) => inlineToStr(in)
-    case comment.Monospace(in) => inlineToStr(in)
-    case comment.Text(text) => text
-    case comment.Summary(in) => inlineToStr(in)
-    case comment.EntityLink(comment.Text(text), _) => text
-    case _ => inl.toString
   }
 }

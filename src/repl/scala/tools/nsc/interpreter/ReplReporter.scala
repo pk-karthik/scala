@@ -1,15 +1,23 @@
-/* NSC -- new Scala compiler
- * Copyright 2002-2013 LAMP/EPFL
- * @author Paul Phillips
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
 package interpreter
 
-import reporters._
+import scala.reflect.internal.Reporter
+import reporters.ConsoleReporter
 import IMain._
 
-import scala.reflect.internal.util.Position
+import scala.reflect.internal.util.{OffsetPosition, Position}
 
 /** Like ReplGlobal, a layer for ensuring extra functionality.
  */
@@ -29,28 +37,53 @@ class ReplReporter(intp: IMain) extends ConsoleReporter(intp.settings, Console.i
     finally _truncationOK = saved
   }
 
+  private[this] var silentErrors = 0
   override def warning(pos: Position, msg: String): Unit = withoutTruncating(super.warning(pos, msg))
-  override def error(pos: Position, msg: String): Unit   = withoutTruncating(super.error(pos, msg))
+  override def error(pos: Position, msg: String): Unit   = {
+    val count0 = errorCount
+    withoutTruncating(super.error(pos, msg))
+    val count1 = errorCount
+    if (count1 > count0 && intp.totalSilence)
+      silentErrors += (count1 - count0)
+  }
+  private[interpreter] def reportableErrorCount = errorCount - silentErrors
+  private[interpreter] def hasReportableErrors  = reportableErrorCount > 0
 
-  import scala.io.AnsiColor.{ RED, YELLOW, RESET }
+  override def reset(): Unit = {
+    silentErrors = 0
+    super.reset()
+  }
+
+  import scala.io.AnsiColor.{RED, YELLOW, RESET}
 
   def severityColor(severity: Severity): String = severity match {
-    case ERROR   => RED
-    case WARNING => YELLOW
-    case INFO    => RESET
+    case Reporter.ERROR   => RED
+    case Reporter.WARNING => YELLOW
+    case Reporter.INFO    => RESET
   }
 
-  override def print(pos: Position, msg: String, severity: Severity) {
-    val prefix = (
-      if (replProps.colorOk)
-        severityColor(severity) + clabel(severity) + RESET
-      else
-        clabel(severity)
-    )
-    printMessage(pos, prefix + msg)
+  private val promptLength = replProps.promptText.linesIterator.toList.last.length
+  private val indentation  = " " * promptLength
+
+  // colorized console labels
+  override protected def clabel(severity: Severity): String = {
+    val label0 = super.clabel(severity)
+    if (replProps.colorOk) s"${severityColor(severity)}${label0}${RESET}" else label0
   }
 
-  override def printMessage(msg: String) {
+  // shift indentation for source text entered at prompt
+  override protected def display(pos: Position, msg: String, severity: Severity): Unit = {
+    val adjusted =
+      if (pos.source.file.name == "<console>")
+        new OffsetPosition(pos.source, pos.offset.getOrElse(0)) {
+          override def lineContent = s"${indentation}${super.lineContent}"
+          override def lineCaret   = s"${indentation}${super.lineCaret}"
+        }
+      else pos
+    super.display(adjusted, msg, severity)
+  }
+
+  override def printMessage(msg: String): Unit = {
     // Avoiding deadlock if the compiler starts logging before
     // the lazy val is complete.
     if (intp.isInitializeComplete) {
@@ -63,9 +96,8 @@ class ReplReporter(intp: IMain) extends ConsoleReporter(intp.settings, Console.i
     else Console.println("[init] " + msg)
   }
 
-  override def displayPrompt() {
-    if (intp.totalSilence) ()
-    else super.displayPrompt()
-  }
+  override def displayPrompt(): Unit = if (!intp.totalSilence) super.displayPrompt()
 
+  override def rerunWithDetails(setting: reflect.internal.settings.MutableSettings#Setting, name: String) =
+    s"; for details, enable `:setting $name' or `:replay $name'"
 }

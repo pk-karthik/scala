@@ -1,16 +1,21 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://www.scala-lang.org/           **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
-
-
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
 package mutable
+
+import java.lang.Integer.{numberOfLeadingZeros, rotateRight}
+import scala.util.hashing.byteswap32
 
 /** This class can be used to construct data structures that are based
  *  on hashtables. Class `HashTable[A]` implements a hashtable
@@ -27,7 +32,6 @@ package mutable
  *
  *  @author  Matthias Zenger
  *  @author  Martin Odersky
- *  @version 2.0, 31/12/2006
  *  @since   1
  *
  *  @tparam A     type of the elements contained in this hash table.
@@ -183,6 +187,7 @@ trait HashTable[A, Entry >: Null <: HashEntry[A, Entry]] extends HashTable.HashU
         table(h) = e.next
         tableSize = tableSize - 1
         nnSizeMapRemove(h)
+        e.next = null
         return e
       } else {
         var e1 = e.next
@@ -194,6 +199,7 @@ trait HashTable[A, Entry >: Null <: HashEntry[A, Entry]] extends HashTable.HashU
           e.next = e1.next
           tableSize = tableSize - 1
           nnSizeMapRemove(h)
+          e1.next = null
           return e1
         }
       }
@@ -227,8 +233,9 @@ trait HashTable[A, Entry >: Null <: HashEntry[A, Entry]] extends HashTable.HashU
     var es        = iterTable(idx)
 
     while (es != null) {
+      val next = es.next // Cache next in case f removes es.
       f(es.asInstanceOf[Entry])
-      es = es.next
+      es = next
 
       while (es == null && idx > 0) {
         idx -= 1
@@ -357,14 +364,14 @@ trait HashTable[A, Entry >: Null <: HashEntry[A, Entry]] extends HashTable.HashU
 
   protected def elemEquals(key1: A, key2: A): Boolean = (key1 == key2)
 
-  // Note:
-  // we take the most significant bits of the hashcode, not the lower ones
-  // this is of crucial importance when populating the table in parallel
-  protected final def index(hcode: Int) = {
+  /**
+    * Note: we take the most significant bits of the hashcode, not the lower ones
+    * this is of crucial importance when populating the table in parallel
+    */
+  protected final def index(hcode: Int): Int = {
     val ones = table.length - 1
-    val improved = improve(hcode, seedvalue)
-    val shifted = (improved >> (32 - java.lang.Integer.bitCount(ones))) & ones
-    shifted
+    val exponent = Integer.numberOfLeadingZeros(ones)
+    (improve(hcode, seedvalue) >>> exponent) & ones
   }
 
   protected def initWithContents(c: HashTable.Contents[A, Entry]) = {
@@ -393,13 +400,13 @@ private[collection] object HashTable {
   /** The load factor for the hash table (in 0.001 step).
    */
   private[collection] final def defaultLoadFactor: Int = 750 // corresponds to 75%
-  private[collection] final def loadFactorDenum = 1000
+  private[collection] final def loadFactorDenum = 1000 // should be loadFactorDenom, but changing that isn't binary compatible
 
   private[collection] final def newThreshold(_loadFactor: Int, size: Int) = ((size.toLong * _loadFactor) / loadFactorDenum).toInt
 
   private[collection] final def sizeForThreshold(_loadFactor: Int, thr: Int) = ((thr.toLong * loadFactorDenum) / _loadFactor).toInt
 
-  private[collection] final def capacity(expectedSize: Int) = if (expectedSize == 0) 1 else powerOfTwo(expectedSize)
+  private[collection] final def capacity(expectedSize: Int) = nextPositivePowerOfTwo(expectedSize)
 
   trait HashUtils[KeyType] {
     protected final def sizeMapBucketBitSize = 5
@@ -408,74 +415,26 @@ private[collection] object HashTable {
 
     protected def elemHashCode(key: KeyType) = key.##
 
-    protected final def improve(hcode: Int, seed: Int) = {
-      /* Murmur hash
-       *  m = 0x5bd1e995
-       *  r = 24
-       *  note: h = seed = 0 in mmix
-       *  mmix(h,k) = k *= m; k ^= k >> r; k *= m; h *= m; h ^= k; */
-      // var k = hcode * 0x5bd1e995
-      // k ^= k >> 24
-      // k *= 0x5bd1e995
-      // k
-
-      /* Another fast multiplicative hash
-       * by Phil Bagwell
-       *
-       * Comment:
-       * Multiplication doesn't affect all the bits in the same way, so we want to
-       * multiply twice, "once from each side".
-       * It would be ideal to reverse all the bits after the first multiplication,
-       * however, this is more costly. We therefore restrict ourselves only to
-       * reversing the bytes before final multiplication. This yields a slightly
-       * worse entropy in the lower 8 bits, but that can be improved by adding:
-       *
-       * `i ^= i >> 6`
-       *
-       * For performance reasons, we avoid this improvement.
-       * */
-      val i= scala.util.hashing.byteswap32(hcode)
-
-      /* Jenkins hash
-       * for range 0-10000, output has the msb set to zero */
-      // var h = hcode + (hcode << 12)
-      // h ^= (h >> 22)
-      // h += (h << 4)
-      // h ^= (h >> 9)
-      // h += (h << 10)
-      // h ^= (h >> 2)
-      // h += (h << 7)
-      // h ^= (h >> 12)
-      // h
-
-      /* OLD VERSION
-       * quick, but bad for sequence 0-10000 - little entropy in higher bits
-       * since 2003 */
-      // var h: Int = hcode + ~(hcode << 9)
-      // h = h ^ (h >>> 14)
-      // h = h + (h << 4)
-      // h ^ (h >>> 10)
-
-      // the rest of the computation is due to SI-5293
-      val rotation = seed % 32
-      val rotated = (i >>> rotation) | (i << (32 - rotation))
-      rotated
-    }
+    /**
+      * Defer to a high-quality hash in [[scala.util.hashing]].
+      * The goal is to distribute across bins as well as possible even if a hash code has low entropy at some bits.
+      * <p/>
+      * OLD VERSION - quick, but bad for sequence 0-10000 - little entropy in higher bits - since 2003
+      * {{{
+      * var h: Int = hcode + ~(hcode << 9)
+      * h = h ^ (h >>> 14)
+      * h = h + (h << 4)
+      * h ^ (h >>> 10)
+      * }}}
+      * the rest of the computation is due to scala/bug#5293
+      */
+    protected final def improve(hcode: Int, seed: Int): Int = rotateRight(byteswap32(hcode), seed)
   }
 
   /**
    * Returns a power of two >= `target`.
    */
-  private[collection] def powerOfTwo(target: Int): Int = {
-    /* See http://bits.stephan-brumme.com/roundUpToNextPowerOfTwo.html */
-    var c = target - 1
-    c |= c >>>  1
-    c |= c >>>  2
-    c |= c >>>  4
-    c |= c >>>  8
-    c |= c >>> 16
-    c + 1
-  }
+  private[collection] def nextPositivePowerOfTwo(target: Int): Int = 1 << -numberOfLeadingZeros(target - 1)
 
   class Contents[A, Entry >: Null <: HashEntry[A, Entry]](
     val loadFactor: Int,

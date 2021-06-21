@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -46,9 +50,11 @@ import LongMapUtils._
  */
 object LongMap {
   /** $mapCanBuildFromInfo */
-  implicit def canBuildFrom[A, B] = new CanBuildFrom[LongMap[A], (Long, B), LongMap[B]] {
-    def apply(from: LongMap[A]): Builder[(Long, B), LongMap[B]] = apply()
-    def apply(): Builder[(Long, B), LongMap[B]] = new MapBuilder[Long, B, LongMap[B]](empty[B])
+  implicit def canBuildFrom[A, B]: CanBuildFrom[LongMap[A], (Long, B), LongMap[B]] =
+    ReusableCBF.asInstanceOf[CanBuildFrom[LongMap[A], (Long, B), LongMap[B]]]
+  private[this] val ReusableCBF = new CanBuildFrom[LongMap[Any], (Long, Any), LongMap[Any]] {
+    def apply(from: LongMap[Any]): Builder[(Long, Any), LongMap[Any]] = apply()
+    def apply(): Builder[(Long, Any), LongMap[Any]] = new MapBuilder[Long, Any, LongMap[Any]](empty[Any])
   }
 
   def empty[T]: LongMap[T]  = LongMap.Nil
@@ -56,6 +62,7 @@ object LongMap {
   def apply[T](elems: (Long, T)*): LongMap[T] =
     elems.foldLeft(empty[T])((x, y) => x.updated(y._1, y._2))
 
+@SerialVersionUID(1224320979026293120L)
   private[immutable] case object Nil extends LongMap[Nothing] {
     // Important, don't remove this! See IntMap for explanation.
     override def equals(that : Any) = that match {
@@ -65,11 +72,13 @@ object LongMap {
     }
   }
 
+@SerialVersionUID(4938010434684160500L)
   private[immutable] case class Tip[+T](key: Long, value: T) extends LongMap[T] {
     def withValue[S](s: S) =
       if (s.asInstanceOf[AnyRef] eq value.asInstanceOf[AnyRef]) this.asInstanceOf[LongMap.Tip[S]]
       else LongMap.Tip(key, s)
   }
+@SerialVersionUID(2433491195925361636L)
   private[immutable] case class Bin[+T](prefix: Long, mask: Long, left: LongMap[T], right: LongMap[T]) extends LongMap[T] {
     def bin[S](left: LongMap[S], right: LongMap[S]): LongMap[S] = {
       if ((this.left eq left) && (this.right eq right)) this.asInstanceOf[LongMap.Bin[S]]
@@ -137,7 +146,7 @@ private[immutable] class LongMapKeyIterator[V](it: LongMap[V]) extends LongMapIt
 
 /**
  *  Specialised immutable map structure for long keys, based on
- *  <a href="http://citeseer.ist.psu.edu/okasaki98fast.html">Fast Mergeable Long Maps</a>
+ *  [[http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.37.5452 Fast Mergeable Long Maps]]
  *  by Okasaki and Gill. Essentially a trie based on binary digits of the integers.
  *
  *  Note: This class is as of 2.8 largely superseded by HashMap.
@@ -352,19 +361,19 @@ extends AbstractMap[Long, T]
   def unionWith[S >: T](that: LongMap[S], f: (Long, S, S) => S): LongMap[S] = (this, that) match{
     case (LongMap.Bin(p1, m1, l1, r1), that@(LongMap.Bin(p2, m2, l2, r2))) =>
       if (shorter(m1, m2)) {
-        if (!hasMatch(p2, p1, m1)) join[S](p1, this, p2, that) // TODO: remove [S] when SI-5548 is fixed
+        if (!hasMatch(p2, p1, m1)) join[S](p1, this, p2, that) // TODO: remove [S] when scala/bug#5548 is fixed
         else if (zero(p2, m1)) LongMap.Bin(p1, m1, l1.unionWith(that, f), r1)
         else LongMap.Bin(p1, m1, l1, r1.unionWith(that, f))
       } else if (shorter(m2, m1)){
-        if (!hasMatch(p1, p2, m2)) join[S](p1, this, p2, that) // TODO: remove [S] when SI-5548 is fixed
+        if (!hasMatch(p1, p2, m2)) join[S](p1, this, p2, that) // TODO: remove [S] when scala/bug#5548 is fixed
         else if (zero(p1, m2)) LongMap.Bin(p2, m2, this.unionWith(l2, f), r2)
         else LongMap.Bin(p2, m2, l2, this.unionWith(r2, f))
       }
       else {
         if (p1 == p2) LongMap.Bin(p1, m1, l1.unionWith(l2,f), r1.unionWith(r2, f))
-        else join[S](p1, this, p2, that) // TODO: remove [S] when SI-5548 is fixed
+        else join[S](p1, this, p2, that) // TODO: remove [S] when scala/bug#5548 is fixed
       }
-    case (LongMap.Tip(key, value), x) => x.updateWith[S](key, value, (x, y) => f(key, y, x)) // TODO: remove [S] when SI-5548 is fixed
+    case (LongMap.Tip(key, value), x) => x.updateWith[S](key, value, (x, y) => f(key, y, x)) // TODO: remove [S] when scala/bug#5548 is fixed
     case (x, LongMap.Tip(key, value)) => x.updateWith[S](key, value, (x, y) => f(key, x, y))
     case (LongMap.Nil, x) => x
     case (x, LongMap.Nil) => x

@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Paul Phillips
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala
@@ -59,7 +66,7 @@ trait TypeDebugging {
   object typeDebug {
     import scala.Console._
 
-    private val colorsOk = sys.props contains "scala.color"
+    private val colorsOk = scala.util.Properties.coloredOutputEnabled
     private def inColor(s: String, color: String) = if (colorsOk && s != "") color +        s + RESET else s
     private def inBold(s: String, color: String)  = if (colorsOk && s != "") color + BOLD + s + RESET else s
 
@@ -110,7 +117,7 @@ trait TypeDebugging {
         val hi_s = if (noPrint(hi)) "" else " <: " + ptTree(hi)
         lo_s + hi_s
       case _ if (t.symbol eq null) || (t.symbol eq NoSymbol) => to_s(t)
-      case _                                                 => "" + t.symbol.tpe
+      case _                                                 => "" + t.symbol.rawInfo.safeToString
     }
     def ptTypeParam(td: TypeDef): String = {
       val TypeDef(_, name, tparams, rhs) = td
@@ -125,8 +132,8 @@ trait TypeDebugging {
       def parents(ps: List[Type]): String      = (ps map debug).mkString(" with ")
       def refine(defs: Scope): String          = defs.toList.mkString("{", " ;\n ", "}")
       def bounds(lo: Type, hi: Type): String   = {
-        val lo_s = if (typeIsNothing(lo)) "" else s" >: $lo"
-        val hi_s = if (typeIsAny(hi)) "" else s" <: $hi"
+        val lo_s = if (lo.isNothing) "" else s" >: $lo"
+        val hi_s = if (hi.isAny) "" else s" <: $hi"
         lo_s + hi_s
       }
     }

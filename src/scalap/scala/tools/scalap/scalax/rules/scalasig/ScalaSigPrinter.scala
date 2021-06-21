@@ -1,10 +1,14 @@
-/*     ___ ____ ___   __   ___   ___
-**    / _// __// _ | / /  / _ | / _ \  Scala classfile decoder
-**  __\ \/ /__/ __ |/ /__/ __ |/ ___/  (c) 2003-2013, LAMP/EPFL
-** /____/\___/_/ |_/____/_/ |_/_/      http://scala-lang.org/
-**
-*/
-
+/*
+ * Scala classfile decoder (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala.tools.scalap
 package scalax
@@ -61,7 +65,7 @@ class ScalaSigPrinter(stream: PrintStream, printPrivates: Boolean) {
         case a: AliasSymbol =>
           indent
           printAlias(level, a)
-        case t: TypeSymbol if !t.isParam && !t.name.matches("_\\$\\d+")=>
+        case t: TypeSymbol if !t.name.matches("_\\$\\d+")=>
           indent
           printTypeSymbol(level, t)
         case s =>
@@ -338,6 +342,8 @@ class ScalaSigPrinter(stream: PrintStream, printPrivates: Boolean) {
         case _: Double => "scala.Double"
         case _: String => "java.lang.String"
         case c: Class[_] => "java.lang.Class[" + c.getComponentType.getCanonicalName.replace("$", ".") + "]"
+        case e: ExternalSymbol => e.parent.get.path
+        case tp: Type => "java.lang.Class[" + toString(tp, sep) + "]"
       })
       case TypeRefType(prefix, symbol, typeArgs) => sep + (symbol.path match {
         case "scala.<repeated>" => flags match {
@@ -347,7 +353,7 @@ class ScalaSigPrinter(stream: PrintStream, printPrivates: Boolean) {
         case "scala.<byname>" => "=> " + toString(typeArgs.head)
         case _ => {
           val path = StringUtil.cutSubstring(symbol.path)(".package") //remove package object reference
-          StringUtil.trimStart(processName(path) + typeArgString(typeArgs), "<empty>.")
+          (processName(path) + typeArgString(typeArgs)).stripPrefix("<empty>.")
         }
       })
       case TypeBoundsType(lower, upper) => {
@@ -392,7 +398,7 @@ class ScalaSigPrinter(stream: PrintStream, printPrivates: Boolean) {
 
   def typeArgString(typeArgs: Seq[Type]): String =
     if (typeArgs.isEmpty) ""
-    else typeArgs.map(toString).map(StringUtil.trimStart(_, "=> ")).mkString("[", ", ", "]")
+    else typeArgs.map(toString).map(_.stripPrefix("=> ")).mkString("[", ", ", "]")
 
   def typeParamString(params: Seq[Symbol]): String =
     if (params.isEmpty) ""

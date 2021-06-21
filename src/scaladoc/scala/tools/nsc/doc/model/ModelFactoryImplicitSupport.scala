@@ -1,9 +1,13 @@
-/* NSC -- new Scala compiler -- Copyright 2007-2013 LAMP/EPFL
+/*
+ * Scala (https://www.scala-lang.org)
  *
- * This trait finds implicit conversions for a class in the default scope and creates scaladoc entries for each of them.
+ * Copyright EPFL and Lightbend, Inc.
  *
- * @author Vlad Ureche
- * @author Adriaan Moors
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
@@ -11,6 +15,7 @@ package doc
 package model
 
 import scala.collection._
+import scala.tools.nsc.Reporting.WarningCategory
 
 /**
  * This trait finds implicit conversions for a class in the default scope and creates scaladoc entries for each of them.
@@ -171,6 +176,20 @@ trait ModelFactoryImplicitSupport {
         return Nil
       }
 
+      if (!settings.docImplicitsShowAll && viewSimplifiedType.resultType.typeSymbol == sym) {
+        // If, when looking at views for a class A, we find one that returns A as well
+        // (possibly with different type parameters), we ignore it.
+        // It usually is a way to build a "whatever" into an A, but we already have an A, as in:
+        // {{{
+        //    object Box {
+        //      implicit def anyToBox[T](t: T): Box[T] = new Box(t)
+        //    }
+        //    class Box[T](val t: T)
+        // }}}
+        // We don't want the implicit conversion from Box[T] to Box[Box[T]] to appear.
+        return Nil
+      }
+
       // type the view application so we get the exact type of the result (not the formal type)
       val viewTree = result.tree.setType(viewSimplifiedType)
       val appliedTree = new ApplyImplicitView(viewTree, List(Ident("<argument>") setType viewTree.tpe.paramTypes.head))
@@ -182,7 +201,7 @@ trait ModelFactoryImplicitSupport {
 
           case global.analyzer.SilentResultValue(t: Tree) => t
           case global.analyzer.SilentTypeError(err) =>
-            global.reporter.warning(sym.pos, err.toString)
+            context.warning(sym.pos, err.toString, WarningCategory.Scaladoc)
             return Nil
         }
       }
@@ -380,7 +399,7 @@ trait ModelFactoryImplicitSupport {
       debug(" * conversion " + convSym + " from " + sym.tpe + " to " + toType)
 
       debug("   -> full type: " + toType)
-      if (constraints.length != 0) {
+      if (constraints.nonEmpty) {
         debug("   -> constraints: ")
         constraints foreach { constr => debug("      - " + constr) }
       }
@@ -444,7 +463,7 @@ trait ModelFactoryImplicitSupport {
         }
 
         // we finally have the shadowing info
-        if (!shadowed.isEmpty || !ambiguous.isEmpty) {
+        if (shadowed.nonEmpty || ambiguous.nonEmpty) {
           val shadowing = new ImplicitMemberShadowing {
             def shadowingMembers: List[MemberEntity] = shadowed
             def ambiguatingMembers: List[MemberEntity] = ambiguous

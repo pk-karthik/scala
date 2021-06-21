@@ -1,16 +1,24 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
 
 import java.io.PrintStream
-import io.Directory
-import scala.tools.nsc.reporters.{Reporter, ConsoleReporter}
+
 import scala.reflect.internal.util.FakePos
+import scala.tools.nsc.io.Directory
+import scala.tools.nsc.reporters.{ConsoleReporter, Reporter}
+import scala.tools.nsc.settings.FscSettings
 import scala.tools.util.SocketServer
-import settings.FscSettings
 
 /**
  *  The server part of the fsc offline compiler.  It awaits compilation
@@ -33,7 +41,7 @@ class StandardCompileServer(fixPort: Int = 0) extends SocketServer(fixPort) {
   val MaxCharge = 0.8
 
   private val runtime = Runtime.getRuntime()
-  import runtime.{ totalMemory, freeMemory, maxMemory }
+  import runtime.{freeMemory, maxMemory, totalMemory}
 
   /** Create a new compiler instance */
   def newGlobal(settings: Settings, reporter: Reporter) =
@@ -47,7 +55,7 @@ class StandardCompileServer(fixPort: Int = 0) extends SocketServer(fixPort) {
   }
 
   def printMemoryStats() {
-    def mb(bytes: Long) = "%dMB".format(bytes / 1000000)
+    def mb(bytes: Long) = "%10.2fMB".format(bytes / 1048576.0)
     info("New session: total memory = %s, max memory = %s, free memory = %s".format(
       mb(totalMemory), mb(maxMemory), mb(freeMemory)))
   }
@@ -158,7 +166,7 @@ class StandardCompileServer(fixPort: Int = 0) extends SocketServer(fixPort) {
           throw ex
       }
     }
-    reporter.printSummary()
+    reporter.finish()
     if (isMemoryFullEnough()) {
       info("Nulling out compiler due to memory utilization.")
       clearCompiler()
@@ -178,14 +186,15 @@ object CompileServer {
     execute(() => (), args)
 
   /**
-   * Used for internal testing. The callback is called upon
-   * server start, notifying the caller that the server is
-   * ready to run. WARNING: the callback runs in the
-   * server's thread, blocking the server from doing any work
-   * until the callback is finished. Callbacks should be kept
-   * simple and clients should not try to interact with the
-   * server while the callback is processing.
-   */
+    * The server's main loop.
+    *
+    * `startupCallback` is used for internal testing; it's called upon server start,
+    * notifying the caller that the server is ready to run.
+    *
+    * WARNING: the callback runs in the server's thread, blocking the server from doing any work
+    * until the callback is finished. Callbacks should be kept simple and clients should not try to
+    * interact with the server while the callback is processing.
+    */
   def execute(startupCallback : () => Unit, args: Array[String]) {
     val debug = args contains "-v"
     var port = 0
@@ -199,8 +208,7 @@ object CompileServer {
 
     // Create instance rather than extend to pass a port parameter.
     val server = new StandardCompileServer(port)
-    val redirectDir = (server.compileSocket.tmpDir / "output-redirects").createDirectory()
-
+    val redirectDir = server.compileSocket.mkDaemonDir("fsc_redirects")
     if (debug) {
       server.echo("Starting CompileServer on port " + server.port)
       server.echo("Redirect dir is " + redirectDir)

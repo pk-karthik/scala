@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala
 package reflect
 package internal
@@ -121,9 +133,9 @@ abstract class TreeGen {
 
   //          val selType = testedBinder.info
   //
-  //          // See the test for SI-7214 for motivation for dealias. Later `treeCondStrategy#outerTest`
-  //          // generates an outer test based on `patType.prefix` with automatically dealises.
-  //          // Prefixes can have all kinds of shapes SI-9110
+  //          // See the test for scala/bug#7214 for motivation for dealias. Later `treeCondStrategy#outerTest`
+  //          // generates an outer test based on `patType.prefix` with automatically dealiases.
+  //          // Prefixes can have all kinds of shapes scala/bug#9110
   //          val patPre = expectedTp.dealiasWiden.prefix
   //          val selPre = selType.dealiasWiden.prefix
   //
@@ -220,7 +232,7 @@ abstract class TreeGen {
       val needsPackageQualifier = (
            (sym ne null)
         && qualsym.hasPackageFlag
-        && !(sym.isDefinedInPackage || sym.moduleClass.isDefinedInPackage) // SI-7817 work around strangeness in post-flatten `Symbol#owner`
+        && !(sym.isDefinedInPackage || sym.moduleClass.isDefinedInPackage) // scala/bug#7817 work around strangeness in post-flatten `Symbol#owner`
       )
       val pkgQualifier =
         if (needsPackageQualifier) {
@@ -231,7 +243,10 @@ abstract class TreeGen {
 
       val tree = Select(pkgQualifier, sym)
       if (pkgQualifier.tpe == null) tree
-      else tree setType (qual.tpe memberType sym)
+      else tree setType {
+        if (sym.rawowner == ObjectClass || sym.rawowner == AnyClass) sym.tpeHK.normalize // opt for asInstanceOf
+        else (qual.tpe memberType sym)
+      }
     }
   }
 
@@ -267,7 +282,7 @@ abstract class TreeGen {
    *  and the implementation of Constant#tpe is such that x.tpe becomes
    *  ClassType(value.asInstanceOf[Type]), i.e. java.lang.Class[Type].
    *  Can't find any docs on how/why it's done this way. See ticket
-   *  SI-490 for some interesting comments from lauri alanko suggesting
+   *  scala/bug#490 for some interesting comments from lauri alanko suggesting
    *  that the type given by classOf[T] is too strong and should be
    *  weakened so as not to suggest that classOf[List[String]] is any
    *  different from classOf[List[Int]].
@@ -729,11 +744,20 @@ abstract class TreeGen {
   def mkPatDef(pat: Tree, rhs: Tree)(implicit fresh: FreshNameCreator): List[ValDef] =
     mkPatDef(Modifiers(0), pat, rhs)
 
+  private def propagateNoWarnAttachment(from: Tree, to: ValDef): to.type =
+    if (isPatVarWarnable && from.hasAttachment[NoWarnAttachment.type]) to.updateAttachment(NoWarnAttachment)
+    else to
+
+  // Keep marker for `x@_`, add marker for `val C(x) = ???` to distinguish from ordinary `val x = ???`.
+  private def propagatePatVarDefAttachments(from: Tree, to: ValDef): to.type =
+    propagateNoWarnAttachment(from, to).updateAttachment(PatVarDefAttachment)
+
   /** Create tree for pattern definition <mods val pat0 = rhs> */
-  def mkPatDef(mods: Modifiers, pat: Tree, rhs: Tree)(implicit fresh: FreshNameCreator): List[ValDef] = matchVarPattern(pat) match {
+  def mkPatDef(mods: Modifiers, pat: Tree, rhs: Tree)(implicit fresh: FreshNameCreator): List[ValDef] = mkPatDef(mods, pat, rhs, rhs.pos)(fresh)
+  def mkPatDef(mods: Modifiers, pat: Tree, rhs: Tree, rhsPos: Position)(implicit fresh: FreshNameCreator): List[ValDef] = matchVarPattern(pat) match {
     case Some((name, tpt)) =>
-      List(atPos(pat.pos union rhs.pos) {
-        ValDef(mods, name.toTermName, tpt, rhs)
+      List(atPos(pat.pos union rhsPos) {
+        propagateNoWarnAttachment(pat, ValDef(mods, name.toTermName, tpt, rhs))
       })
 
     case None =>
@@ -759,13 +783,13 @@ abstract class TreeGen {
         case Typed(expr, tpt) if !expr.isInstanceOf[Ident] =>
           val rhsTypedUnchecked =
             if (tpt.isEmpty) rhsUnchecked
-            else Typed(rhsUnchecked, tpt) setPos (rhs.pos union tpt.pos)
+            else Typed(rhsUnchecked, tpt) setPos (rhsPos union tpt.pos)
           (expr, rhsTypedUnchecked)
         case ok =>
           (ok, rhsUnchecked)
       }
       val vars = getVariables(pat1)
-      val matchExpr = atPos((pat1.pos union rhs.pos).makeTransparent) {
+      val matchExpr = atPos((pat1.pos union rhsPos).makeTransparent) {
         Match(
           rhs1,
           List(
@@ -775,9 +799,9 @@ abstract class TreeGen {
           ))
       }
       vars match {
-        case List((vname, tpt, pos)) =>
-          List(atPos(pat.pos union pos union rhs.pos) {
-            ValDef(mods, vname.toTermName, tpt, matchExpr)
+        case List((vname, tpt, pos, original)) =>
+          List(atPos(pat.pos union pos union rhsPos) {
+            propagatePatVarDefAttachments(original, ValDef(mods, vname.toTermName, tpt, matchExpr))
           })
         case _ =>
           val tmp = freshTermName()
@@ -787,9 +811,9 @@ abstract class TreeGen {
                      tmp, TypeTree(), matchExpr)
             }
           var cnt = 0
-          val restDefs = for ((vname, tpt, pos) <- vars) yield atPos(pos) {
+          val restDefs = for ((vname, tpt, pos, original) <- vars) yield atPos(pos) {
             cnt += 1
-            ValDef(mods, vname.toTermName, tpt, Select(Ident(tmp), newTermName("_" + cnt)))
+            propagatePatVarDefAttachments(original, ValDef(mods, vname.toTermName, tpt, Select(Ident(tmp), TermName("_" + cnt))))
           }
           firstDef :: restDefs
       }
@@ -797,16 +821,24 @@ abstract class TreeGen {
 
   /** Create tree for for-comprehension generator <val pat0 <- rhs0> */
   def mkGenerator(pos: Position, pat: Tree, valeq: Boolean, rhs: Tree)(implicit fresh: FreshNameCreator): Tree = {
-    val pat1 = patvarTransformer.transform(pat)
+    val pat1 = patvarTransformerForFor.transform(pat)
     if (valeq) ValEq(pat1, rhs).setPos(pos)
     else ValFrom(pat1, mkCheckIfRefutable(pat1, rhs)).setPos(pos)
+  }
+
+  private def unwarnable(pat: Tree): Tree = {
+    pat foreach {
+      case b @ Bind(_, _) => b updateAttachment NoWarnAttachment
+      case _ =>
+    }
+    pat
   }
 
   def mkCheckIfRefutable(pat: Tree, rhs: Tree)(implicit fresh: FreshNameCreator) =
     if (treeInfo.isVarPatternDeep(pat)) rhs
     else {
       val cases = List(
-        CaseDef(pat.duplicate, EmptyTree, Literal(Constant(true))),
+        CaseDef(unwarnable(pat.duplicate), EmptyTree, Literal(Constant(true))),
         CaseDef(Ident(nme.WILDCARD), EmptyTree, Literal(Constant(false)))
       )
       val visitor = mkVisitor(cases, checkExhaustive = false, nme.CHECK_IF_REFUTABLE_STRING)
@@ -842,7 +874,7 @@ abstract class TreeGen {
    *  synthetic for all nodes that contain a variable position.
    */
   class GetVarTraverser extends Traverser {
-    val buf = new ListBuffer[(Name, Tree, Position)]
+    val buf = new ListBuffer[(Name, Tree, Position, Tree)]
 
     def namePos(tree: Tree, name: Name): Position =
       if (!tree.pos.isRange || name.containsName(nme.raw.DOLLAR)) tree.pos.focus
@@ -854,7 +886,7 @@ abstract class TreeGen {
 
     override def traverse(tree: Tree): Unit = {
       def seenName(name: Name)     = buf exists (_._1 == name)
-      def add(name: Name, t: Tree) = if (!seenName(name)) buf += ((name, t, namePos(tree, name)))
+      def add(name: Name, t: Tree) = if (!seenName(name)) buf += ((name, t, namePos(tree, name), tree))
       val bl = buf.length
 
       tree match {
@@ -885,20 +917,23 @@ abstract class TreeGen {
   }
 
   /** Returns list of all pattern variables, possibly with their types,
-   *  without duplicates
+   *  without duplicates, plus position and original tree.
    */
-  private def getVariables(tree: Tree): List[(Name, Tree, Position)] =
-    new GetVarTraverser apply tree
+  private def getVariables(tree: Tree): List[(Name, Tree, Position, Tree)] = (new GetVarTraverser)(tree)
 
   /** Convert all occurrences of (lower-case) variables in a pattern as follows:
    *    x                  becomes      x @ _
    *    x: T               becomes      x @ (_: T)
    */
-  object patvarTransformer extends Transformer {
+  class PatvarTransformer(forFor: Boolean) extends Transformer {
     override def transform(tree: Tree): Tree = tree match {
-      case Ident(name) if (treeInfo.isVarPattern(tree) && name != nme.WILDCARD) =>
-        atPos(tree.pos)(Bind(name, atPos(tree.pos.focus) (Ident(nme.WILDCARD))))
-      case Typed(id @ Ident(name), tpt) if (treeInfo.isVarPattern(id) && name != nme.WILDCARD) =>
+      case Ident(name) if treeInfo.isVarPattern(tree) && name != nme.WILDCARD =>
+        atPos(tree.pos) {
+          val b = Bind(name, atPos(tree.pos.focus) (Ident(nme.WILDCARD)))
+          if (forFor && isPatVarWarnable) b updateAttachment NoWarnAttachment
+          else b
+        }
+      case Typed(id @ Ident(name), tpt) if treeInfo.isVarPattern(id) && name != nme.WILDCARD =>
         atPos(tree.pos.withPoint(id.pos.point)) {
           Bind(name, atPos(tree.pos.withStart(tree.pos.point)) {
             Typed(Ident(nme.WILDCARD), tpt)
@@ -918,6 +953,15 @@ abstract class TreeGen {
         tree
     }
   }
+
+  /** Can be overridden to depend on settings.warnUnusedPatvars. */
+  def isPatVarWarnable: Boolean = true
+
+  /** Not in for comprehensions, whether to warn unused pat vars depends on flag. */
+  object patvarTransformer       extends PatvarTransformer(forFor = false)
+
+  /** Tag pat vars in for comprehensions. */
+  object patvarTransformerForFor extends PatvarTransformer(forFor = true)
 
   // annotate the expression with @unchecked
   def mkUnchecked(expr: Tree): Tree = atPos(expr.pos) {

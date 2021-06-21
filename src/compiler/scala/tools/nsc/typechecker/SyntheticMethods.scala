@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
@@ -10,7 +17,7 @@ import scala.language.postfixOps
 
 import scala.collection.mutable
 import scala.collection.mutable.ListBuffer
-
+import scala.tools.nsc.Reporting.WarningCategory
 import symtab.Flags._
 
 /** Synthetic method implementations for case classes and case objects.
@@ -130,8 +137,9 @@ trait SyntheticMethods extends ast.TreeDSL {
      */
     def canEqualMethod: Tree = {
       syntheticCanEqual = true
-      createMethod(nme.canEqual_, List(AnyTpe), BooleanTpe)(m =>
-        Ident(m.firstParam) IS_OBJ classExistentialType(clazz))
+      createMethod(nme.canEqual_, List(AnyTpe), BooleanTpe) { m =>
+        Ident(m.firstParam) IS_OBJ classExistentialType(context.prefix, clazz)
+      }
     }
 
     /* that match { case _: this.C => true ; case _ => false }
@@ -158,25 +166,41 @@ trait SyntheticMethods extends ast.TreeDSL {
     def thatCast(eqmeth: Symbol): Tree =
       gen.mkCast(Ident(eqmeth.firstParam), clazz.tpe)
 
-    /* The equality method core for case classes and inline classes.
+    /* The equality method core for case classes and derived value classes.
+     * Generally:
      * 1+ args:
      *   (that.isInstanceOf[this.C]) && {
      *       val x$1 = that.asInstanceOf[this.C]
      *       (this.arg_1 == x$1.arg_1) && (this.arg_2 == x$1.arg_2) && ... && (x$1 canEqual this)
      *      }
-     * Drop canBuildFrom part if class is final and canBuildFrom is synthesized
+     * Drop:
+     * - canEqual part if class is final and canEqual is synthesized.
+     * - test for arg_i if arg_i has type Nothing, Null, or Unit
+     * - asInstanceOf if no equality checks need made (see scala/bug#9240, scala/bug#10361)
      */
     def equalsCore(eqmeth: Symbol, accessors: List[Symbol]) = {
-      val otherName = context.unit.freshTermName(clazz.name + "$")
+      def usefulEquality(acc: Symbol): Boolean = {
+        val rt = acc.info.resultType
+        rt != NothingTpe && rt != NullTpe && rt != UnitTpe
+      }
+
+      val otherName = freshTermName(clazz.name.toStringWithSuffix("$"))(freshNameCreatorFor(context))
       val otherSym  = eqmeth.newValue(otherName, eqmeth.pos, SYNTHETIC) setInfo clazz.tpe
-      val pairwise  = accessors map (acc => fn(Select(mkThis, acc), acc.tpe member nme.EQ, Select(Ident(otherSym), acc)))
+      val pairwise  = accessors collect {
+        case acc if usefulEquality(acc) =>
+          fn(Select(mkThis, acc), acc.tpe member nme.EQ, Select(Ident(otherSym), acc))
+      }
       val canEq     = gen.mkMethodCall(otherSym, nme.canEqual_, Nil, List(mkThis))
       val tests     = if (clazz.isDerivedValueClass || clazz.isFinal && syntheticCanEqual) pairwise else pairwise :+ canEq
 
-      thatTest(eqmeth) AND Block(
-        ValDef(otherSym, thatCast(eqmeth)),
-        AND(tests: _*)
-      )
+      if (tests.isEmpty) {
+        thatTest(eqmeth)
+      } else {
+        thatTest(eqmeth) AND Block(
+          ValDef(otherSym, thatCast(eqmeth)),
+          AND(tests: _*)
+        )
+      }
     }
 
     /* The equality method for case classes.
@@ -332,7 +356,7 @@ trait SyntheticMethods extends ast.TreeDSL {
               // Without a means to suppress this warning, I've thought better of it.
               if (settings.warnValueOverrides) {
                  (clazz.info nonPrivateMember m.name) filter (m => (m.owner != AnyClass) && (m.owner != clazz) && !m.isDeferred) andAlso { m =>
-                   typer.context.warning(clazz.pos, s"Implementation of ${m.name} inherited from ${m.owner} overridden in $clazz to enforce value class semantics")
+                   typer.context.warning(clazz.pos, s"Implementation of ${m.name} inherited from ${m.owner} overridden in $clazz to enforce value class semantics", WarningCategory.Other /* settings.warnValueOverrides is not exposed as compiler flag */)
                  }
                }
               true
@@ -373,7 +397,7 @@ trait SyntheticMethods extends ast.TreeDSL {
         val i = original.owner.caseFieldAccessors.indexOf(original)
         def freshAccessorName = {
           devWarning(s"Unable to find $original among case accessors of ${original.owner}: ${original.owner.caseFieldAccessors}")
-          context.unit.freshTermName(original.name + "$")
+          freshTermName(original.name.toStringWithSuffix("$"))(freshNameCreatorFor(context))
         }
         def nameSuffixedByParamIndex = original.name.append(nme.CASE_ACCESSOR + "$" + i).toTermName
         val newName = if (i < 0) freshAccessorName else nameSuffixedByParamIndex

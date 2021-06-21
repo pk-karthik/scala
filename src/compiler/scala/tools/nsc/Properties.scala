@@ -1,9 +1,18 @@
-/* NSC -- new Scala compiler
- * Copyright 2006-2013 LAMP/EPFL
- * @author  Stephane Micheloud
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
+
+import scala.tools.nsc.io.Path
 
 /** Loads `compiler.properties` from the jar archive file.
  */
@@ -27,5 +36,9 @@ object Properties extends scala.util.PropertiesTrait {
   def shellInterruptedString = scalaPropOrElse("shell.interrupted", f":quit$lineSeparator")
 
   // derived values
+  @deprecated("Emacs support is fully handled by JLine, this will be removed in next release", "2.12.6")
   def isEmacsShell         = propOrEmpty("env.emacs") != ""
+
+  // Where we keep fsc's state (ports/redirection)
+  lazy val scalacDir = (Path(Properties.userHome) / ".scalac").createDirectory(force = false)
 }

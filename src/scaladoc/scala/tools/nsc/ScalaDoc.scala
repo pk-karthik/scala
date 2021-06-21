@@ -1,13 +1,20 @@
-/* scaladoc, a documentation generator for Scala
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Martin Odersky
- * @author  Geoffrey Washburn
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
 
 import scala.tools.nsc.doc.DocFactory
 import scala.tools.nsc.reporters.ConsoleReporter
+import scala.tools.nsc.settings.DefaultPathFactory
 import scala.reflect.internal.Reporter
 import scala.reflect.internal.util.{ FakePos, NoPosition, Position }
 
@@ -20,7 +27,8 @@ class ScalaDoc {
   def process(args: Array[String]): Boolean = {
     var reporter: ScalaDocReporter = null
     val docSettings = new doc.Settings(msg => reporter.error(FakePos("scaladoc"), msg + "\n  scaladoc -help  gives more information"),
-                                       msg => reporter.printMessage(msg))
+                                       msg => reporter.echo(msg),
+                                       DefaultPathFactory)
     reporter = new ScalaDocReporter(docSettings)
     val command = new ScalaDoc.Command(args.toList, docSettings)
     def hasFiles = command.files.nonEmpty || docSettings.uncompilableFiles.nonEmpty
@@ -41,10 +49,10 @@ class ScalaDoc {
       try { new DocFactory(reporter, docSettings) document command.files }
       catch {
         case ex @ FatalError(msg) =>
-          if (docSettings.debug.value) ex.printStackTrace()
+          if (docSettings.isDebug) ex.printStackTrace()
           reporter.error(null, "fatal error: " + msg)
       }
-      finally reporter.printSummary()
+      finally reporter.finish()
 
     !reporter.reallyHasErrors
   }
@@ -72,9 +80,11 @@ class ScalaDocReporter(settings: Settings) extends ConsoleReporter(settings) {
 
   def printDelayedMessages(): Unit = delayedMessages.values.foreach(_.apply())
 
-  override def printSummary(): Unit = {
+  override def printMessage(msg: String): Unit = display(NoPosition, msg, INFO)
+
+  override def finish(): Unit = {
     printDelayedMessages()
-    super.printSummary()
+    super.finish()
   }
 }
 
@@ -90,21 +100,5 @@ object ScalaDoc extends ScalaDoc {
 
   def main(args: Array[String]): Unit = sys exit {
     if (process(args)) 0 else 1
-  }
-
-  implicit class SummaryReporter(val rep: Reporter) extends AnyVal {
-    /** Adds print lambda to ScalaDocReporter, executes it on other reporter */
-    private[this] def summaryMessage(pos: Position, msg: String, print: () => Unit): Unit = rep match {
-      case r: ScalaDocReporter => r.addDelayedMessage(pos, msg, print)
-      case _ => print()
-    }
-
-    def summaryEcho(pos: Position, msg: String): Unit    = summaryMessage(pos, msg, () => rep.echo(pos, msg))
-    def summaryError(pos: Position, msg: String): Unit   = summaryMessage(pos, msg, () => rep.error(pos, msg))
-    def summaryWarning(pos: Position, msg: String): Unit = summaryMessage(pos, msg, () => rep.warning(pos, msg))
-
-    def summaryEcho(msg: String): Unit    = summaryEcho(NoPosition, msg)
-    def summaryError(msg: String): Unit   = summaryError(NoPosition, msg)
-    def summaryWarning(msg: String): Unit = summaryWarning(NoPosition, msg)
   }
 }

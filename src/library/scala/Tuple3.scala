@@ -1,10 +1,15 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2002-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 // GENERATED CODE: DO NOT EDIT. See scala.Function0 for timestamp.
 
 package scala
@@ -17,8 +22,7 @@ package scala
  *  @param  _2   Element 2 of this Tuple3
  *  @param  _3   Element 3 of this Tuple3
  */
-@deprecatedInheritance("Tuples will be made final in a future version.", "2.11.0")
-case class Tuple3[+T1, +T2, +T3](_1: T1, _2: T2, _3: T3)
+final case class Tuple3[+T1, +T2, +T3](_1: T1, _2: T2, _3: T3)
   extends Product3[T1, T2, T3]
 {
   override def toString() = "(" + _1 + "," + _2 + "," + _3 + ")"

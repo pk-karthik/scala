@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -483,9 +487,7 @@ private[collection] final class CNode[K, V](val bitmap: Int, val array: Array[Ba
   }
 
   def updatedAt(pos: Int, nn: BasicNode, gen: Gen) = {
-    val len = array.length
-    val narr = new Array[BasicNode](len)
-    Array.copy(array, 0, narr, 0, len)
+    val narr = java.util.Arrays.copyOf(array, array.length)
     narr(pos) = nn
     new CNode[K, V](bitmap, narr, gen)
   }
@@ -566,16 +568,6 @@ private[collection] final class CNode[K, V](val bitmap: Int, val array: Array[Ba
 
   private[concurrent] def string(lev: Int): String = "CNode %x\n%s".format(bitmap, array.map(_.string(lev + 1)).mkString("\n"))
 
-  /* quiescently consistent - don't call concurrently to anything involving a GCAS!! */
-  private def collectElems: Seq[(K, V)] = array flatMap {
-    case sn: SNode[K, V] => Some(sn.kvPair)
-    case in: INode[K, V] => in.mainnode match {
-      case tn: TNode[K, V] => Some(tn.kvPair)
-      case ln: LNode[K, V] => ln.listmap.toList
-      case cn: CNode[K, V] => cn.collectElems
-    }
-  }
-
   private def collectLocalElems: Seq[String] = array flatMap {
     case sn: SNode[K, V] => Some(sn.kvPair._2.toString)
     case in: INode[K, V] => Some(in.toString.drop(14) + "(" + in.gen + ")")
@@ -622,7 +614,7 @@ private[concurrent] case class RDCSS_Descriptor[K, V](old: INode[K, V], expected
  *  iterator and clear operations. The cost of evaluating the (lazy) snapshot is
  *  distributed across subsequent updates, thus making snapshot evaluation horizontally scalable.
  *
- *  For details, see: http://lampwww.epfl.ch/~prokopec/ctries-snapshot.pdf
+ *  For details, see: [[http://lampwww.epfl.ch/~prokopec/ctries-snapshot.pdf]]
  *
  *  @author Aleksandar Prokopec
  *  @since 2.10
@@ -932,6 +924,33 @@ extends scala.collection.concurrent.Map[K, V]
     if (nonReadOnly) readOnlySnapshot().iterator
     else new TrieMapIterator(0, this)
 
+  ////////////////////////////////////////////////////////////////////////////
+  //
+  // scala/bug#10177 These methods need overrides as the inherited implementations
+  // call `.iterator` more than once, which doesn't guarantee a coherent
+  // view of the data if there is a concurrent writer
+  // Note that the we don't need overrides for keysIterator or valuesIterator
+  // TrieMapTest validates the behaviour.
+  override def values: Iterable[V] = {
+    if (nonReadOnly) readOnlySnapshot().values
+    else super.values
+  }
+  override def keySet: Set[K] = {
+    if (nonReadOnly) readOnlySnapshot().keySet
+    else super.keySet
+  }
+  override def filterKeys(p: K => Boolean): collection.Map[K, V] = {
+    if (nonReadOnly) readOnlySnapshot().filterKeys(p)
+    else super.filterKeys(p)
+  }
+  override def mapValues[W](f: V => W): collection.Map[K, W] = {
+    if (nonReadOnly) readOnlySnapshot().mapValues(f)
+    else super.mapValues(f)
+  }
+  // END extra overrides
+  ///////////////////////////////////////////////////////////////////
+
+
   private def cachedSize() = {
     val r = RDCSS_READ_ROOT()
     r.cachedSize(this)
@@ -949,7 +968,9 @@ extends scala.collection.concurrent.Map[K, V]
 object TrieMap extends MutableMapFactory[TrieMap] {
   val inodeupdater = AtomicReferenceFieldUpdater.newUpdater(classOf[INodeBase[_, _]], classOf[MainNode[_, _]], "mainnode")
 
-  implicit def canBuildFrom[K, V]: CanBuildFrom[Coll, (K, V), TrieMap[K, V]] = new MapCanBuildFrom[K, V]
+  implicit def canBuildFrom[K, V]: CanBuildFrom[Coll, (K, V), TrieMap[K, V]] =
+    ReusableCBF.asInstanceOf[CanBuildFrom[Coll, (K, V), TrieMap[K, V]]]
+  private[this] val ReusableCBF = new MapCanBuildFrom[Nothing, Nothing]
 
   def empty[K, V]: TrieMap[K, V] = new TrieMap[K, V]
 

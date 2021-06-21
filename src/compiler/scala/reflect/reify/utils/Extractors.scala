@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala.reflect.reify
 package utils
 
@@ -72,7 +84,7 @@ trait Extractors {
     }
     val tpec = ClassDef(
       Modifiers(FINAL),
-      newTypeName(global.currentUnit.fresh.newName(flavor.toString)),
+      newTypeName(currentFreshNameCreator.newName(flavor.toString)),
       List(),
       Template(List(Ident(reifierBase)),
       noSelfType,

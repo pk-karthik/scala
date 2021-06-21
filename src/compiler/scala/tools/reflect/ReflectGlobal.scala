@@ -1,10 +1,22 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala.tools
 package reflect
 
 import scala.reflect.internal.util.ScalaClassLoader
 import scala.tools.nsc.Global
-import scala.tools.nsc.reporters.Reporter
 import scala.tools.nsc.Settings
+import scala.tools.nsc.reporters.Reporter
 import scala.tools.nsc.typechecker.Analyzer
 
 /** A version of Global that uses reflection to get class
@@ -17,10 +29,10 @@ class ReflectGlobal(currentSettings: Settings, reporter: Reporter, override val 
     val global: ReflectGlobal.this.type = ReflectGlobal.this
   } with Analyzer {
     /** Obtains the classLoader used for runtime macro expansion.
-     *
-     *  Macro expansion can use everything available in [[global.classPath]] or [[rootClassLoader]].
-     *  The [[rootClassLoader]] is used to obtain runtime defined macros.
-     */
+      *
+      *  Macro expansion can use everything available in [[global.classPath]] or [[rootClassLoader]].
+      *  The [[rootClassLoader]] is used to obtain runtime defined macros.
+      */
     override protected def findMacroClassLoader(): ClassLoader = {
       val classpath = global.classPath.asURLs
       ScalaClassLoader.fromURLs(classpath, rootClassLoader)
@@ -30,8 +42,7 @@ class ReflectGlobal(currentSettings: Settings, reporter: Reporter, override val 
   override def transformedType(sym: Symbol) =
     postErasure.transformInfo(sym,
       erasure.transformInfo(sym,
-        uncurry.transformInfo(sym,
-          refChecks.transformInfo(sym, sym.info))))
+        uncurry.transformInfo(sym, sym.info)))
 
   override def isCompilerUniverse = true
 

@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala.tools.nsc.doc
 package model
 package diagram
@@ -138,7 +150,7 @@ trait DiagramFactory extends DiagramDirectiveParser {
             case dnode: MemberTemplateImpl =>
               val superClasses = listSuperClasses(dnode)
 
-              if (!superClasses.isEmpty) {
+              if (superClasses.nonEmpty) {
                 nodesShown += dnode
                 nodesShown ++= superClasses
               }

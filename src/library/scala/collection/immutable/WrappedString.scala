@@ -1,12 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2002-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
-
-
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -54,7 +56,7 @@ final class WrappedString(val self: String) extends AbstractSeq[Char] with Index
  *  @since 2.8
  */
 object WrappedString {
-  implicit def canBuildFrom: CanBuildFrom[WrappedString, Char, WrappedString] = new CanBuildFrom[WrappedString, Char, WrappedString] {
+  implicit val canBuildFrom: CanBuildFrom[WrappedString, Char, WrappedString] = new CanBuildFrom[WrappedString, Char, WrappedString] {
     def apply(from: WrappedString) = newBuilder
     def apply() = newBuilder
   }

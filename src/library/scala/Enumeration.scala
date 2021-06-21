@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2002-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 
@@ -25,26 +29,54 @@ import scala.util.matching.Regex
  *  `Value` type member of the enumeration (`Value` selected on the stable
  *  identifier path of the enumeration instance).
  *
+ *  Values SHOULD NOT be added to an enumeration after its construction;
+ *  doing so makes the enumeration thread-unsafe. If values are added to an
+ *  enumeration from multiple threads (in a non-synchronized fashion) after
+ *  construction, the behavior of the enumeration is undefined.
+ *
  * @example {{{
- *  object Main extends App {
+ * // Define a new enumeration with a type alias and work with the full set of enumerated values
+ * object WeekDay extends Enumeration {
+ *   type WeekDay = Value
+ *   val Mon, Tue, Wed, Thu, Fri, Sat, Sun = Value
+ * }
+ * import WeekDay._
  *
- *    object WeekDay extends Enumeration {
- *      type WeekDay = Value
- *      val Mon, Tue, Wed, Thu, Fri, Sat, Sun = Value
- *    }
- *    import WeekDay._
+ * def isWorkingDay(d: WeekDay) = ! (d == Sat || d == Sun)
  *
- *    def isWorkingDay(d: WeekDay) = ! (d == Sat || d == Sun)
+ * WeekDay.values filter isWorkingDay foreach println
+ * // output:
+ * // Mon
+ * // Tue
+ * // Wed
+ * // Thu
+ * // Fri
+ * }}}
  *
- *    WeekDay.values filter isWorkingDay foreach println
- *  }
- *  // output:
- *  // Mon
- *  // Tue
- *  // Wed
- *  // Thu
- *  // Fri
- *  }}}
+ * @example {{{
+ * // Example of adding attributes to an enumeration by extending the Enumeration.Val class
+ * object Planet extends Enumeration {
+ *   protected case class PlanetVal(mass: Double, radius: Double) extends super.Val {
+ *     def surfaceGravity: Double = Planet.G * mass / (radius * radius)
+ *     def surfaceWeight(otherMass: Double): Double = otherMass * surfaceGravity
+ *   }
+ *   implicit def valueToPlanetVal(x: Value): PlanetVal = x.asInstanceOf[PlanetVal]
+ *
+ *   val G: Double = 6.67300E-11
+ *   val Mercury = PlanetVal(3.303e+23, 2.4397e6)
+ *   val Venus   = PlanetVal(4.869e+24, 6.0518e6)
+ *   val Earth   = PlanetVal(5.976e+24, 6.37814e6)
+ *   val Mars    = PlanetVal(6.421e+23, 3.3972e6)
+ *   val Jupiter = PlanetVal(1.9e+27, 7.1492e7)
+ *   val Saturn  = PlanetVal(5.688e+26, 6.0268e7)
+ *   val Uranus  = PlanetVal(8.686e+25, 2.5559e7)
+ *   val Neptune = PlanetVal(1.024e+26, 2.4746e7)
+ * }
+ *
+ * println(Planet.values.filter(_.radius > 7.0e6))
+ * // output:
+ * // Planet.ValueSet(Jupiter, Saturn, Uranus, Neptune)
+ * }}}
  *
  *  @param initial The initial value from which to count the integers that
  *                 identifies values at run-time.
@@ -121,7 +153,7 @@ abstract class Enumeration (initial: Int) extends Serializable {
    * @throws   NoSuchElementException if no `Value` with a matching
    *           name is in this `Enumeration`
    */
-  final def withName(s: String): Value = values.find(_.toString == s).getOrElse(
+  final def withName(s: String): Value = values.byName.getOrElse(s,
     throw new NoSuchElementException(s"No value found for '$s'"))
 
   /** Creates a fresh value, part of this enumeration. */
@@ -168,7 +200,7 @@ abstract class Enumeration (initial: Int) extends Serializable {
       val value = m.invoke(this).asInstanceOf[Value]
       // verify that outer points to the correct Enumeration: ticket #3616.
       if (value.outerEnum eq thisenum) {
-        val id = Int.unbox(classOf[Val] getMethod "id" invoke value)
+        val id: Int = value.id
         nmap += ((id, name))
       }
     }
@@ -262,6 +294,7 @@ abstract class Enumeration (initial: Int) extends Serializable {
     /** Creates a bit mask for the zero-adjusted ids in this set as a
      *  new array of longs */
     def toBitMask: Array[Long] = nnIds.toBitMask
+    private[Enumeration] lazy val byName: Map[String, Value] = iterator.map( v => v.toString -> v).toMap
   }
 
   /** A factory object for value sets */

@@ -1,12 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
-
-
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -19,7 +21,9 @@ import generic._
  *  @define coll linked hash map
  */
 object LinkedHashMap extends MutableMapFactory[LinkedHashMap] {
-  implicit def canBuildFrom[A, B]: CanBuildFrom[Coll, (A, B), LinkedHashMap[A, B]] = new MapCanBuildFrom[A, B]
+  implicit def canBuildFrom[A, B]: CanBuildFrom[Coll, (A, B), LinkedHashMap[A, B]] =
+    ReusableCBF.asInstanceOf[CanBuildFrom[Coll, (A, B), LinkedHashMap[A, B]]]
+  private [this] val ReusableCBF = new MapCanBuildFrom[Any, Any]
   def empty[A, B] = new LinkedHashMap[A, B]
 }
 
@@ -67,6 +71,13 @@ class LinkedHashMap[A, B] extends AbstractMap[A, B]
     else Some(e.value)
   }
 
+  override def contains(key: A): Boolean = {
+    if (getClass eq classOf[LinkedHashMap[_, _]])
+      findEntry(key) != null
+    else
+      super.contains(key) // A subclass might override `get`, use the default implementation `contains`.
+  }
+
   override def put(key: A, value: B): Option[B] = {
     val e = findOrAddEntry(key, value)
     if (e eq null) None
@@ -81,6 +92,8 @@ class LinkedHashMap[A, B] extends AbstractMap[A, B]
       else e.earlier.later = e.later
       if (e.later eq null) lastEntry = e.earlier
       else e.later.earlier = e.earlier
+      e.earlier = null // Null references to prevent nepotism
+      e.later = null
       Some(e.value)
     }
   }

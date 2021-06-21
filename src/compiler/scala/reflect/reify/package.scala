@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala
 package reflect
 
@@ -28,10 +40,10 @@ package object reify {
 
     val enclosingErasure = {
       val rClassTree = reifyEnclosingRuntimeClass(global)(typer0)
-      // HACK around SI-6259
+      // HACK around scala/bug#6259
       // If we're in the constructor of an object or others don't have easy access to `this`, we have no good way to grab
       // the class of that object.  Instead, we construct an anonymous class and grab his class file, assuming
-      // this is enough to get the correct class loadeer for the class we *want* a mirror for, the object itself.
+      // this is enough to get the correct class loader for the class we *want* a mirror for, the object itself.
       rClassTree orElse Apply(Select(gen.mkAnonymousNew(Nil), sn.GetClass), Nil)
     }
     // JavaUniverse is defined in scala-reflect.jar, so we must be very careful in case someone reifies stuff having only scala-library.jar on the classpath
@@ -51,13 +63,16 @@ package object reify {
     import definitions._
     import analyzer.enclosingMacroPosition
 
-    // SI-7375
+    if (global.phase.id >= global.currentRun.erasurePhase.id)
+      devWarning(enclosingMacroPosition, s"reify Class[$tpe0] during ${global.phase.name}")
+
+    // scala/bug#7375
     val tpe = tpe0.dealiasWiden
 
     if (tpe.isSpliceable) {
       val classTagInScope = typer0.resolveClassTag(enclosingMacroPosition, tpe, allowMaterialization = false)
       if (!classTagInScope.isEmpty) return Select(classTagInScope, nme.runtimeClass)
-      if (concrete) throw new ReificationException(enclosingMacroPosition, "tpe %s is an unresolved spliceable type".format(tpe))
+      if (concrete) throw ReificationException(enclosingMacroPosition, "tpe %s is an unresolved spliceable type".format(tpe))
     }
 
     tpe.dealiasWiden match {
@@ -65,13 +80,11 @@ package object reify {
         val componentErasure = reifyRuntimeClass(global)(typer0, componentTpe, concrete)
         gen.mkMethodCall(currentRun.runDefinitions.arrayClassMethod, List(componentErasure))
       case _ =>
-        var erasure = tpe.erasure
-        if (tpe.typeSymbol.isDerivedValueClass && global.phase.id < global.currentRun.erasurePhase.id) erasure = tpe
-        gen.mkNullaryCall(currentRun.runDefinitions.Predef_classOf, List(erasure))
+        gen.mkClassOf(tpe)
     }
   }
 
-  // Note: If  current context is inside the constructor of an object or otherwise not inside
+  // Note: If current context is inside the constructor of an object or otherwise not inside
   // a class/object body, this will return an EmptyTree.
   def reifyEnclosingRuntimeClass(global: Global)(typer0: global.analyzer.Typer): global.Tree = {
     import global._

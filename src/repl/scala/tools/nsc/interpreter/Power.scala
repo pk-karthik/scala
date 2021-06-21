@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Paul Phillips
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
@@ -139,7 +146,7 @@ class Power[ReplValsImpl <: ReplVals : ru.TypeTag: ClassTag](val intp: IMain, re
     |definitions.{ getClass => _, _ }
     |power.rutil._
     |replImplicits._
-    |treedsl.CODE._""".stripMargin.lines
+    |treedsl.CODE._""".stripMargin.linesIterator.toList
 
   def init = customInit getOrElse initImports.mkString("import ", ", ", "")
 
@@ -151,7 +158,7 @@ class Power[ReplValsImpl <: ReplVals : ru.TypeTag: ClassTag](val intp: IMain, re
     // Then we import everything from $r.
     intp interpret s"import ${ intp.originalPath("$r") }._"
     // And whatever else there is to do.
-    init.lines foreach (intp interpret _)
+    init.linesIterator foreach (intp interpret _)
   }
 
   trait LowPriorityInternalInfo {

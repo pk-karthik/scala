@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
@@ -92,6 +99,7 @@ trait MemberHandlers {
     def path            = intp.originalPath(symbol)
     def symbol          = if (member.symbol eq null) NoSymbol else member.symbol
     def definesImplicit = false
+    def definesValueClass = false
     def definesValue    = false
 
     def definesTerm     = Option.empty[TermName]
@@ -190,14 +198,32 @@ trait MemberHandlers {
   class ModuleHandler(module: ModuleDef) extends MemberDefHandler(module) {
     override def definesTerm = Some(name.toTermName)
     override def definesValue = true
+    override def definesValueClass = {
+      var foundValueClass = false
+      new Traverser {
+        override def traverse(tree: Tree): Unit = tree match {
+          case _ if foundValueClass                 => ()
+          case cdef: ClassDef if isValueClass(cdef) => foundValueClass = true
+          case mdef: ModuleDef                      => traverseStats(mdef.impl.body, mdef.impl.symbol)
+          case _                                    => () // skip anything else
+        }
+      }.traverse(module)
+      foundValueClass
+    }
 
     override def resultExtractionCode(req: Request) = codegenln("defined object ", name)
+  }
+
+  private def isValueClass(cdef: ClassDef) = cdef.impl.parents match {
+    case Ident(tpnme.AnyVal) :: _ => true // approximating with a syntactic check
+    case _                        => false
   }
 
   class ClassHandler(member: ClassDef) extends MemberDefHandler(member) {
     override def definedSymbols = List(symbol, symbol.companionSymbol) filterNot (_ == NoSymbol)
     override def definesType = Some(name.toTypeName)
     override def definesTerm = Some(name.toTermName) filter (_ => mods.isCase)
+    override def definesValueClass = isValueClass(member)
 
     override def resultExtractionCode(req: Request) =
       codegenln("defined %s %s".format(keyword, name))
@@ -213,29 +239,44 @@ trait MemberHandlers {
 
   class ImportHandler(imp: Import) extends MemberHandler(imp) {
     val Import(expr, selectors) = imp
+
     def targetType = intp.global.rootMirror.getModuleIfDefined("" + expr) match {
       case NoSymbol => intp.typeOfExpression("" + expr)
-      case sym      => sym.thisType
+      case sym      => sym.tpe
     }
-    private def importableTargetMembers = importableMembers(targetType).toList
-    // wildcard imports, e.g. import foo._
-    private def selectorWild    = selectors filter (_.name == nme.USCOREkw)
-    // renamed imports, e.g. import foo.{ bar => baz }
-    private def selectorRenames = selectors map (_.rename) filterNot (_ == null)
+
+    private def isFlattenedSymbol(sym: Symbol) =
+      sym.owner.isPackageClass &&
+        sym.name.containsName(nme.NAME_JOIN_STRING) &&
+        sym.owner.info.member(sym.name.take(sym.name.indexOf(nme.NAME_JOIN_STRING))) != NoSymbol
+
+    private def importableTargetMembers =
+      importableMembers(exitingTyper(targetType)).filterNot(isFlattenedSymbol).toList
+
+    // non-wildcard imports
+    private def individualSelectors = selectors filter analyzer.isIndividualImport
 
     /** Whether this import includes a wildcard import */
-    val importsWildcard = selectorWild.nonEmpty
+    val importsWildcard = selectors exists analyzer.isWildcardImport
 
     def implicitSymbols = importedSymbols filter (_.isImplicit)
     def importedSymbols = individualSymbols ++ wildcardSymbols
 
-    private val selectorNames = selectorRenames filterNot (_ == nme.USCOREkw) flatMap (_.bothNames) toSet
-    lazy val individualSymbols: List[Symbol] = exitingTyper(importableTargetMembers filter (m => selectorNames(m.name)))
-    lazy val wildcardSymbols: List[Symbol]   = exitingTyper(if (importsWildcard) importableTargetMembers else Nil)
+    lazy val importableSymbolsWithRenames = {
+      val selectorRenameMap: mutable.HashMap[Name, Name] = mutable.HashMap.empty[Name, Name]
+      individualSelectors foreach { x =>
+        selectorRenameMap.put(x.name.toTermName, x.rename.toTermName)
+        selectorRenameMap.put(x.name.toTypeName, x.rename.toTypeName)
+      }
+      importableTargetMembers flatMap (m => selectorRenameMap.get(m.name) map (m -> _))
+    }
+
+    lazy val individualSymbols: List[Symbol] = importableSymbolsWithRenames map (_._1)
+    lazy val wildcardSymbols: List[Symbol]   = if (importsWildcard) importableTargetMembers else Nil
 
     /** Complete list of names imported by a wildcard */
     lazy val wildcardNames: List[Name]   = wildcardSymbols map (_.name)
-    lazy val individualNames: List[Name] = individualSymbols map (_.name)
+    lazy val individualNames: List[Name] = importableSymbolsWithRenames map (_._2)
 
     /** The names imported by this statement */
     override lazy val importedNames: List[Name] = wildcardNames ++ individualNames

@@ -8,7 +8,7 @@ import org.junit.runners.JUnit4
 @RunWith(classOf[JUnit4])
 class OrderingTest {
 
-  /* Test for SI-9077 */
+  /* Test for scala/bug#9077 */
   @Test
   def testReverseOrdering {
     def check[T: Ordering](t1: T, t2: T): Unit = {
@@ -57,5 +57,29 @@ class OrderingTest {
     checkAll[Iterable[Int]](Nil, List(1), List(1, 2))
     checkAll[(Int, Int)]((1, 2), (1, 3), (4, 5))
   }
-}
 
+  @Test
+  def orderingEquality(): Unit = {
+    def check[T](ord: => Ordering[T]): Unit = {
+      assertEquals(ord, ord)
+      assertEquals(ord.hashCode(), ord.hashCode())
+      assertEquals(ord.reverse, ord.reverse)
+      assertEquals(ord.reverse.hashCode(), ord.reverse.hashCode())
+    }
+
+    check(Ordering[Int])
+    check(Ordering[(Int, Long)])
+    check(Ordering[(Int, Long, Float)])
+    check(Ordering[(Int, Long, Float, Double)])
+    check(Ordering[(Int, Long, Float, Double, Byte)])
+    check(Ordering[(Int, Long, Float, Double, Byte, Char)])
+    check(Ordering[(Int, Long, Float, Double, Byte, Char, Short)])
+    check(Ordering[(Int, Long, Float, Double, Byte, Char, Short, BigInt)])
+    check(Ordering[(Int, Long, Float, Double, Byte, Char, Short, BigInt, BigDecimal)])
+    check(Ordering[Option[Int]])
+    check(Ordering[Iterable[Int]])
+
+    import Ordering.Implicits._
+    check(Ordering[Seq[Int]])
+  }
+}

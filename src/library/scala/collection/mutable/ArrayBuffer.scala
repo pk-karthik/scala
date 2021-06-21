@@ -1,12 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
-
-
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -22,9 +24,8 @@ import parallel.mutable.ParArray
  *
  *  @author  Matthias Zenger
  *  @author  Martin Odersky
- *  @version 2.8
  *  @since   1
- *  @see [[http://docs.scala-lang.org/overviews/collections/concrete-mutable-collection-classes.html#array_buffers "Scala's Collection Library overview"]]
+ *  @see [[http://docs.scala-lang.org/overviews/collections/concrete-mutable-collection-classes.html#array-buffers "Scala's Collection Library overview"]]
  *  section on `Array Buffers` for more information.
 
  *
@@ -67,7 +68,7 @@ class ArrayBuffer[A](override protected val initialSize: Int)
   override def sizeHint(len: Int) {
     if (len > size && len >= 1) {
       val newarray = new Array[AnyRef](len)
-      scala.compat.Platform.arraycopy(array, 0, newarray, 0, size0)
+      java.lang.System.arraycopy(array, 0, newarray, 0, size0)
       array = newarray
     }
   }

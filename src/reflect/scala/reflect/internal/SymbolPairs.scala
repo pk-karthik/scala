@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author Paul Phillips
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala
@@ -30,27 +37,6 @@ abstract class SymbolPairs {
   val global: SymbolTable
   import global._
 
-  /** Type operations relative to a prefix.  All operations work on Symbols,
-   *  and the types are the member types of those symbols in the prefix.
-   */
-  class RelativeTo(val prefix: Type) {
-    def this(clazz: Symbol) = this(clazz.thisType)
-    import scala.language.implicitConversions // geez, it even has to hassle me when it's private
-    private implicit def symbolToType(sym: Symbol): Type = prefix memberType sym
-
-    def erasureOf(sym: Symbol): Type         = erasure.erasure(sym)(sym: Type)
-    def signature(sym: Symbol): String       = sym defStringSeenAs (sym: Type)
-    def erasedSignature(sym: Symbol): String = sym defStringSeenAs erasureOf(sym)
-
-    def isSameType(sym1: Symbol, sym2: Symbol): Boolean    = sym1 =:= sym2
-    def isSubType(sym1: Symbol, sym2: Symbol): Boolean     = sym1 <:< sym2
-    def isSuperType(sym1: Symbol, sym2: Symbol): Boolean   = sym2 <:< sym1
-    def isSameErasure(sym1: Symbol, sym2: Symbol): Boolean = erasureOf(sym1) =:= erasureOf(sym2)
-    def matches(sym1: Symbol, sym2: Symbol): Boolean       = (sym1: Type) matches (sym2: Type)
-
-    override def toString = s"RelativeTo($prefix)"
-  }
-
   /** Are types tp1 and tp2 equivalent seen from the perspective
    *  of `baseClass`? For instance List[Int] and Seq[Int] are =:=
    *  when viewed from IterableClass.
@@ -58,10 +44,11 @@ abstract class SymbolPairs {
   def sameInBaseClass(baseClass: Symbol)(tp1: Type, tp2: Type) =
     (tp1 baseType baseClass) =:= (tp2 baseType baseClass)
 
-  case class SymbolPair(base: Symbol, low: Symbol, high: Symbol) {
+  final case class SymbolPair(base: Symbol, low: Symbol, high: Symbol) {
+    private[this] val self  = base.thisType
+
     def pos                 = if (low.owner == base) low.pos else if (high.owner == base) high.pos else base.pos
-    def self: Type          = base.thisType
-    def rootType: Type      = base.thisType
+    def rootType: Type      = self
 
     def lowType: Type       = self memberType low
     def lowErased: Type     = erasure.specialErasure(base)(low.tpe)
@@ -120,11 +107,11 @@ abstract class SymbolPairs {
      */
     protected def exclude(sym: Symbol): Boolean
 
-    /** Does `sym1` match `sym2` such that (sym1, sym2) should be
-     *  considered as a (lo, high) pair? Types always match. Term symbols
+    /** Does `this.low` match `high` such that (low, high) should be
+     *  considered as a pair? Types always match. Term symbols
      *  match if their member types relative to `self` match.
      */
-    protected def matches(lo: Symbol, high: Symbol): Boolean
+    protected def matches(high: Symbol): Boolean
 
     /** The parents and base classes of `base`.  Can be refined in subclasses.
      */
@@ -168,6 +155,16 @@ abstract class SymbolPairs {
     // The current low and high symbols; the high may be null.
     private[this] var lowSymbol: Symbol  = _
     private[this] var highSymbol: Symbol = _
+    def lowMemberType: Type = {
+      if (lowSymbol ne lowMemberTypeCacheSym) {
+        lowMemberTypeCache = self.memberType(lowSymbol)
+        lowMemberTypeCacheSym = lowSymbol
+      }
+      lowMemberTypeCache
+    }
+
+    private[this] var lowMemberTypeCache: Type = _
+    private[this] var lowMemberTypeCacheSym: Symbol = _
 
     // The current entry candidates for low and high symbol.
     private[this] var curEntry  = decls.elems
@@ -249,7 +246,7 @@ abstract class SymbolPairs {
         nextEntry = decls lookupNextEntry nextEntry
         if (nextEntry ne null) {
           val high    = nextEntry.sym
-          val isMatch = matches(lowSymbol, high) && { visited addEntry nextEntry ; true } // side-effect visited on all matches
+          val isMatch = matches(high) && { visited addEntry nextEntry ; true } // side-effect visited on all matches
 
           // skip nextEntry if a class in `parents` is a subclass of the
           // owners of both low and high.

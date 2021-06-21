@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
@@ -9,6 +16,7 @@ package ast
 import scala.collection.mutable.ListBuffer
 import symtab.Flags._
 import scala.language.postfixOps
+import scala.reflect.internal.util.FreshNameCreator
 
 /** XXX to resolve: TreeGen only assumes global is a SymbolTable, but
  *  TreeDSL at the moment expects a Global.  Can we get by with SymbolTable?
@@ -91,7 +99,7 @@ abstract class TreeGen extends scala.reflect.internal.TreeGen with TreeDSL {
     )
 
   /** Make a synchronized block on 'monitor'. */
-  def mkSynchronized(monitor: Tree, body: Tree): Tree =
+  def mkSynchronized(monitor: Tree)(body: Tree): Tree =
     Apply(Select(monitor, Object_synchronized), List(body))
 
   def mkAppliedTypeForCase(clazz: Symbol): Tree = {
@@ -140,13 +148,12 @@ abstract class TreeGen extends scala.reflect.internal.TreeGen with TreeDSL {
    *
    *    x.asInstanceOf[`pt`]     up to phase uncurry
    *    x.asInstanceOf[`pt`]()   if after uncurry but before erasure
-   *    x.$asInstanceOf[`pt`]()  if at or after erasure
+   *    x.\$asInstanceOf[`pt`]()  if at or after erasure
    */
   override def mkCast(tree: Tree, pt: Type): Tree = {
     debuglog("casting " + tree + ":" + tree.tpe + " to " + pt + " at phase: " + phase)
     assert(!tree.tpe.isInstanceOf[MethodType], tree)
     assert(!pt.isInstanceOf[MethodType], tree)
-    assert(pt eq pt.normalize, tree +" : "+ debugString(pt) +" ~>"+ debugString(pt.normalize))
     atPos(tree.pos) {
       mkAsInstanceOf(tree, pt, any = !phase.next.erasedTypes, wrapInApply = isAtPhaseAfter(currentRun.uncurryPhase))
     }
@@ -156,6 +163,9 @@ abstract class TreeGen extends scala.reflect.internal.TreeGen with TreeDSL {
   // let's assume for now annotations don't affect casts, drop them there, and bring them back using the outer Typed tree
   def mkCastPreservingAnnotations(tree: Tree, pt: Type) =
     Typed(mkCast(tree, pt.withoutAnnotations.dealias), TypeTree(pt))
+    // ^^^ I think we should either normalize or do nothing, but the half measure of dealias does not make sense,
+    // as the logic behind a cast operates on the fully normalized type, not just on a dealiased type (think refinements with type aliases).
+    // It would be ok to do nothing here, because erasure will convert the type to something that can be casted anyway.
 
   /** Generate a cast for tree Tree representing Array with
    *  elem type elemtp to expected type pt.
@@ -194,20 +204,24 @@ abstract class TreeGen extends scala.reflect.internal.TreeGen with TreeDSL {
 
   /** Used in situations where you need to access value of an expression several times
    */
-  def evalOnce(expr: Tree, owner: Symbol, unit: CompilationUnit)(within: (() => Tree) => Tree): Tree = {
+  def evalOnce(expr: Tree, owner: Symbol, unit: CompilationUnit)(within: (() => Tree) => Tree): Tree = evalOnce(expr, owner, unit.fresh)(within)
+  def evalOnce(expr: Tree, owner: Symbol, fresh: FreshNameCreator)(within: (() => Tree) => Tree): Tree = {
     var used = false
     if (treeInfo.isExprSafeToInline(expr)) {
       within(() => if (used) expr.duplicate else { used = true; expr })
     }
     else {
-      val (valDef, identFn) = mkPackedValDef(expr, owner, unit.freshTermName("ev$"))
+      val (valDef, identFn) = mkPackedValDef(expr, owner, freshTermName("ev$")(fresh))
       val containing = within(identFn)
       ensureNonOverlapping(containing, List(expr))
       Block(List(valDef), containing) setPos (containing.pos union expr.pos)
     }
   }
 
-  def evalOnceAll(exprs: List[Tree], owner: Symbol, unit: CompilationUnit)(within: (List[() => Tree]) => Tree): Tree = {
+  def evalOnceAll(exprs: List[Tree], owner: Symbol, unit: CompilationUnit)(within: (List[() => Tree]) => Tree): Tree =
+    evalOnceAll(exprs, owner, unit.fresh)(within)
+
+  def evalOnceAll(exprs: List[Tree], owner: Symbol, fresh: FreshNameCreator)(within: (List[() => Tree]) => Tree): Tree = {
     val vdefs = new ListBuffer[ValDef]
     val exprs1 = new ListBuffer[() => Tree]
     val used = new Array[Boolean](exprs.length)
@@ -220,7 +234,7 @@ abstract class TreeGen extends scala.reflect.internal.TreeGen with TreeDSL {
         }
       }
       else {
-        val (valDef, identFn) = mkPackedValDef(expr, owner, unit.freshTermName("ev$"))
+        val (valDef, identFn) = mkPackedValDef(expr, owner, freshTermName("ev$")(fresh))
         vdefs += valDef
         exprs1 += identFn
       }
@@ -231,26 +245,6 @@ abstract class TreeGen extends scala.reflect.internal.TreeGen with TreeDSL {
     ensureNonOverlapping(containing, exprs)
     if (prefix.isEmpty) containing
     else Block(prefix, containing) setPos (prefix.head.pos union containing.pos)
-  }
-
-  /** Return the synchronized part of the double-checked locking idiom around the syncBody tree. It guards with `cond` and
-   *  synchronizes on `clazz.this`. Additional statements can be included after initialization,
-   *  (outside the synchronized block).
-   *
-   *  The idiom works only if the condition is using a volatile field.
-    *
-    *  @see http://www.cs.umd.edu/~pugh/java/memoryModel/DoubleCheckedLocking.html
-   */
-  def mkSynchronizedCheck(clazz: Symbol, cond: Tree, syncBody: List[Tree], stats: List[Tree]): Tree =
-    mkSynchronizedCheck(mkAttributedThis(clazz), cond, syncBody, stats)
-
-  def mkSynchronizedCheck(attrThis: Tree, cond: Tree, syncBody: List[Tree], stats: List[Tree]): Tree = {
-    def blockOrStat(stats: List[Tree]): Tree = stats match {
-      case head :: Nil => head
-      case _ => Block(stats : _*)
-    }
-    val sync = mkSynchronized(attrThis, If(cond, blockOrStat(syncBody), EmptyTree))
-    blockOrStat(sync :: stats)
   }
 
   /** Creates a tree representing new Object { stats }.
@@ -290,6 +284,16 @@ abstract class TreeGen extends scala.reflect.internal.TreeGen with TreeDSL {
   }
 
 
+  // the result type of a function or corresponding SAM type
+  private def functionResultType(tp: Type): Type = {
+    val dealiased = tp.dealiasWiden
+    if (isFunctionTypeDirect(dealiased)) dealiased.typeArgs.last
+    else samOf(tp) match {
+      case samSym if samSym.exists => tp.memberInfo(samSym).resultType.deconst
+      case _ => NoType
+    }
+  }
+
   /**
     * Lift a Function's body to a method. For use during Uncurry, where Function nodes have type FunctionN[T1, ..., Tn, R]
     *
@@ -310,7 +314,7 @@ abstract class TreeGen extends scala.reflect.internal.TreeGen with TreeDSL {
                                       resTp: Type = functionResultType(fun.tpe),
                                       additionalFlags: FlagSet = NoFlags): DefDef = {
     val methSym = owner.newMethod(name, fun.pos, FINAL | additionalFlags)
-    // for sams, methParamProtos is the parameter symbols for the sam's method, so that we generate the correct override (based on parmeter types)
+    // for sams, methParamProtos is the parameter symbols for the sam's method, so that we generate the correct override (based on parameter types)
     val methParamSyms = methParamProtos.map { param => methSym.newSyntheticValueParam(param.tpe, param.name.toTermName) }
     methSym setInfo MethodType(methParamSyms, resTp)
 
@@ -318,8 +322,17 @@ abstract class TreeGen extends scala.reflect.internal.TreeGen with TreeDSL {
     val useMethodParams = new TreeSymSubstituter(fun.vparams.map(_.symbol), methParamSyms)
     // we're now owned by the method that holds the body, and not the function
     val moveToMethod = new ChangeOwnerTraverser(fun.symbol, methSym)
+    def substThisForModule(tree: Tree) = {
+      // Rewrite This(enclModuleClass) to Ident(enclModuleClass) to avoid unnecessary capture of the module
+      // class, which might hamper serializability.
+      //
+      // Analagous to this special case in ExplicitOuter: https://github.com/scala/scala/blob/d2d33ddf8c/src/compiler/scala/tools/nsc/transform/ExplicitOuter.scala#L410-L412
+      // that understands that such references shouldn't give rise to outer params.
+      val enclosingStaticModules = owner.enclClassChain.filter(x => !x.hasPackageFlag && x.isModuleClass && x.isStatic)
+      enclosingStaticModules.foldLeft(tree)((tree, moduleClass) => tree.substituteThis(moduleClass, gen.mkAttributedIdent(moduleClass.sourceModule)) )
+    }
 
-    newDefDef(methSym, moveToMethod(useMethodParams(fun.body)))(tpt = TypeTree(resTp))
+    newDefDef(methSym, substThisForModule(moveToMethod(useMethodParams(fun.body))))(tpt = TypeTree(resTp))
   }
 
   /**
@@ -336,12 +349,13 @@ abstract class TreeGen extends scala.reflect.internal.TreeGen with TreeDSL {
     *       - are associating the RHS with a cloned symbol, but intend for the original
     *         method to remain and for recursive calls to target it.
     */
-  final def mkStatic(orig: DefDef, maybeClone: Symbol => Symbol): DefDef = {
+  final def mkStatic(orig: DefDef, newName: Name, maybeClone: Symbol => Symbol): DefDef = {
     assert(phase.erasedTypes, phase)
     assert(!orig.symbol.hasFlag(SYNCHRONIZED), orig.symbol.defString)
     val origSym = orig.symbol
     val origParams = orig.symbol.info.params
     val newSym = maybeClone(orig.symbol)
+    newSym.setName(newName)
     newSym.setFlag(STATIC)
     // Add an explicit self parameter
     val selfParamSym = newSym.newSyntheticValueParam(newSym.owner.typeConstructor, nme.SELF).setFlag(ARTIFACT)
@@ -349,25 +363,27 @@ abstract class TreeGen extends scala.reflect.internal.TreeGen with TreeDSL {
       case mt @ MethodType(params, res) => copyMethodType(mt, selfParamSym :: params, res)
     })
     val selfParam = ValDef(selfParamSym)
-    val rhs = orig.rhs.substituteThis(newSym.owner, atPos(newSym.pos)(gen.mkAttributedIdent(selfParamSym)))
-      .substituteSymbols(origParams, newSym.info.params.drop(1)).changeOwner(origSym -> newSym)
+    val rhs = orig.rhs.substituteThis(newSym.owner, gen.mkAttributedIdent(selfParamSym)) // scala/scala-dev#186 intentionally leaving Ident($this) is unpositioned
+      .substituteSymbols(origParams, newSym.info.params.drop(1)).changeOwner(origSym, newSym)
     treeCopy.DefDef(orig, orig.mods, orig.name, orig.tparams, (selfParam :: orig.vparamss.head) :: Nil, orig.tpt, rhs).setSymbol(newSym)
   }
 
-  // TODO: the rewrite to AbstractFunction is superfluous once we compile FunctionN to a SAM type (aka functional interface)
-  def functionClassType(fun: Function): Type =
-    if (isFunctionType(fun.tpe)) abstractFunctionType(fun.vparams.map(_.symbol.tpe), fun.body.tpe.deconst)
-    else fun.tpe
-
   def expandFunction(localTyper: analyzer.Typer)(fun: Function, inConstructorFlag: Long): Tree = {
-    val parents = addSerializable(functionClassType(fun))
-    val anonClass = fun.symbol.owner newAnonymousFunctionClass(fun.pos, inConstructorFlag) addAnnotation SerialVersionUIDAnnotation
+    val anonClass = fun.symbol.owner newAnonymousFunctionClass(fun.pos, inConstructorFlag)
+    val parents = if (isFunctionType(fun.tpe)) {
+      anonClass addAnnotation SerialVersionUIDAnnotation
+      addSerializable(abstractFunctionType(fun.vparams.map(_.symbol.tpe), fun.body.tpe.deconst))
+    } else {
+      if (fun.tpe.typeSymbol.isSubClass(JavaSerializableClass))
+        anonClass addAnnotation SerialVersionUIDAnnotation
+      fun.tpe :: Nil
+    }
+    anonClass setInfo ClassInfoType(parents, newScope, anonClass)
 
     // The original owner is used in the backend for the EnclosingMethod attribute. If fun is
     // nested in a value-class method, its owner was already changed to the extension method.
     // Saving the original owner allows getting the source structure from the class symbol.
     defineOriginalOwner(anonClass, fun.symbol.originalOwner)
-    anonClass setInfo ClassInfoType(parents, newScope, anonClass)
 
     val samDef = mkMethodFromFunction(localTyper)(anonClass, fun)
     anonClass.info.decls enter samDef.symbol
@@ -378,4 +394,6 @@ abstract class TreeGen extends scala.reflect.internal.TreeGen with TreeDSL {
         Typed(New(anonClass.tpe), TypeTree(fun.tpe)))
     }
   }
+
+  override def isPatVarWarnable = settings.warnUnusedPatVars
 }

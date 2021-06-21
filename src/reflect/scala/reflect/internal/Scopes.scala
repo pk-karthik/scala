@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala
@@ -8,8 +15,17 @@ package reflect
 package internal
 
 import scala.annotation.tailrec
+import scala.collection.generic.Clearable
+import scala.reflect.internal.util.Statistics
 
 trait Scopes extends api.Scopes { self: SymbolTable =>
+
+  // Reset `scopeCount` per every run
+  private[scala] var scopeCount = 0
+  perRunCaches.recordCache {
+    val clearCount: Clearable = () => {scopeCount = 0}
+    clearCount
+  }
 
   /** An ADT to represent the results of symbol name lookups.
    */
@@ -19,7 +35,7 @@ trait Scopes extends api.Scopes { self: SymbolTable =>
   case class LookupInaccessible(symbol: Symbol, msg: String) extends NameLookup
   case object LookupNotFound extends NameLookup { def symbol = NoSymbol }
 
-  class ScopeEntry(val sym: Symbol, val owner: Scope) {
+  class ScopeEntry(var sym: Symbol, val owner: Scope) {
     /** the next entry in the hash bucket
      */
     var tail: ScopeEntry = null
@@ -31,6 +47,8 @@ trait Scopes extends api.Scopes { self: SymbolTable =>
     def depth = owner.nestingLevel
     override def hashCode(): Int = sym.name.start
     override def toString() = s"$sym (depth=$depth)"
+    // OPT: compare raw names when pre-flatten, saving needsFlatClasses within the loop
+    final def name(flat: Boolean): Name = if (flat) sym.name else sym.rawname
   }
 
   private def newScopeEntry(sym: Symbol, owner: Scope): ScopeEntry = {
@@ -50,6 +68,7 @@ trait Scopes extends api.Scopes { self: SymbolTable =>
    */
   class Scope protected[Scopes]() extends ScopeApi with MemberScopeApi {
 
+    scopeCount += 1
     private[scala] var elems: ScopeEntry = _
 
     /** The number of times this scope is nested in another
@@ -72,12 +91,12 @@ trait Scopes extends api.Scopes { self: SymbolTable =>
     /** size and mask of hash tables
      *  todo: make hashtables grow?
      */
-    private val HASHSIZE = 0x80
-    private val HASHMASK = 0x7f
+    private final val HASHSIZE = 0x80
+    private final val HASHMASK = 0x7f
 
     /** the threshold number of entries from which a hashtable is constructed.
      */
-    private val MIN_HASH = 8
+    private final val MIN_HASH = 8
 
     /** Returns a new scope with the same content as this one. */
     def cloneScope: Scope = newScopeWith(this.toList: _*)
@@ -122,6 +141,23 @@ trait Scopes extends api.Scopes { self: SymbolTable =>
      */
     def enter[T <: Symbol](sym: T): T = {
       enterEntry(newScopeEntry(sym, this))
+      sym
+    }
+
+    final def enterBefore(sym: Symbol, next: ScopeEntry): Symbol = {
+      assert(this != EmptyScope, sym)
+      require(sym.name.hashCode() == next.sym.name.hashCode(), (sym, next.sym))
+      require(sym != next.sym, (sym, next.sym))
+
+      val newNext = new ScopeEntry(next.sym, this)
+      val hasHashTable = hashtable ne null
+
+      newNext.next = next.next
+      if (hasHashTable) newNext.tail = next.tail
+      next.sym = sym
+      next.next = newNext
+      if (hasHashTable) next.tail = newNext
+      flushElemsCache()
       sym
     }
 
@@ -256,7 +292,7 @@ trait Scopes extends api.Scopes { self: SymbolTable =>
         // clues from the symbols on that one, as implemented here. In general
         // the distinct list is one type and lub becomes the identity.
         // val prefix = lub(alts map (_.info.prefix) distinct)
-        // Now using NoSymbol and NoPrefix always to avoid forcing info (SI-6664)
+        // Now using NoSymbol and NoPrefix always to avoid forcing info (scala/bug#6664)
         NoSymbol.newOverloaded(NoPrefix, alts)
       }
     }
@@ -282,6 +318,15 @@ trait Scopes extends api.Scopes { self: SymbolTable =>
       }
     }
 
+    final def lookupSymbolEntry(sym: Symbol): ScopeEntry = {
+      var e = lookupEntry(sym.name)
+      while (e ne null) {
+        if (e.sym == sym) return e
+        e = lookupNextEntry(e)
+      }
+      null
+    }
+
     /** lookup a symbol entry matching given name.
      *  @note from Martin: I believe this is a hotspot or will be one
      *  in future versions of the type system. I have reverted the previous
@@ -289,14 +334,15 @@ trait Scopes extends api.Scopes { self: SymbolTable =>
      */
     def lookupEntry(name: Name): ScopeEntry = {
       var e: ScopeEntry = null
+      val flat = phase.flatClasses
       if (hashtable ne null) {
         e = hashtable(name.start & HASHMASK)
-        while ((e ne null) && e.sym.name != name) {
+        while ((e ne null) && (e.name(flat) ne name)) {
           e = e.tail
         }
       } else {
         e = elems
-        while ((e ne null) && e.sym.name != name) {
+        while ((e ne null) && (e.name(flat) ne name)) {
           e = e.next
         }
       }
@@ -310,12 +356,28 @@ trait Scopes extends api.Scopes { self: SymbolTable =>
      */
     def lookupNextEntry(entry: ScopeEntry): ScopeEntry = {
       var e = entry
+      val flat = phase.flatClasses
+      val entryName = entry.name(flat)
       if (hashtable ne null)
-        do { e = e.tail } while ((e ne null) && e.sym.name != entry.sym.name)
+        do { e = e.tail } while ((e ne null) && e.name(flat) != entryName)
       else
-        do { e = e.next } while ((e ne null) && e.sym.name != entry.sym.name)
+        do { e = e.next } while ((e ne null) && e.name(flat) != entryName)
       e
     }
+
+    final def lookupNameInSameScopeAs(original: Symbol, companionName: Name): Symbol = {
+      lookupSymbolEntry(original) match {
+        case null =>
+        case entry =>
+          var e = lookupEntry(companionName)
+          while (e != null) {
+            if (e.owner eq entry.owner) return e.sym
+            e = lookupNextEntry(e)
+          }
+      }
+      NoSymbol
+    }
+
 
     /** TODO - we can test this more efficiently than checking isSubScope
      *  in both directions. However the size test might be enough to quickly
@@ -372,15 +434,20 @@ trait Scopes extends api.Scopes { self: SymbolTable =>
 
     override def foreach[U](p: Symbol => U): Unit = toList foreach p
 
-    override def filterNot(p: Symbol => Boolean): Scope = (
-      if (toList exists p) newScopeWith(toList filterNot p: _*)
-      else this
-    )
-    override def filter(p: Symbol => Boolean): Scope = (
-      if (toList forall p) this
-      else newScopeWith(toList filter p: _*)
-    )
-    @deprecated("use `toList.reverse` instead", "2.10.0") // Used in SBT 0.12.4
+    // TODO in 2.13.x, s/sameLength(result, filtered)/result eq filtered/, taking advantage of
+    //      the new conservation in List.filter/filterNot
+    override def filterNot(p: Symbol => Boolean): Scope = {
+      val result = toList
+      val filtered = result.filterNot(p)
+      if (sameLength(result, filtered)) this else newScopeWith(filtered: _*)
+    }
+    override def filter(p: Symbol => Boolean): Scope = {
+      val result = toList
+      val filtered = result.filter(p)
+      if (sameLength(result, filtered)) this else newScopeWith(filtered: _*)
+    }
+
+    @deprecated("use `toList.reverse` instead", "2.10.0") // Used in sbt 0.12.4
     def reverse: List[Symbol] = toList.reverse
 
     override def mkString(start: String, sep: String, end: String) =
@@ -429,18 +496,22 @@ trait Scopes extends api.Scopes { self: SymbolTable =>
 
   /** Create a new scope nested in another one with which it shares its elements */
   final def newNestedScope(outer: Scope): Scope = {
+    val startTime = if (settings.areStatisticsEnabled) statistics.startTimer(statistics.scopePopulationTime) else null
     val nested = newScope // not `new Scope`, we must allow the runtime reflection universe to mixin SynchronizedScopes!
     nested.elems = outer.elems
     nested.nestinglevel = outer.nestinglevel + 1
     if (outer.hashtable ne null)
       nested.hashtable = java.util.Arrays.copyOf(outer.hashtable, outer.hashtable.length)
+    if (settings.areStatisticsEnabled) statistics.stopTimer(statistics.scopePopulationTime, startTime)
     nested
   }
 
   /** Create a new scope with given initial elements */
   def newScopeWith(elems: Symbol*): Scope = {
+    val startTime = if (settings.areStatisticsEnabled) statistics.startTimer(statistics.scopePopulationTime) else null
     val scope = newScope
     elems foreach scope.enter
+    if (settings.areStatisticsEnabled) statistics.stopTimer(statistics.scopePopulationTime, startTime)
     scope
   }
 
@@ -466,4 +537,10 @@ trait Scopes extends api.Scopes { self: SymbolTable =>
   class ErrorScope(owner: Symbol) extends Scope
 
   private final val maxRecursions = 1000
+}
+
+trait ScopeStats {
+  self: Statistics =>
+  val scopeCountView = newView("#created scopes")(symbolTable.scopeCount)
+  val scopePopulationTime = newTimer("time spent in scope population")
 }

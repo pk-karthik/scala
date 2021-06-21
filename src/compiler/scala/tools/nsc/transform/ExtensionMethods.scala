@@ -1,7 +1,15 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
+
 package scala.tools.nsc
 package transform
 
@@ -61,7 +69,7 @@ abstract class ExtensionMethods extends Transform with TypingTransformers {
   }
 
   private def companionModuleForce(sym: Symbol) = {
-    sym.andAlso(_.owner.initialize) // See SI-6976. `companionModule` only calls `rawInfo`. (Why?)
+    sym.andAlso(_.owner.initialize) // See scala/bug#6976. `companionModule` only calls `rawInfo`. (Why?)
     sym.companionModule
   }
 
@@ -89,10 +97,10 @@ abstract class ExtensionMethods extends Transform with TypingTransformers {
 
   /** Recognize a MethodType which represents an extension method.
    *
-   *  It may have a curried parameter list with the `$this` alone in the first
+   *  It may have a curried parameter list with the `\$this` alone in the first
    *  parameter list, in which case that parameter list is dropped.  Or, since
    *  the curried lists disappear during uncurry, it may have a single parameter
-   *  list with `$this` as the first parameter, in which case that parameter is
+   *  list with `\$this` as the first parameter, in which case that parameter is
    *  removed from the list.
    */
   object ExtensionMethodType {
@@ -104,9 +112,9 @@ abstract class ExtensionMethods extends Transform with TypingTransformers {
     }
   }
 
-  /** This method removes the `$this` argument from the parameter list a method.
+  /** This method removes the `\$this` argument from the parameter list a method.
    *
-   *  A method may be a `PolyType`, in which case we tear out the `$this` and the class
+   *  A method may be a `PolyType`, in which case we tear out the `\$this` and the class
    *  type params from its nested `MethodType`.  Or it may be a MethodType, as
    *  described at the ExtensionMethodType extractor.
    */
@@ -142,7 +150,7 @@ abstract class ExtensionMethods extends Transform with TypingTransformers {
     *      def baz[B >: A](x: B): List[B] = x :: xs
     *      // baz has to be transformed into this extension method, where
     *      // A is cloned from class Foo and  B is cloned from method baz:
-    *      // def extension$baz[B >: A <: Any, A >: Nothing <: AnyRef]($this: Foo[A])(x: B): List[B]
+    *      // def extension\$baz[B >: A <: Any, A >: Nothing <: AnyRef](\$this: Foo[A])(x: B): List[B]
     *    }
     *
     *  TODO: factor out the logic for consolidating type parameters from a class
@@ -155,7 +163,7 @@ abstract class ExtensionMethods extends Transform with TypingTransformers {
       // so must drop their variance.
       val tparamsFromClass = cloneSymbolsAtOwner(clazz.typeParams, extensionMeth) map (_ resetFlag COVARIANT | CONTRAVARIANT)
 
-      val thisParamType = appliedType(clazz, tparamsFromClass map (_.tpeHK): _*)
+      val thisParamType = appliedType(clazz, tparamsFromClass.map(_.tpeHK))
       val thisParam     = extensionMeth.newValueParameter(nme.SELF, extensionMeth.pos) setInfo thisParamType
       val resultType    = MethodType(List(thisParam), dropNullaryMethod(methodResult))
       val selfParamType = singleType(currentOwner.companionModule.thisType, thisParam)
@@ -167,7 +175,8 @@ abstract class ExtensionMethods extends Transform with TypingTransformers {
       // need to modify the bounds of the cloned type parameters, but we
       // don't want to substitute for the cloned type parameters themselves.
       val tparams = tparamsFromMethod ::: tparamsFromClass
-      GenPolyType(tparams map (_ modifyInfo fixtparam), fixres(resultType))
+      tparams foreach (_ modifyInfo fixtparam)
+      GenPolyType(tparams, fixres(resultType))
 
       // For reference, calling fix on the GenPolyType plays out like this:
       // error: scala.reflect.internal.Types$TypeError: type arguments [B#7344,A#6966]
@@ -191,7 +200,7 @@ abstract class ExtensionMethods extends Transform with TypingTransformers {
             checkNonCyclic(currentOwner.pos, Set(), currentOwner) */
             extensionDefs(currentOwner.companionModule) = new mutable.ListBuffer[Tree]
             currentOwner.primaryConstructor.makeNotPrivate(NoSymbol)
-            // SI-7859 make param accessors accessible so the erasure can generate unbox operations.
+            // scala/bug#7859 make param accessors accessible so the erasure can generate unbox operations.
             currentOwner.info.decls.foreach(sym => if (sym.isParamAccessor && sym.isMethod) sym.makeNotPrivate(currentOwner))
             super.transform(tree)
           } else if (currentOwner.isStaticOwner) {
@@ -210,6 +219,10 @@ abstract class ExtensionMethods extends Transform with TypingTransformers {
               companion.moduleClass.newMethod(extensionName, tree.pos.focus, origMeth.flags & ~OVERRIDE & ~PROTECTED & ~PRIVATE & ~LOCAL | FINAL)
                 setAnnotations origMeth.annotations
             )
+            defineOriginalOwner(extensionMeth, origMeth.owner)
+            // @strictfp on class means strictfp on all methods, but `setAnnotations` won't copy it
+            if (origMeth.isStrictFP && !extensionMeth.hasAnnotation(ScalaStrictFPAttr))
+              extensionMeth.addAnnotation(ScalaStrictFPAttr)
             origMeth.removeAnnotation(TailrecClass) // it's on the extension method, now.
             companion.info.decls.enter(extensionMeth)
           }
@@ -229,21 +242,21 @@ abstract class ExtensionMethods extends Transform with TypingTransformers {
               .substituteSymbols(origTpeParams, extensionTpeParams)
               .substituteSymbols(origParams, extensionParams)
               .substituteThis(origThis, extensionThis)
-              .changeOwner(origMeth -> extensionMeth)
+              .changeOwner(origMeth, extensionMeth)
             new SubstututeRecursion(origMeth, extensionMeth, unit).transform(tree)
           }
           val castBody =
             if (extensionBody.tpe <:< extensionMono.finalResultType)
               extensionBody
             else
-              gen.mkCastPreservingAnnotations(extensionBody, extensionMono.finalResultType) // SI-7818 e.g. mismatched existential skolems
+              gen.mkCastPreservingAnnotations(extensionBody, extensionMono.finalResultType) // scala/bug#7818 e.g. mismatched existential skolems
 
           // Record the extension method. Later, in `Extender#transformStats`, these will be added to the companion object.
           extensionDefs(companion) += DefDef(extensionMeth, castBody)
 
           // These three lines are assembling Foo.bar$extension[T1, T2, ...]($this)
           // which leaves the actual argument application for extensionCall.
-          // SI-9542 We form the selection here from the thisType of the companion's owner. This is motivated
+          // scala/bug#9542 We form the selection here from the thisType of the companion's owner. This is motivated
           //         by the test case, and is a valid way to construct the reference because we know that this
           //         method is also enclosed by that owner.
           val sel        = Select(gen.mkAttributedRef(companion.owner.thisType, companion), extensionMeth)
@@ -280,7 +293,7 @@ abstract class ExtensionMethods extends Transform with TypingTransformers {
   final class SubstututeRecursion(origMeth: Symbol, extensionMeth: Symbol,
                             unit: CompilationUnit) extends TypingTransformer(unit) {
     override def transform(tree: Tree): Tree = tree match {
-      // SI-6574 Rewrite recursive calls against the extension method so they can
+      // scala/bug#6574 Rewrite recursive calls against the extension method so they can
       //         be tail call optimized later. The tailcalls phases comes before
       //         erasure, which performs this translation more generally at all call
       //         sites.

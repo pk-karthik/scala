@@ -1,11 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2005-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
-
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -19,7 +22,6 @@ import generic._
  *  @author  Matthias Zenger
  *  @author  Martin Odersky
  *  @author  Pavel Pavlov
- *  @version 2.0, 31/12/2006
  *  @since   1
  *
  *  @tparam A     the type of the elements contained in this set.
@@ -73,6 +75,8 @@ class LinkedHashSet[A] extends AbstractSet[A]
       else e.earlier.later = e.later
       if (e.later eq null) lastEntry = e.earlier
       else e.later.earlier = e.earlier
+      e.earlier = null // Null references to prevent nepotism
+      e.later = null
       true
     }
   }
@@ -131,12 +135,15 @@ class LinkedHashSet[A] extends AbstractSet[A]
  *  @define coll linked hash set
  */
 object LinkedHashSet extends MutableSetFactory[LinkedHashSet] {
-  implicit def canBuildFrom[A]: CanBuildFrom[Coll, A, LinkedHashSet[A]] = setCanBuildFrom[A]
+  implicit def canBuildFrom[A]: CanBuildFrom[Coll, A, LinkedHashSet[A]] =
+    ReusableCBF.asInstanceOf[CanBuildFrom[Coll, A, LinkedHashSet[A]]]
+  private[this] val ReusableCBF = setCanBuildFrom[Any]
   override def empty[A]: LinkedHashSet[A] = new LinkedHashSet[A]
 
   /** Class for the linked hash set entry, used internally.
    *  @since 2.10
    */
+  @SerialVersionUID(6056749505994053009L)
   private[scala] final class Entry[A](val key: A) extends HashEntry[A, Entry[A]] with Serializable {
     var earlier: Entry[A] = null
     var later: Entry[A] = null

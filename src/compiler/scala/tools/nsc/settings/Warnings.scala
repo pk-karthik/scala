@@ -1,11 +1,20 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Paul Phillips
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools
 package nsc
 package settings
+
+import scala.tools.nsc.Reporting.WarningCategory
 
 /** Settings influencing the printing of warnings.
  */
@@ -15,27 +24,138 @@ trait Warnings {
   // Warning semantics.
   val fatalWarnings = BooleanSetting("-Xfatal-warnings", "Fail the compilation if there are any warnings.")
 
-  // Non-lint warnings
+  private val WconfDefault = List("cat=deprecation:ws", "cat=feature:ws", "cat=optimizer:ws")
+  // Note: user-defined settings are added on the right, but the value is reversed before
+  // it's parsed, so that later defined settings take precedence.
+  val Wconf = MultiStringSetting(
+    "-Wconf",
+    "patterns",
+    "Configure reporting of compiler warnings; use `help` for details.",
+    default = WconfDefault,
+    helpText = Some(
+      s"""Configure compiler warnings.
+         |Syntax: -Wconf:<filters>:<action>,<filters>:<action>,...
+         |multiple <filters> are combined with &, i.e., <filter>&...&<filter>
+         |
+         |Note: Run with `-Wconf:any:warning-verbose` to print warnings with their category, site,
+         |and (for deprecations) origin and since-version.
+         |
+         |<filter>
+         |  - Any message: any
+         |
+         |  - Message categories: cat=deprecation, cat=lint, cat=lint-infer-any
+         |    The full list of warning categories is shown at the end of this help text.
+         |
+         |  - Message content: msg=regex
+         |    The regex need only match some part of the message, not all of it.
+         |
+         |  - Site where the warning is triggered: site=my\\.package\\..*
+         |    The regex must match the full name (`package.Class.method`) of the warning position.
+         |
+         |  - Source file name: src=src_managed/.*
+         |    If `-rootdir` is specified, the regex must match the canonical path relative to the
+         |    root directory. Otherwise, the regex must match the canonical path relative to any
+         |    path segment (`b/.*Test.scala` matches `/a/b/XTest.scala` but not `/ab/Test.scala`).
+         |    Use unix-style paths, separated by `/`.
+         |
+         |  - Origin of deprecation: origin=external\\.package\\..*
+         |    The regex must match the full name (`package.Class.method`) of the deprecated entity.
+         |
+         |  - Since of deprecation: since<1.24
+         |    Valid operators: <, =, >, valid versions: N, N.M, N.M.P. Compares against the first
+         |    version of the form N, N.M or N.M.P found in the `since` parameter of the deprecation,
+         |    for example `1.2.3` in `@deprecated("", "some lib 1.2.3-foo")`.
+         |
+         |<action>
+         |  - error / e
+         |  - warning / w
+         |  - warning-summary / ws (summary with the number of warnings, like for deprecations)
+         |  - warning-verbose / wv (show warning category and site)
+         |  - info / i             (infos are not counted as warnings and don't affect `-Werror`)
+         |  - info-summary / is
+         |  - info-verbose / iv
+         |  - silent / s
+         |
+         |The default configuration is:
+         |  -Wconf:${WconfDefault.mkString(",")}
+         |
+         |User-defined configurations are added to the left. The leftmost rule matching
+         |a warning message defines the action.
+         |
+         |Examples:
+         |  - change every warning into an error: -Wconf:any:error
+         |  - silence certain deprecations: -Wconf:origin=some\\.lib\\..*&since>2.2:s
+         |
+         |Full list of message categories:
+         |${WarningCategory.all.keys.groupBy(_.split('-').head).toList.sortBy(_._1).map(_._2.toList.sorted.mkString(", ")).mkString(" - ", "\n - ", "")}
+         |
+         |To suppress warnings locally, use the `scala.annotation.nowarn` annotation.
+         |
+         |Note: on the command-line you might need to quote configurations containing `*` or `&`
+         |to prevent the shell from expanding patterns.""".stripMargin),
+    prepend = true)
 
+  // Non-lint warnings. -- TODO turn into MultiChoiceEnumeration
+  val warnMacros           = ChoiceSetting(
+    name    = "-Ywarn-macros",
+    helpArg = "mode",
+    descr   = "Enable lint warnings on macro expansions.",
+    choices = List("none", "before", "after", "both"),
+    default = "before",
+    choicesHelp = List(
+      "Do not inspect expansions or their original trees when generating unused symbol warnings.",
+      "Only inspect unexpanded user-written code for unused symbols.",
+      "Only inspect expanded trees when generating unused symbol warnings.",
+      "Inspect both user-written code and expanded trees when generating unused symbol warnings."
+    )
+  )
   val warnDeadCode         = BooleanSetting("-Ywarn-dead-code", "Warn when dead code is identified.")
   val warnValueDiscard     = BooleanSetting("-Ywarn-value-discard", "Warn when non-Unit expression results are unused.")
   val warnNumericWiden     = BooleanSetting("-Ywarn-numeric-widen", "Warn when numerics are widened.")
-  // SI-7712, SI-7707 warnUnused not quite ready for prime-time
-  val warnUnused           = BooleanSetting("-Ywarn-unused", "Warn when local and private vals, vars, defs, and types are unused.")
-  // currently considered too noisy for general use
-  val warnUnusedImport     = BooleanSetting("-Ywarn-unused-import", "Warn when imports are unused.")
 
-  val nowarnDefaultJunitMethods = BooleanSetting("-Ynowarn-default-junit-methods", "Don't warn when a JUnit @Test method is generated as a default method (not supported in JUnit 4).")
+  object UnusedWarnings extends MultiChoiceEnumeration {
+    val Imports   = Choice("imports",   "Warn if an import selector is not referenced.")
+    val PatVars   = Choice("patvars",   "Warn if a variable bound in a pattern is unused.")
+    val Privates  = Choice("privates",  "Warn if a private member is unused.")
+    val Locals    = Choice("locals",    "Warn if a local definition is unused.")
+    val Explicits = Choice("explicits", "Warn if an explicit parameter is unused.")
+    val Implicits = Choice("implicits", "Warn if an implicit parameter is unused.")
+    val Nowarn    = Choice("nowarn",    "Warn if a @nowarn annotation does not suppress any warnings.")
+    val Params    = Choice("params",    "Enable -Ywarn-unused:explicits,implicits.", expandsTo = List(Explicits, Implicits))
+    val Linted    = Choice("linted",    "-Xlint:unused.", expandsTo = List(Imports, Privates, Locals, Implicits, Nowarn))
+  }
+
+  // The -Ywarn-unused warning group.
+  val warnUnused = MultiChoiceSetting(
+    name    = "-Ywarn-unused",
+    helpArg = "warning",
+    descr   = "Enable or disable specific `unused' warnings",
+    domain  = UnusedWarnings,
+    default = Some(List("_"))
+  )
+
+  def warnUnusedImport    = warnUnused contains UnusedWarnings.Imports
+  def warnUnusedPatVars   = warnUnused contains UnusedWarnings.PatVars
+  def warnUnusedPrivates  = warnUnused contains UnusedWarnings.Privates
+  def warnUnusedLocals    = warnUnused contains UnusedWarnings.Locals
+  def warnUnusedParams    = warnUnusedExplicits || warnUnusedImplicits
+  def warnUnusedExplicits = warnUnused contains UnusedWarnings.Explicits
+  def warnUnusedImplicits = warnUnused contains UnusedWarnings.Implicits
+  def warnUnusedNowarn    = warnUnused contains UnusedWarnings.Nowarn
+
+  BooleanSetting("-Ywarn-unused-import", "Warn when imports are unused.") withPostSetHook { s =>
+    warnUnused.add(s"${if (s) "" else "-"}imports")
+  } //withDeprecationMessage s"Enable -Ywarn-unused:imports"
+
+  val warnExtraImplicit   = BooleanSetting("-Ywarn-extra-implicit", "Warn when more than one implicit parameter section is defined.")
+
+  val warnSelfImplicit    = BooleanSetting("-Ywarn-self-implicit", "Warn when an implicit resolves to an enclosing self-definition.")
 
   // Experimental lint warnings that are turned off, but which could be turned on programmatically.
   // They are not activated by -Xlint and can't be enabled on the command line because they are not
   // created using the standard factory methods.
 
-  val warnValueOverrides = {
-    val flag = new BooleanSetting("value-overrides", "Generated value class method overrides an implementation.")
-    flag.value = false
-    flag
-  }
+  val warnValueOverrides = new BooleanSetting("value-overrides", "Generated value class method overrides an implementation.", default = false)
 
   // Lint warnings
 
@@ -60,6 +180,8 @@ trait Warnings {
     val UnsoundMatch           = LintWarning("unsound-match",             "Pattern match may not be typesafe.")
     val StarsAlign             = LintWarning("stars-align",               "Pattern sequence wildcard must align with sequence component.")
     val Constant               = LintWarning("constant",                  "Evaluation of a constant arithmetic expression results in an error.")
+    val Unused                 = LintWarning("unused",                    "Enable -Ywarn-unused:imports,privates,locals,implicits,nowarn.")
+    val Deprecation            = LintWarning("deprecation",               "Enable -deprecation and also check @deprecated annotations.")
 
     def allLintWarnings = values.toSeq.asInstanceOf[Seq[LintWarning]]
   }
@@ -82,6 +204,8 @@ trait Warnings {
   def warnUnsoundMatch           = lint contains UnsoundMatch
   def warnStarsAlign             = lint contains StarsAlign
   def warnConstant               = lint contains Constant
+  def lintUnused                 = lint contains Unused
+  def lintDeprecation            = lint contains Deprecation
 
   // Lint warnings that are currently -Y, but deprecated in that usage
   @deprecated("Use warnAdaptedArgs", since="2.11.2")
@@ -101,7 +225,12 @@ trait Warnings {
     helpArg = "warning",
     descr   = "Enable or disable specific warnings",
     domain  = LintWarnings,
-    default = Some(List("_")))
+    default = Some(List("_"))
+  ).withPostSetHook { s =>
+    if (s contains Unused) warnUnused.enable(UnusedWarnings.Linted)
+    else warnUnused.disable(UnusedWarnings.Linted)
+    if (s.contains(Deprecation) && deprecation.isDefault) deprecation.value = true
+  }
 
   allLintWarnings foreach {
     case w if w.yAliased =>

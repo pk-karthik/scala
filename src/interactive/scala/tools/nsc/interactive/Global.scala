@@ -1,27 +1,35 @@
-/* NSC -- new Scala compiler
- * Copyright 2009-2013 Typesafe/Scala Solutions and LAMP/EPFL
- * @author Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
+
 package scala.tools.nsc
 package interactive
 
-import java.io.{ FileReader, FileWriter }
-import scala.collection.mutable
-import mutable.{LinkedHashMap, HashSet, SynchronizedSet}
-import scala.util.control.ControlThrowable
-import scala.tools.nsc.io.AbstractFile
-import scala.reflect.internal.util.SourceFile
-import scala.tools.nsc.reporters._
-import scala.tools.nsc.symtab._
-import scala.tools.nsc.typechecker.Analyzer
-import symtab.Flags.{ACCESSOR, PARAMACCESSOR}
-import scala.annotation.{ elidable, tailrec }
-import scala.language.implicitConversions
-import scala.tools.nsc.typechecker.Typers
-import scala.util.control.Breaks._
+import java.io.{FileReader, FileWriter}
 import java.util.concurrent.ConcurrentHashMap
-import scala.collection.JavaConverters.mapAsScalaMapConverter
+
+import scala.annotation.{elidable, tailrec}
+import scala.collection.JavaConverters._
+import scala.collection.mutable
+import scala.collection.mutable.{HashSet, LinkedHashMap}
+import scala.language.implicitConversions
 import scala.reflect.internal.Chars.isIdentifierStart
+import scala.reflect.internal.util.SourceFile
+import scala.tools.nsc.io.AbstractFile
+import scala.tools.nsc.reporters.Reporter
+import scala.tools.nsc.symtab.Flags.{ACCESSOR, PARAMACCESSOR}
+import scala.tools.nsc.symtab._
+import scala.tools.nsc.typechecker.{Analyzer, Typers}
+import scala.util.control.Breaks._
+import scala.util.control.ControlThrowable
 
 /**
  * This trait allows the IDE to have an instance of the PC that
@@ -72,8 +80,6 @@ trait InteractiveAnalyzer extends Analyzer {
     override def enterExistingSym(sym: Symbol, tree: Tree): Context = {
       if (sym != null && sym.owner.isTerm) {
         enterIfNotThere(sym)
-        if (sym.isLazy)
-          sym.lazyAccessor andAlso enterIfNotThere
 
         for (defAtt <- sym.attachments.get[DefaultsOfLocalMethodAttachment])
           defAtt.defaultGetters foreach enterIfNotThere
@@ -82,7 +88,7 @@ trait InteractiveAnalyzer extends Analyzer {
         val existingDerivedSym = owningInfo.decl(sym.name.toTermName).filter(sym => sym.isSynthetic && sym.isMethod)
         existingDerivedSym.alternatives foreach (owningInfo.decls.unlink)
         val defTree = tree match {
-          case dd: DocDef => dd.definition // See SI-9011, Scala IDE's presentation compiler incorporates ScaladocGlobal with InteractiveGlobal, so we have to unwrap DocDefs.
+          case dd: DocDef => dd.definition // See scala/bug#9011, Scala IDE's presentation compiler incorporates ScaladocGlobal with InteractiveGlobal, so we have to unwrap DocDefs.
           case _ => tree
         }
         enterImplicitWrapper(defTree.asInstanceOf[ClassDef])
@@ -163,7 +169,7 @@ class Global(settings: Settings, _reporter: Reporter, projectName: String = "") 
 
   /** A map of all loaded files to the rich compilation units that correspond to them.
    */
-  val unitOfFile = mapAsScalaMapConverter(new ConcurrentHashMap[AbstractFile, RichCompilationUnit] {
+  val unitOfFile = (new ConcurrentHashMap[AbstractFile, RichCompilationUnit] {
     override def put(key: AbstractFile, value: RichCompilationUnit) = {
       val r = super.put(key, value)
       if (r == null) debugLog("added unit for "+key)
@@ -180,12 +186,12 @@ class Global(settings: Settings, _reporter: Reporter, projectName: String = "") 
    *  Units are removed by getUnit, typically once a unit is finished compiled.
    */
   protected val toBeRemoved: mutable.Set[AbstractFile] =
-    new HashSet[AbstractFile] with SynchronizedSet[AbstractFile]
+    new HashSet[AbstractFile] with mutable.SynchronizedSet[AbstractFile]
 
   /** A set containing all those files that need to be removed after a full background compiler run
    */
   protected val toBeRemovedAfterRun: mutable.Set[AbstractFile] =
-    new HashSet[AbstractFile] with SynchronizedSet[AbstractFile]
+    new HashSet[AbstractFile] with mutable.SynchronizedSet[AbstractFile]
 
   class ResponseMap extends mutable.HashMap[SourceFile, Set[Response[Tree]]] {
     override def default(key: SourceFile): Set[Response[Tree]] = Set()
@@ -331,8 +337,8 @@ class Global(settings: Settings, _reporter: Reporter, projectName: String = "") 
   override def signalDone(context: Context, old: Tree, result: Tree) {
     val canObserveTree = (
          interruptsEnabled
-      && analyzer.lockedCount == 0
-      && !context.bufferErrors // SI-7558 look away during exploratory typing in "silent mode"
+      && lockedCount == 0
+      && !context.bufferErrors // scala/bug#7558 look away during exploratory typing in "silent mode"
     )
     if (canObserveTree) {
       if (context.unit.exists &&
@@ -644,6 +650,7 @@ class Global(settings: Settings, _reporter: Reporter, projectName: String = "") 
   private def parseAndEnter(unit: RichCompilationUnit): Unit =
     if (unit.status == NotLoaded) {
       debugLog("parsing: "+unit)
+      runReporting.clearSuppressionsComplete(unit.source)
       currentTyperRun.compileLate(unit)
       if (debugIDE && !reporter.hasErrors) validatePositions(unit.body)
       if (!unit.isJava) syncTopLevelSyms(unit)
@@ -967,7 +974,7 @@ class Global(settings: Settings, _reporter: Reporter, projectName: String = "") 
     case _ => tree.tpe
   }
 
-  import analyzer.{SearchResult, ImplicitSearch}
+  import analyzer.{ImplicitSearch, SearchResult}
 
   private[interactive] def getScopeCompletion(pos: Position, response: Response[List[Member]]) {
     informIDE("getScopeCompletion" + pos)
@@ -1020,7 +1027,7 @@ class Global(settings: Settings, _reporter: Reporter, projectName: String = "") 
     val enclosing = new Members[ScopeMember]
     def addScopeMember(sym: Symbol, pre: Type, viaImport: Tree) =
       locals.add(sym, pre, implicitlyAdded = false) { (s, st) =>
-        // imported val and var are always marked as inaccessible, but they could be accessed through their getters. SI-7995
+        // imported val and var are always marked as inaccessible, but they could be accessed through their getters. scala/bug#7995
         val member = if (s.hasGetter)
           new ScopeMember(s, st, context.isAccessible(s.getter, pre, superAccess = false), viaImport)
         else
@@ -1080,6 +1087,7 @@ class Global(settings: Settings, _reporter: Reporter, projectName: String = "") 
     val shouldTypeQualifier = tree0.tpe match {
       case null           => true
       case mt: MethodType => mt.isImplicit
+      case pt: PolyType   => isImplicitMethodType(pt.resultType)
       case _              => false
     }
 
@@ -1107,7 +1115,10 @@ class Global(settings: Settings, _reporter: Reporter, projectName: String = "") 
      */
     def viewApply(view: SearchResult): Tree = {
       assert(view.tree != EmptyTree)
-      analyzer.newTyper(context.makeImplicit(reportAmbiguousErrors = false))
+      val t = analyzer.newTyper(context.makeImplicit(reportAmbiguousErrors = false))
+        .typed(Apply(view.tree, List(tree)) setPos tree.pos)
+      if (!t.tpe.isErroneous) t
+      else analyzer.newTyper(context.makeSilent(reportAmbiguousErrors = true))
         .typed(Apply(view.tree, List(tree)) setPos tree.pos)
         .onTypeError(EmptyTree)
     }
@@ -1175,15 +1186,17 @@ class Global(settings: Settings, _reporter: Reporter, projectName: String = "") 
 
     }
     private val CamelRegex = "([A-Z][^A-Z]*)".r
-    private def camelComponents(s: String): List[String] = {
-      CamelRegex.findAllIn("X" + s).toList match { case head :: tail => head.drop(1) :: tail; case Nil => Nil }
+    private def camelComponents(s: String, allowSnake: Boolean): List[String] = {
+      if (allowSnake && s.forall(c => c.isUpper || c == '_')) s.split('_').toList.filterNot(_.isEmpty)
+      else CamelRegex.findAllIn("X" + s).toList match { case head :: tail => head.drop(1) :: tail; case Nil => Nil }
     }
     def camelMatch(entered: Name): Name => Boolean = {
       val enteredS = entered.toString
       val enteredLowercaseSet = enteredS.toLowerCase().toSet
+      val allowSnake = !enteredS.contains('_')
 
       (candidate: Name) => {
-        def candidateChunks = camelComponents(candidate.toString)
+        def candidateChunks = camelComponents(candidate.dropLocal.toString, allowSnake)
         // Loosely based on IntelliJ's autocompletion: the user can just write everything in
         // lowercase, as we'll let `isl` match `GenIndexedSeqLike` or `isLovely`.
         def lenientMatch(entered: String, candidate: List[String], matchCount: Int): Boolean = {
@@ -1191,7 +1204,8 @@ class Global(settings: Settings, _reporter: Reporter, projectName: String = "") 
             case Nil => entered.isEmpty && matchCount > 0
             case head :: tail =>
               val enteredAlternatives = Set(entered, entered.capitalize)
-              head.inits.filter(_.length <= entered.length).exists(init =>
+              val n = (head, entered).zipped.count {case (c, e) => c == e || (c.isUpper && c == e.toUpper)}
+              head.take(n).inits.exists(init =>
                 enteredAlternatives.exists(entered =>
                   lenientMatch(entered.stripPrefix(init), tail, matchCount + (if (init.isEmpty) 0 else 1))
                 )
@@ -1234,9 +1248,9 @@ class Global(settings: Settings, _reporter: Reporter, projectName: String = "") 
         val qualPos = qual.pos
         def fallback = qualPos.end + 2
         val source = pos.source
-        val nameStart: Int = (qualPos.end + 1 until focus1.pos.end).find(p =>
-          source.identifier(source.position(p)).exists(_.length > 0)
-        ).getOrElse(fallback)
+        val nameStart: Int = (focus1.pos.end - 1 to qualPos.end by -1).find(p =>
+          source.identifier(source.position(p)).exists(_.length == 0)
+        ).map(_ + 1).getOrElse(fallback)
         typeCompletions(sel, qual, nameStart, name)
       case Ident(name) =>
         val allMembers = scopeMembers(pos)
@@ -1356,7 +1370,7 @@ class Global(settings: Settings, _reporter: Reporter, projectName: String = "") 
     val symbols =
       Set(UnitClass, BooleanClass, ByteClass,
           ShortClass, IntClass, LongClass, FloatClass,
-          DoubleClass, NilModule, ListClass) ++ TupleClass.seq
+          DoubleClass, NilModule, ListClass, PredefModule) ++ TupleClass.seq ++ ArrayModule_overloadedApply.alternatives
     symbols.foreach(_.initialize)
   }
 

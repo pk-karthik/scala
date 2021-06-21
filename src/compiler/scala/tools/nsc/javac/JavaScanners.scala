@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
@@ -10,8 +17,9 @@ import scala.tools.nsc.util.JavaCharArrayReader
 import scala.reflect.internal.util._
 import scala.reflect.internal.Chars._
 import JavaTokens._
-import scala.annotation.{ switch, tailrec }
+import scala.annotation.{switch, tailrec}
 import scala.language.implicitConversions
+import scala.tools.nsc.Reporting.WarningCategory
 
 // Todo merge these better with Scanners
 trait JavaScanners extends ast.parser.ScannersCommon {
@@ -45,12 +53,13 @@ trait JavaScanners extends ast.parser.ScannersCommon {
     /** the base of a number */
     var base: Int = 0
 
-    def copyFrom(td: JavaTokenData) = {
+    def copyFrom(td: JavaTokenData): this.type = {
       this.token = td.token
       this.pos = td.pos
       this.lastPos = td.lastPos
       this.name = td.name
       this.base = td.base
+      this
     }
   }
 
@@ -89,6 +98,7 @@ trait JavaScanners extends ast.parser.ScannersCommon {
       javanme.ELSEkw         -> ELSE,
       javanme.ENUMkw         -> ENUM,
       javanme.EXTENDSkw      -> EXTENDS,
+      javanme.FALSEkw        -> FALSE,
       javanme.FINALkw        -> FINAL,
       javanme.FINALLYkw      -> FINALLY,
       javanme.FLOATkw        -> FLOAT,
@@ -118,6 +128,7 @@ trait JavaScanners extends ast.parser.ScannersCommon {
       javanme.THROWkw        -> THROW,
       javanme.THROWSkw       -> THROWS,
       javanme.TRANSIENTkw    -> TRANSIENT,
+      javanme.TRUEkw         -> TRUE,
       javanme.TRYkw          -> TRY,
       javanme.VOIDkw         -> VOID,
       javanme.VOLATILEkw     -> VOLATILE,
@@ -215,7 +226,7 @@ trait JavaScanners extends ast.parser.ScannersCommon {
    *
    *  @author     Martin Odersky
    */
-  abstract class JavaScanner extends AbstractJavaScanner with JavaTokenData with Cloneable with ScannerCommon {
+  abstract class JavaScanner extends AbstractJavaScanner with JavaTokenData with Cloneable with ScannerCommon with DocScanner {
     override def intVal = super.intVal// todo: needed?
     override def floatVal = super.floatVal
     def currentPos: Position = g2p(pos - 1)
@@ -577,21 +588,34 @@ trait JavaScanners extends ast.parser.ScannersCommon {
       }
     }
 
-    protected def skipComment(): Boolean = {
-      @tailrec def skipLineComment(): Unit = in.ch match {
-        case CR | LF | SU =>
-        case _            => in.next; skipLineComment()
-      }
-      @tailrec def skipJavaComment(): Unit = in.ch match {
-        case SU  => incompleteInputError("unclosed comment")
-        case '*' => in.next; if (in.ch == '/') in.next else skipJavaComment()
-        case _   => in.next; skipJavaComment()
-      }
+    final protected def putCommentChar(): Unit = { processCommentChar(); in.next() }
+
+    @tailrec final protected def skipBlockComment(isDoc: Boolean): Unit = {
+      if (isDoc) beginDocComment("/*") // the second '*' is the current character
+
       in.ch match {
-        case '/' => in.next ; skipLineComment() ; true
-        case '*' => in.next ; skipJavaComment() ; true
-        case _   => false
+        case SU  => incompleteInputError("unclosed comment")
+        case '*' => putCommentChar() ; if (in.ch == '/') putCommentChar() else skipBlockComment(isDoc)
+        case _   => putCommentChar() ; skipBlockComment(isDoc)
       }
+    }
+
+    @tailrec final protected def skipLineComment(): Unit = in.ch match {
+      case CR | LF | SU =>
+      case _            => putCommentChar() ; skipLineComment()
+    }
+
+    final protected def skipComment(): Boolean = in.ch match {
+      case '/' => putCommentChar() ; skipLineComment() ; finishDocComment() ; true
+      case '*' =>
+        putCommentChar()
+        in.ch match {
+          case '*' => skipBlockComment(isDoc = true)
+          case _ => skipBlockComment(isDoc = false)
+        }
+        finishDocComment()
+        true
+      case _   => false
     }
 
 // Identifiers ---------------------------------------------------------------
@@ -862,7 +886,8 @@ trait JavaScanners extends ast.parser.ScannersCommon {
     init()
     def error(pos: Int, msg: String) = reporter.error(pos, msg)
     def incompleteInputError(pos: Int, msg: String) = currentRun.parsing.incompleteInputError(pos, msg)
-    def deprecationWarning(pos: Int, msg: String, since: String) = currentRun.reporting.deprecationWarning(pos, msg, since)
+    def warning(pos: Int, msg: String, category: WarningCategory) = runReporting.warning(pos, msg, category, site = "")
+    def deprecationWarning(pos: Int, msg: String, since: String) = runReporting.deprecationWarning(pos, msg, since, site = "", origin = "")
     implicit def g2p(pos: Int): Position = Position.offset(unit.source, pos)
   }
 }

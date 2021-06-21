@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 // Developer note:
 //   scala -J-Dscala.process.debug
@@ -25,7 +29,7 @@ package scala.sys {
     *
     * {{{
     * import scala.sys.process._
-    * "ls" #| "grep .scala" #&& Seq("sh", "-c", "scalac *.scala") #|| "echo nothing found" lines
+    * "ls" #| "grep .scala" #&& Seq("sh", "-c", "scalac *.scala") #|| "echo nothing found" lineStream
     * }}}
     *
     * We describe below the general concepts and architecture of the package,
@@ -92,7 +96,7 @@ package scala.sys {
     *
     *   - Return status of the process (`!` methods)
     *   - Output of the process as a `String` (`!!` methods)
-    *   - Continuous output of the process as a `Stream[String]` (`lines` methods)
+    *   - Continuous output of the process as a `Stream[String]` (`lineStream` methods)
     *   - The `Process` representing it (`run` methods)
     *
     * Some simple examples of these methods:
@@ -109,7 +113,7 @@ package scala.sys {
     * // a Stream[String]
     * def sourceFilesAt(baseDir: String): Stream[String] = {
     *   val cmd = Seq("find", baseDir, "-name", "*.scala", "-type", "f")
-    *   cmd.lines
+    *   cmd.lineStream
     * }
     * }}}
     *
@@ -167,8 +171,8 @@ package scala.sys {
     * def sourceFilesAt(baseDir: String): (Stream[String], StringBuffer) = {
     *   val buffer = new StringBuffer()
     *   val cmd = Seq("find", baseDir, "-name", "*.scala", "-type", "f")
-    *   val lines = cmd lines_! ProcessLogger(buffer append _)
-    *   (lines, buffer)
+    *   val lineStream = cmd lineStream_! ProcessLogger(buffer append _)
+    *   (lineStream, buffer)
     * }
     * }}}
     *
@@ -185,8 +189,8 @@ package scala.sys {
     * new URL("http://www.scala-lang.org/") #> new File("scala-lang.html") !
     * }}}
     *
-    * More information about the other ways of controlling I/O can be looked at
-    * in the scaladoc for the associated objects, traits and classes.
+    * More information about the other ways of controlling I/O can be found
+    * in the Scaladoc for the associated objects, traits and classes.
     *
     * ==Running the Process==
     *
@@ -202,6 +206,7 @@ package scala.sys {
     */
   package object process extends ProcessImplicits {
     /** The arguments passed to `java` when creating this process */
+    @deprecated(message = "to adhere to the compact1 profile this method will be removed", since = "2.12.5") // https://github.com/scala/scala-dev/issues/437
     def javaVmArguments: List[String] = {
       import scala.collection.JavaConverters._
 

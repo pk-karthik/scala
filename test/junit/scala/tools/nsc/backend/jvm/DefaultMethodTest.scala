@@ -3,12 +3,11 @@ package scala.tools.nsc.backend.jvm
 import org.junit.Assert._
 import org.junit.Test
 
-import scala.collection.JavaConverters
 import scala.collection.JavaConverters._
+import scala.reflect.internal.Flags
 import scala.tools.asm.Opcodes
 import scala.tools.asm.tree.ClassNode
 import scala.tools.testing.BytecodeTesting
-import scala.tools.testing.BytecodeTesting._
 
 class DefaultMethodTest extends BytecodeTesting {
   import compiler._
@@ -21,7 +20,7 @@ class DefaultMethodTest extends BytecodeTesting {
       /** Transforms a single tree. */
       override def transform(tree: global.Tree): global.Tree = tree match {
         case dd @ DefDef(_, Foo, _, _, _, _) =>
-          dd.symbol.setFlag(reflect.internal.Flags.JAVA_DEFAULTMETHOD)
+          dd.symbol.setFlag(Flags.JAVA_DEFAULTMETHOD).resetFlag(Flags.DEFERRED)
           copyDefDef(dd)(rhs = Literal(Constant(1)).setType(definitions.IntTpe))
         case _ => super.transform(tree)
       }
@@ -31,6 +30,4 @@ class DefaultMethodTest extends BytecodeTesting {
     assertTrue("default method should not be abstract", (foo.access & Opcodes.ACC_ABSTRACT) == 0)
     assertTrue("default method body emitted", foo.instructions.size() > 0)
   }
-
-
 }

@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2007-2016 LAMP/EPFL
- * @author David Bernard, Manohar Jonnalagedda, Felix Mulder
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala
@@ -23,7 +30,6 @@ import model.diagram._
 import diagram._
 
 trait EntityPage extends HtmlPage {
-  import ScalaDoc.SummaryReporter
 
   def universe: doc.Universe
   def generator: DiagramGenerator
@@ -41,17 +47,24 @@ trait EntityPage extends HtmlPage {
 
   def headers =
     <xml:group>
+      { val canonicalSetting = universe.settings.docCanonicalBaseUrl
+        if (canonicalSetting.isSetByUser) {
+          val canonicalUrl =
+          if (canonicalSetting.value.endsWith("/")) canonicalSetting.value
+            else canonicalSetting.value + "/"
+          <link href={ canonicalUrl + Page.relativeLinkTo(List("."), path) } rel="canonical"/>
+        } else NodeSeq.Empty
+      }
       <link href={ relativeLinkTo{List("index.css", "lib")} }  media="screen" type="text/css" rel="stylesheet"/>
       <link href={ relativeLinkTo{List("template.css", "lib")} } media="screen" type="text/css" rel="stylesheet"/>
       <link href={ relativeLinkTo{List("diagrams.css", "lib")} } media="screen" type="text/css" rel="stylesheet" id="diagrams-css" />
-      <script type="text/javascript" src={ relativeLinkTo{List("jquery.js", "lib")} }></script>
+      <script type="text/javascript" src={ relativeLinkTo{List("jquery.min.js", "lib")} }></script>
       <script type="text/javascript" src={ relativeLinkTo{List("jquery.panzoom.min.js", "lib")} }></script>
       <script type="text/javascript" src={ relativeLinkTo{List("jquery.mousewheel.min.js", "lib")} }></script>
       <script type="text/javascript" src={ relativeLinkTo{List("index.js", "lib")} }></script>
       <script type="text/javascript" src={ relativeLinkTo{List("index.js")} }></script>
       <script type="text/javascript" src={ relativeLinkTo{List("scheduler.js", "lib")} }></script>
       <script type="text/javascript" src={ relativeLinkTo{List("template.js", "lib")} }></script>
-      <script type="text/javascript" src={ relativeLinkTo{List("tools.tooltip.js", "lib")} }></script>
       { if (universe.settings.docDiagrams.value) {
       <script type="text/javascript" src={ relativeLinkTo{List("modernizr.custom.js", "lib")} }></script>
       <script type="text/javascript" src={ relativeLinkTo{List("diagrams.js", "lib")} } id="diagrams-js"></script>
@@ -90,15 +103,13 @@ trait EntityPage extends HtmlPage {
                           mbr match {
                             case dtpl: DocTemplateEntity =>
                               dtpl.companion.fold(<span class="separator"></span>) { c: DocTemplateEntity =>
-                                <a class="object" href={relativeLinkTo(c)} title={c.comment.fold("")(com => inlineToStr(com.short))}></a>
+                                <a class="object" href={relativeLinkTo(c)} title={memberToShortCommentTitleTag(c)}></a>
                               }
                             case _ => <span class="separator"></span>
                           }
                         }
-                        <a class={mbr.kind} href={relativeLinkTo(mbr)} title={mbr.comment.fold("")(com => inlineToStr(com.short))}></a>
-                        <a href={relativeLinkTo(mbr)} title={mbr.comment.fold("")(com => inlineToStr(com.short))}>
-                          {mbr.name}
-                        </a>
+                        <a class={mbr.kind} href={relativeLinkTo(mbr)} title={memberToShortCommentTitleTag(mbr)}></a>
+                        <a href={relativeLinkTo(mbr)} title={memberToShortCommentTitleTag(mbr)}>{mbr.name}</a>
                       </li>
 
                   // Get path from root
@@ -154,19 +165,7 @@ trait EntityPage extends HtmlPage {
 
   def search =
     <div id="search">
-        <span id="doc-title">
-          {universe.settings.doctitle.value}
-          <span id="doc-version">
-          {
-            val version = universe.settings.docversion.value
-
-            if (version.length > "XX.XX.XX-XXX".length) {
-              docletReporter.summaryWarning(s"doc-version ($version) was too long to be displayed in the webview, and will be left out. The max length is: XX.XX.XX-XXX")
-              ""
-            } else version
-          }
-          </span>
-        </span>
+        <span id="doc-title">{universe.settings.doctitle.value}<span id="doc-version">{universe.settings.docversion.value}</span></span>
         <span class="close-results"><span class="left">&lt;</span> Back</span>
         <div id="textfilter">
           <span class="input">
@@ -251,7 +250,7 @@ trait EntityPage extends HtmlPage {
             <span class="filtertype">Ordering</span>
             <ol>
               {
-                if (!universe.settings.docGroups.value || (tpl.members.map(_.group).distinct.length == 1))
+                if (!universe.settings.docGroups.value || tpl.members.map(_.group).distinct.forall(_ == ModelFactory.defaultGroup))
                   NodeSeq.Empty
                 else
                   <li class="group out"><span>Grouped</span></li>
@@ -267,7 +266,7 @@ trait EntityPage extends HtmlPage {
           </div>
           { if (tpl.linearizationTemplates.isEmpty && tpl.conversions.isEmpty) NodeSeq.Empty else
             {
-              if (!tpl.linearizationTemplates.isEmpty)
+              if (tpl.linearizationTemplates.nonEmpty)
                 <div class="ancestors">
                   <span class="filtertype">Inherited<br/>
                   </span>
@@ -277,7 +276,7 @@ trait EntityPage extends HtmlPage {
                 </div>
               else NodeSeq.Empty
             } ++ {
-              if (!tpl.conversions.isEmpty)
+              if (tpl.conversions.nonEmpty)
                 <div class="ancestors">
                   <span class="filtertype">Implicitly<br/>
                   </span>
@@ -408,7 +407,7 @@ trait EntityPage extends HtmlPage {
 
       {
         if (Set("epfl", "EPFL").contains(tpl.universe.settings.docfooter.value))
-          <div id="footer">Scala programming documentation. Copyright (c) 2003-2016 <a href="http://www.epfl.ch" target="_top">EPFL</a>, with contributions from <a href="http://www.lightbend.com" target="_top">Lightbend</a>.</div>
+          <div id="footer">Scala programming documentation. Copyright (c) 2002-2021 <a href="http://www.epfl.ch" target="_top">EPFL</a>, with contributions from <a href="http://www.lightbend.com" target="_top">Lightbend</a>.</div>
         else
           <div id="footer"> { tpl.universe.settings.docfooter.value } </div>
       }
@@ -448,7 +447,7 @@ trait EntityPage extends HtmlPage {
           <div id="comment" class="fullcommenttop">{ memberToCommentBodyHtml(mbr, inTpl, isSelf = true) }</div>
         </xml:group>
       case _ =>
-        // comment of non-class member or non-documentented inner class
+        // comment of non-class member or non-documented inner class
         val commentBody = memberToCommentBodyHtml(mbr, inTpl, isSelf = false)
         if (commentBody.isEmpty)
           NodeSeq.Empty
@@ -478,6 +477,9 @@ trait EntityPage extends HtmlPage {
     mbr.comment.fold(NodeSeq.Empty) { comment =>
       <p class="shortcomment cmt">{ memberToUseCaseCommentHtml(mbr, isSelf) }{ inlineToHtml(comment.short) }</p>
     }
+
+  def memberToShortCommentTitleTag(mbr: MemberEntity): String =
+    mbr.comment.fold("")(comment => Page.inlineToStrForTitleTag(comment.short))
 
   def memberToInlineCommentHtml(mbr: MemberEntity, isSelf: Boolean): NodeSeq =
     <p class="comment cmt">{ inlineToHtml(mbr.comment.get.short) }</p>
@@ -554,8 +556,8 @@ trait EntityPage extends HtmlPage {
           }
 
           // strip off the package object endings, they make things harder to follow
-          val conversionOwnerQualifiedNane = conv.convertorOwner.qualifiedName.stripSuffix(".package")
-          val conversionOwner = templateToHtml(conv.convertorOwner, conversionOwnerQualifiedNane)
+          val conversionOwnerQualifiedName = conv.convertorOwner.qualifiedName.stripSuffix(".package")
+          val conversionOwner = templateToHtml(conv.convertorOwner, conversionOwnerQualifiedName)
 
           val constraintText = conv.constraints match {
             case Nil =>
@@ -613,11 +615,11 @@ trait EntityPage extends HtmlPage {
 
     // --- start attributes block vals
     val attributes: NodeSeq = {
-      val fvs: List[comment.Paragraph] = visibility(mbr).toList
+      val fvs: List[NodeSeq] = visibility(mbr).toList
       if (fvs.isEmpty || isReduced) NodeSeq.Empty
       else {
         <dt>Attributes</dt>
-        <dd>{ fvs map { fv => { inlineToHtml(fv.text) ++ scala.xml.Text(" ") } } }</dd>
+        <dd>{ fvs.map(_ ++ scala.xml.Text(" ")) }</dd>
       }
     }
 
@@ -645,7 +647,7 @@ trait EntityPage extends HtmlPage {
     }
 
     val selfType: NodeSeq = mbr match {
-      case dtpl: DocTemplateEntity if (isSelf && !dtpl.selfType.isEmpty && !isReduced) =>
+      case dtpl: DocTemplateEntity if (isSelf && dtpl.selfType.isDefined && !isReduced) =>
         <dt>Self Type</dt>
         <dd>{ typeToHtml(dtpl.selfType.get, hasLinks = true) }</dd>
       case _ => NodeSeq.Empty
@@ -658,7 +660,7 @@ trait EntityPage extends HtmlPage {
       def showArguments(annotation: Annotation) =
         !(annotationsWithHiddenArguments.contains(annotation.qualifiedName))
 
-      if (!mbr.annotations.isEmpty) {
+      if (mbr.annotations.nonEmpty) {
         <dt>Annotations</dt>
         <dd>{
             mbr.annotations.map { annot =>
@@ -711,7 +713,7 @@ trait EntityPage extends HtmlPage {
                  exampleXml.reduceLeft(_ ++ Text(", ") ++ _)
               }</ol>
             </div>
-	  }
+          }
 
         val version: NodeSeq =
           orEmpty(comment.version) {
@@ -849,22 +851,20 @@ trait EntityPage extends HtmlPage {
     bound0(lo, " >: ") ++ bound0(hi, " <: ")
   }
 
-  def visibility(mbr: MemberEntity): Option[comment.Paragraph] = {
-    import comment._
-    import comment.{ Text => CText }
+  def visibility(mbr: MemberEntity): Option[NodeSeq] = {
     mbr.visibility match {
       case PrivateInInstance() =>
-        Some(Paragraph(CText("private[this]")))
-      case PrivateInTemplate(owner) if (owner == mbr.inTemplate) =>
-        Some(Paragraph(CText("private")))
-      case PrivateInTemplate(owner) =>
-        Some(Paragraph(Chain(List(CText("private["), EntityLink(comment.Text(owner.qualifiedName), LinkToTpl(owner)), CText("]")))))
+        Some(Text("private[this]"))
+      case PrivateInTemplate(None) =>
+        Some(Text("private"))
+      case PrivateInTemplate(Some(owner)) =>
+        Some(Text("private[") ++ typeToHtml(owner, true) ++ Text("]"))
       case ProtectedInInstance() =>
-        Some(Paragraph(CText("protected[this]")))
-      case ProtectedInTemplate(owner) if (owner == mbr.inTemplate) =>
-        Some(Paragraph(CText("protected")))
-      case ProtectedInTemplate(owner) =>
-        Some(Paragraph(Chain(List(CText("protected["), EntityLink(comment.Text(owner.qualifiedName), LinkToTpl(owner)), CText("]")))))
+        Some(Text("protected[this]"))
+      case ProtectedInTemplate(None) =>
+        Some(Text("protected"))
+      case ProtectedInTemplate(Some(owner)) =>
+        Some(Text("protected[") ++ typeToHtml(owner, true) ++ Text("]"))
       case Public() =>
         None
     }
@@ -909,9 +909,7 @@ trait EntityPage extends HtmlPage {
             }
           }
           if (!nameLink.isEmpty)
-            <a title={mbr.comment.fold("")(c => inlineToStr(c.short))} href={nameLink}>
-              {nameHtml}
-            </a>
+            <a title={memberToShortCommentTitleTag(mbr)} href={nameLink}>{nameHtml}</a>
           else nameHtml
         }{
           def tparamsToHtml(mbr: Any): NodeSeq = mbr match {
@@ -975,7 +973,7 @@ trait EntityPage extends HtmlPage {
             case alt: MemberEntity with AliasType =>
               <span class="result alias"> = { typeToHtml(alt.alias, hasLinks) }</span>
 
-            case tpl: MemberTemplateEntity if !tpl.parentTypes.isEmpty =>
+            case tpl: MemberTemplateEntity if tpl.parentTypes.nonEmpty =>
               <span class="result"> extends { typeToHtml(tpl.parentTypes.map(_._2), hasLinks) }</span>
 
             case _ => NodeSeq.Empty
@@ -985,7 +983,7 @@ trait EntityPage extends HtmlPage {
       </xml:group>
     mbr match {
       case dte: DocTemplateEntity if !isSelf =>
-        permalink(dte, isSelf) ++ { inside(hasLinks = true, nameLink = relativeLinkTo(dte)) }
+        permalink(dte) ++ { inside(hasLinks = true, nameLink = relativeLinkTo(dte)) }
       case _ if isSelf =>
         <h4 id="signature" class="signature">{ inside(hasLinks = true) }</h4>
       case _ =>
@@ -1077,7 +1075,7 @@ trait EntityPage extends HtmlPage {
     body.blocks flatMap (blockToStr(_)) mkString ""
 
   private def blockToStr(block: comment.Block): String = block match {
-    case comment.Paragraph(in) => inlineToStr(in)
+    case comment.Paragraph(in) => Page.inlineToStr(in)
     case _ => block.toString
   }
 

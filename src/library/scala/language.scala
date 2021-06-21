@@ -1,12 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2015, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
-
-
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 
@@ -158,7 +160,7 @@ object language {
    *  code should not rely on them.
    *
    *  Programmers are encouraged to try out experimental features and
-   *  [[http://issues.scala-lang.org report any bugs or API inconsistencies]]
+   *  [[https://github.com/scala/bug/issues report any bugs or API inconsistencies]]
    *  they encounter so they can be improved in future releases.
    *
    *  @group experimental

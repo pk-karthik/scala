@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2015 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
@@ -8,22 +15,29 @@ package backend.jvm
 package opt
 
 import scala.annotation.switch
-import scala.collection.mutable
+import scala.collection.JavaConverters._
 import scala.collection.immutable.IntMap
+import scala.collection.mutable
 import scala.reflect.internal.util.NoPosition
-import scala.tools.asm.{Type, Opcodes}
+import scala.tools.asm.Opcodes._
+import scala.tools.asm.Type
 import scala.tools.asm.tree._
 import scala.tools.nsc.backend.jvm.BTypes.InternalName
-import BytecodeUtils._
-import BackendReporting._
-import Opcodes._
-import scala.collection.JavaConverters._
+import scala.tools.nsc.backend.jvm.BackendReporting._
+import scala.tools.nsc.backend.jvm.analysis.BackendUtils
+import scala.tools.nsc.backend.jvm.opt.BytecodeUtils._
 
-class ClosureOptimizer[BT <: BTypes](val btypes: BT) {
-  import btypes._
+abstract class ClosureOptimizer {
+  val postProcessor: PostProcessor
+
+  import postProcessor.{bTypes, bTypesFromClassfile, callGraph, byteCodeRepository, localOpt, inliner, backendUtils}
+  import bTypes._
+  import bTypesFromClassfile._
+  import backendUtils._
   import callGraph._
   import coreBTypes._
-  import backendUtils._
+  import frontendAccess.backendReporting
+
   import ClosureOptimizer._
 
   private object closureInitOrdering extends Ordering[ClosureInstantiation] {
@@ -91,7 +105,7 @@ class ClosureOptimizer[BT <: BTypes](val btypes: BT) {
         val ownerClass = closureInitsBeforeDCE.head._2.ownerClass.internalName
 
         // Advanced ProdCons queries (initialProducersForValueAt) expect no unreachable code.
-        localOpt.minimalRemoveUnreachableCode(method, ownerClass)
+        localOpt.minimalRemoveUnreachableCode(method)
 
         if (AsmAnalyzer.sizeOKForSourceValue(method)) closureInstantiations.get(method) match {
           case Some(closureInits) =>
@@ -100,7 +114,7 @@ class ClosureOptimizer[BT <: BTypes](val btypes: BT) {
 
             for (init <- closureInits.valuesIterator) closureCallsites(init, prodCons) foreach {
               case Left(warning) =>
-                backendReporting.inlinerWarning(warning.pos, warning.toString)
+                backendReporting.optimizerWarning(warning.pos, warning.toString, backendReporting.siteString(ownerClass, method.name))
 
               case Right((invocation, stackHeight)) =>
                 addRewrite(init, invocation, stackHeight)
@@ -134,7 +148,7 @@ class ClosureOptimizer[BT <: BTypes](val btypes: BT) {
     // allocate locals for storing the arguments of the closure apply callsites.
     // if there are multiple callsites, the same locals are re-used.
     val argTypes = closureInit.lambdaMetaFactoryCall.samMethodType.getArgumentTypes
-    val firstArgLocal = ownerMethod.maxLocals
+    val firstArgLocal = backendUtils.maxLocals(ownerMethod)
 
     val argLocals = LocalsList.fromTypes(firstArgLocal, argTypes)
     ownerMethod.maxLocals = firstArgLocal + argLocals.size
@@ -302,6 +316,14 @@ class ClosureOptimizer[BT <: BTypes](val btypes: BT) {
     // drop the closure from the stack
     ownerMethod.instructions.insertBefore(invocation, new InsnNode(POP))
 
+    val isNew = lambdaBodyHandle.getTag == H_NEWINVOKESPECIAL
+
+    if (isNew) {
+      val insns = ownerMethod.instructions
+      insns.insertBefore(invocation, new TypeInsnNode(NEW, lambdaBodyHandle.getOwner))
+      insns.insertBefore(invocation, new InsnNode(DUP))
+    }
+
     // load captured values and arguments
     insertLoadOps(invocation, ownerMethod, localsForCapturedValues)
     insertLoadOps(invocation, ownerMethod, argumentLocalsList)
@@ -309,8 +331,8 @@ class ClosureOptimizer[BT <: BTypes](val btypes: BT) {
     // update maxStack
     // One slot per value is correct for long / double, see comment in the `analysis` package object.
     val numCapturedValues = localsForCapturedValues.locals.length
-    val invocationStackHeight = stackHeight + numCapturedValues - 1 // -1 because the closure is gone
-    if (invocationStackHeight > ownerMethod.maxStack)
+    val invocationStackHeight = stackHeight + numCapturedValues - 1 + (if (isNew) 2 else 0) // -1 because the closure is gone
+    if (invocationStackHeight > backendUtils.maxStack(ownerMethod))
       ownerMethod.maxStack = invocationStackHeight
 
     // replace the callsite with a new call to the body method
@@ -319,31 +341,28 @@ class ClosureOptimizer[BT <: BTypes](val btypes: BT) {
       case H_INVOKESTATIC     => INVOKESTATIC
       case H_INVOKESPECIAL    => INVOKESPECIAL
       case H_INVOKEINTERFACE  => INVOKEINTERFACE
-      case H_NEWINVOKESPECIAL =>
-        val insns = ownerMethod.instructions
-        insns.insertBefore(invocation, new TypeInsnNode(NEW, lambdaBodyHandle.getOwner))
-        insns.insertBefore(invocation, new InsnNode(DUP))
-        INVOKESPECIAL
+      case H_NEWINVOKESPECIAL => INVOKESPECIAL
     }
-    val isInterface = bodyOpcode == INVOKEINTERFACE
-    val bodyInvocation = new MethodInsnNode(bodyOpcode, lambdaBodyHandle.getOwner, lambdaBodyHandle.getName, lambdaBodyHandle.getDesc, isInterface)
+    val bodyInvocation = new MethodInsnNode(bodyOpcode, lambdaBodyHandle.getOwner, lambdaBodyHandle.getName, lambdaBodyHandle.getDesc, lambdaBodyHandle.isInterface)
     ownerMethod.instructions.insertBefore(invocation, bodyInvocation)
 
-    val bodyReturnType = Type.getReturnType(lambdaBodyHandle.getDesc)
-    val invocationReturnType = Type.getReturnType(invocation.desc)
-    if (isPrimitiveType(invocationReturnType) && bodyReturnType.getDescriptor == ObjectRef.descriptor) {
-      val op =
-        if (invocationReturnType.getSort == Type.VOID) getPop(1)
-        else getScalaUnbox(invocationReturnType)
-      ownerMethod.instructions.insertBefore(invocation, op)
-    } else if (isPrimitiveType(bodyReturnType) && invocationReturnType.getDescriptor == ObjectRef.descriptor) {
-      val op =
-        if (bodyReturnType.getSort == Type.VOID) getBoxedUnit
-        else getScalaBox(bodyReturnType)
-      ownerMethod.instructions.insertBefore(invocation, op)
-    } else {
-      // see comment of that method
-      fixLoadedNothingOrNullValue(bodyReturnType, bodyInvocation, ownerMethod, btypes)
+    if (!isNew) {
+      val bodyReturnType = Type.getReturnType(lambdaBodyHandle.getDesc)
+      val invocationReturnType = Type.getReturnType(invocation.desc)
+      if (isPrimitiveType(invocationReturnType) && bodyReturnType.getDescriptor == ObjectRef.descriptor) {
+        val op =
+          if (invocationReturnType.getSort == Type.VOID) getPop(1)
+          else getScalaUnbox(invocationReturnType)
+        ownerMethod.instructions.insertBefore(invocation, op)
+      } else if (isPrimitiveType(bodyReturnType) && invocationReturnType.getDescriptor == ObjectRef.descriptor) {
+        val op =
+          if (bodyReturnType.getSort == Type.VOID) getBoxedUnit
+          else getScalaBox(bodyReturnType)
+        ownerMethod.instructions.insertBefore(invocation, op)
+      } else {
+        // see comment of that method
+        fixLoadedNothingOrNullValue(bodyReturnType, bodyInvocation, ownerMethod, bTypes)
+      }
     }
 
     ownerMethod.instructions.remove(invocation)
@@ -360,7 +379,7 @@ class ClosureOptimizer[BT <: BTypes](val btypes: BT) {
         Callee(
           callee = bodyMethodNode,
           calleeDeclarationClass = bodyDeclClassType,
-          safeToInline = inlinerHeuristics.canInlineFromSource(sourceFilePath),
+          isStaticallyResolved = true,
           sourceFilePath = sourceFilePath,
           annotatedInline = false,
           annotatedNoInline = false,
@@ -391,9 +410,9 @@ class ClosureOptimizer[BT <: BTypes](val btypes: BT) {
 
     // Rewriting a closure invocation may render code unreachable. For example, the body method of
     // (x: T) => ??? has return type Nothing$, and an ATHROW is added (see fixLoadedNothingOrNullValue).
-    unreachableCodeEliminated -= ownerMethod
+    BackendUtils.clearDceDone(ownerMethod)
 
-    if (hasAdaptedImplMethod(closureInit) && inliner.canInlineBody(bodyMethodCallsite).isEmpty)
+    if (hasAdaptedImplMethod(closureInit) && inliner.canInlineCallsite(bodyMethodCallsite).isEmpty)
       inliner.inlineCallsite(bodyMethodCallsite)
   }
 
@@ -404,7 +423,7 @@ class ClosureOptimizer[BT <: BTypes](val btypes: BT) {
   private def storeCaptures(closureInit: ClosureInstantiation): LocalsList = {
     val indy = closureInit.lambdaMetaFactoryCall.indy
     val capturedTypes = Type.getArgumentTypes(indy.desc)
-    val firstCaptureLocal = closureInit.ownerMethod.maxLocals
+    val firstCaptureLocal = backendUtils.maxLocals(closureInit.ownerMethod)
 
     // This could be optimized: in many cases the captured values are produced by LOAD instructions.
     // If the variable is not modified within the method, we could avoid introducing yet another

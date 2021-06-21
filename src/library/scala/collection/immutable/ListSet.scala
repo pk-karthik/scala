@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -30,7 +34,8 @@ object ListSet extends ImmutableSetFactory[ListSet] {
     * $setCanBuildFromInfo
     */
   implicit def canBuildFrom[A]: CanBuildFrom[Coll, A, ListSet[A]] =
-    setCanBuildFrom[A]
+    ReusableCBF.asInstanceOf[CanBuildFrom[Coll, A, ListSet[A]]]
+  private[this] val ReusableCBF = setCanBuildFrom[Any]
 
   @SerialVersionUID(5010379588739277132L)
   private object EmptyListSet extends ListSet[Any]
@@ -52,7 +57,6 @@ object ListSet extends ImmutableSetFactory[ListSet] {
   * @tparam A the type of the elements contained in this list set
   *
   * @author Matthias Zenger
-  * @version 1.0, 09/07/2003
   * @since 1
   * @define Coll ListSet
   * @define coll list set
@@ -77,8 +81,87 @@ sealed class ListSet[A] extends AbstractSet[A]
   def -(elem: A): ListSet[A] = this
 
   override def ++(xs: GenTraversableOnce[A]): ListSet[A] =
-    if (xs.isEmpty) this
-    else (repr /: xs) (_ + _)
+    xs match {
+      // we want to avoid to use of iterator as it causes allocations
+      // during reverseList
+      case ls: ListSet[A] =>
+        if (ls eq this) this
+        else {
+          val lsSize = ls.size
+          if (lsSize == 0) this
+          else if (isEmpty) ls
+          else {
+            @tailrec def skip(ls: ListSet[A], count: Int): ListSet[A] = {
+              if (count == 0) ls else skip(ls.next, count - 1)
+            }
+
+            @tailrec def containsLimited(n: ListSet[A], e: A, end: ListSet[A]): Boolean =
+              (n ne end) && (e == n.elem || containsLimited(n.next, e, end))
+
+            @tailrec def distanceTo(n: ListSet[A], end: ListSet[A], soFar: Int): Int =
+              if (n eq end) soFar else distanceTo(n.next, end, soFar + 1)
+
+            // We hope to get some structural sharing so find the tail of the
+            // ListSet that are `eq` (or if there are not any then the ends of the lists),
+            // and we optimise the add to only iterate until we reach the common end
+            val thisSize  = this.size
+            val remaining = Math.min(thisSize, lsSize)
+            var thisTail  = skip(this, thisSize - remaining)
+            var lsTail    = skip(ls, lsSize - remaining)
+            //find out what part of the the ListSet is sharable
+            //as we can ignore the shared elements
+            while ((thisTail ne lsTail) && !lsTail.isEmpty) {
+              thisTail = thisTail.next
+              lsTail = lsTail.next
+            }
+            var toAdd              = ls
+            var result: ListSet[A] = this
+
+            // Its quite a common case that we are just adding a few elements, so it there are less than 5 elements we
+            // hold them in pending0..3
+            // if there are more than these 4 we hold the rest in pending
+            var pending                               : Array[A] = null
+            var pending0, pending1, pending2, pending3: A        = null.asInstanceOf[A]
+            var pendingCount                                     = 0
+            while (toAdd ne lsTail) {
+              val elem = toAdd.elem
+              if (!containsLimited(result, elem, lsTail)) {
+                pendingCount match {
+                  case 0 => pending0 = elem
+                  case 1 => pending1 = elem
+                  case 2 => pending2 = elem
+                  case 3 => pending3 = elem
+                  case _ =>
+                    if (pending eq null)
+                      pending = new Array[AnyRef](distanceTo(toAdd, lsTail, 0)).asInstanceOf[Array[A]]
+                    pending(pendingCount - 4) = elem
+                }
+                pendingCount += 1
+              }
+              toAdd = toAdd.next
+            }
+            // add the extra values. They are added in reverse order so as to ensure that the iteration order is correct
+            // remembering that the content is in the reverse order to the iteration order
+            // i.e. this.next is really the previous value
+            while (pendingCount > 0) {
+              val elem: A = pendingCount match {
+                case 1 => pending0
+                case 2 => pending1
+                case 3 => pending2
+                case 4 => pending3
+                case _ => pending(pendingCount - 5)
+              }
+              val r       = result
+              result = new r.Node(elem)
+              pendingCount -= 1
+            }
+            result
+          }
+        }
+      case _              =>
+        if (xs.isEmpty) this
+        else (repr /: xs) (_ + _)
+    }
 
   def iterator: Iterator[A] = {
     def reverseList = {
@@ -119,14 +202,33 @@ sealed class ListSet[A] extends AbstractSet[A]
     @tailrec private[this] def containsInternal(n: ListSet[A], e: A): Boolean =
       !n.isEmpty && (n.elem == e || containsInternal(n.next, e))
 
+    @tailrec private[this] def indexInternal(n: ListSet[A], e: A, i:Int): Int =
+      if (n.isEmpty) -1
+      else if (n.elem == e) i
+      else indexInternal(n.next, e, i + 1)
+
     override def +(e: A): ListSet[A] = if (contains(e)) this else new Node(e)
 
-    override def -(e: A): ListSet[A] = removeInternal(e, this, Nil)
-
-    @tailrec private[this] def removeInternal(k: A, cur: ListSet[A], acc: List[ListSet[A]]): ListSet[A] =
-      if (cur.isEmpty) acc.last
-      else if (k == cur.elem) (cur.next /: acc) { case (t, h) => new t.Node(h.elem) }
-      else removeInternal(k, cur.next, cur :: acc)
+    override def -(e: A): ListSet[A] = {
+      val index = indexInternal(this, e, 0)
+      if (index < 0) this
+      else if (index == 0) next
+      else {
+        val data = new Array[ListSet[A]](index)
+        @tailrec def store(i: Int, e: ListSet[A]): Unit = {
+          if (i < index) {
+            data(i) = e
+            store(i + 1, e.next)
+          }
+        }
+        @tailrec def reform(i: Int, e: ListSet[A]): ListSet[A] = {
+          if (i < 0) e
+          else reform (i -1, new e.Node(data(i).elem))
+        }
+        store(0, this)
+        reform(index -1, data(index - 1).next.next)
+      }
+    }
 
     override protected def next: ListSet[A] = ListSet.this
 

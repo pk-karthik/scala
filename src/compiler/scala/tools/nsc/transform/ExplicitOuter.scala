@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala
@@ -8,8 +15,9 @@ package tools.nsc
 package transform
 
 import symtab._
-import Flags.{ CASE => _, _ }
+import Flags.{CASE => _, _}
 import scala.collection.mutable.ListBuffer
+import scala.tools.nsc.Reporting.WarningCategory
 
 /** This class ...
  *
@@ -108,7 +116,7 @@ abstract class ExplicitOuter extends InfoTransform
    *   }
    * }}}
    *
-   * See SI-7242.
+   * See scala/bug#7242.
    }}
    */
   private def skipMixinOuterAccessor(clazz: Symbol, mixin: Symbol) = {
@@ -127,12 +135,12 @@ abstract class ExplicitOuter extends InfoTransform
    *      in an inner non-trait class;
    *    </li>
    *    <li>
-   *      Add a protected $outer field to an inner class which is
+   *      Add a protected \$outer field to an inner class which is
    *      not a trait.
    *    </li>
    *    <li>
    *      <p>
-   *        Add an outer accessor $outer$$C to every inner class
+   *        Add an outer accessor \$outer\$\$C to every inner class
    *        with fully qualified name C that is not an interface.
    *        The outer accessor is abstract for traits, concrete for other
    *        classes.
@@ -158,22 +166,15 @@ abstract class ExplicitOuter extends InfoTransform
     case MethodType(params, resTp) =>
       val resTpTransformed = transformInfo(sym, resTp)
 
-      // juggle flags (and mangle names) after transforming info
-      if (sym.owner.isTrait) {
-        // TODO: I don't believe any private accessors remain after the fields phase
-        if ((sym hasFlag (ACCESSOR | SUPERACCESSOR)) || sym.isModule) sym.makeNotPrivate(sym.owner) // 5
-        if (sym.isProtected) sym setFlag notPROTECTED // 6
-      }
-
       val paramsWithOuter =
         if (sym.isClassConstructor && isInner(sym.owner)) // 1
-          sym.newValueParameter(nme.OUTER_ARG, sym.pos).setInfo(sym.owner.outerClass.thisType) :: params
+          sym.newValueParameter(nme.OUTER_ARG, sym.pos, ARTIFACT).setInfo(sym.owner.outerClass.thisType) :: params
         else params
 
       if ((resTpTransformed ne resTp) || (paramsWithOuter ne params)) MethodType(paramsWithOuter, resTpTransformed)
       else tp
 
-    case ClassInfoType(parents, decls, clazz) =>
+    case ClassInfoType(parents, decls, clazz) if !clazz.isJava =>
       var decls1 = decls
       if (isInner(clazz) && !clazz.isInterface) {
         decls1 = decls.cloneScope
@@ -189,7 +190,7 @@ abstract class ExplicitOuter extends InfoTransform
               debuglog(s"Reusing outer accessor symbol of $clazz for the mixin outer accessor of $mc")
             else {
               if (decls1 eq decls) decls1 = decls.cloneScope
-              val newAcc = mixinOuterAcc.cloneSymbol(clazz, mixinOuterAcc.flags & ~DEFERRED)
+              val newAcc = mixinOuterAcc.cloneSymbol(clazz, mixinOuterAcc.flags & ~DEFERRED).setPos(clazz.pos)
               newAcc setInfo (clazz.thisType memberType mixinOuterAcc)
               decls1 enter newAcc
             }
@@ -202,14 +203,6 @@ abstract class ExplicitOuter extends InfoTransform
       if (restp eq restp1) tp else PolyType(tparams, restp1)
 
     case _ =>
-      // Local fields of traits need to be unconditionally unprivatized.
-      // Reason: Those fields might need to be unprivatized if referenced by an inner class.
-      // On the other hand, mixing in the trait into a separately compiled
-      // class needs to have a common naming scheme, independently of whether
-      // the field was accessed from an inner class or not. See #2946
-      if (sym.owner.isTrait && sym.isLocalToThis &&
-              (sym.getterIn(sym.owner) == NoSymbol))
-        sym.makeNotPrivate(sym.owner)
       tp
   }
 
@@ -217,7 +210,8 @@ abstract class ExplicitOuter extends InfoTransform
    *  values for outer parameters of constructors.
    *  The class provides methods for referencing via outer.
    */
-  abstract class OuterPathTransformer(unit: CompilationUnit) extends TypingTransformer(unit) with UnderConstructionTransformer {
+  abstract class OuterPathTransformer(initLocalTyper: analyzer.Typer) extends TypingTransformer(initLocalTyper) with UnderConstructionTransformer {
+    def this(unit: CompilationUnit) { this(newRootLocalTyper(unit)) }
     /** The directly enclosing outer parameter, if we are in a constructor */
     protected var outerParam: Symbol = NoSymbol
 
@@ -279,7 +273,11 @@ abstract class ExplicitOuter extends InfoTransform
     protected def outerPath(base: Tree, from: Symbol, to: Symbol): Tree = {
       //Console.println("outerPath from "+from+" to "+to+" at "+base+":"+base.tpe)
       if (from == to) base
-      else outerPath(outerSelect(base), from.outerClass, to)
+      else {
+        val outerSel = outerSelect(base)
+        if (outerSel.isEmpty) EmptyTree
+        else outerPath(outerSel, from.outerClass, to)
+      }
     }
 
     override def transform(tree: Tree): Tree = {
@@ -300,61 +298,41 @@ abstract class ExplicitOuter extends InfoTransform
     }
   }
 
-  /** <p>
-   *    The phase performs the following transformations on terms:
-   *  </p>
-   *  <ol>
-   *    <li> <!-- 1 -->
-   *      <p>
-   *        An class which is not an interface and is not static gets an outer
-   *        accessor (@see outerDefs).
-   *      </p>
-   *      <p>
-   *        1a. A class which is not a trait gets an outer field.
-   *      </p>
-   *    </li>
-   *    <li> <!-- 4 -->
-   *      A constructor of a non-trait inner class gets an outer parameter.
-   *    </li>
-   *    <li> <!-- 5 -->
-   *      A reference C.this where C refers to an
-   *      outer class is replaced by a selection
-   *      this.$outer$$C1 ... .$outer$$Cn (@see outerPath)
-   *    </li>
-   *    <li>
-   *    </li>
-   *    <li> <!-- 7 -->
-   *      A call to a constructor Q.<init>(args) or Q.$init$(args) where Q != this and
-   *      the constructor belongs to a non-static class is augmented by an outer argument.
-   *      E.g. Q.<init>(OUTER, args) where OUTER
-   *      is the qualifier corresponding to the singleton type Q.
-   *    </li>
-   *    <li>
-   *      A call to a constructor this.<init>(args) in a
-   *      secondary constructor is augmented to this.<init>(OUTER, args)
-   *      where OUTER is the last parameter of the secondary constructor.
-   *    </li>
-   *    <li> <!-- 9 -->
-   *      Remove private modifier from class members M
-   *      that are accessed from an inner class.
-   *    </li>
-   *    <li> <!-- 10 -->
-   *      Remove protected modifier from class members M
-   *      that are accessed without a super qualifier accessed from an inner
-   *      class or trait.
-   *    </li>
-   *    <li> <!-- 11 -->
-   *      Remove private and protected modifiers
-   *      from type symbols
-   *    </li>
-   *    <li> <!-- 12 -->
-   *      Remove private modifiers from members of traits
-   *    </li>
-   *  </ol>
-   *  <p>
-   *    Note: The whole transform is run in phase explicitOuter.next.
-   *  </p>
-   */
+  /** The phase performs the following transformations (more or less...):
+    *
+    * (1) An class which is not an interface and is not static gets an outer accessor (@see outerDefs).
+    * (1a) A class which is not a trait gets an outer field.
+    *
+    * (4) A constructor of a non-trait inner class gets an outer parameter.
+    *
+    * (5) A reference C.this where C refers to an outer class is replaced by a selection
+    *     `this.\$outer\$\$C1 ... .\$outer\$\$Cn` (@see outerPath)
+    *
+    * (7) A call to a constructor Q.(args) or Q.\$init\$(args) where Q != this and
+    *     the constructor belongs to a non-static class is augmented by an outer argument.
+    *     E.g. Q.(OUTER, args) where OUTER
+    *     is the qualifier corresponding to the singleton type Q.
+    *
+    * (8) A call to a constructor this.(args) in a
+    *     secondary constructor is augmented to this.(OUTER, args)
+    *     where OUTER is the last parameter of the secondary constructor.
+    *
+    * (9) Remove private modifier from class members M that are accessed from an inner class.
+    *
+    * (10) Remove protected modifier from class members M that are accessed
+    *      without a super qualifier accessed from an inner class or trait.
+    *
+    * (11) Remove private and protected modifiers from type symbols
+    *
+    * Note: The whole transform is run in phase explicitOuter.next.
+    *
+    * TODO: Make this doc reflect what's actually going on.
+    *       Some of the deviations are motivated by separate compilation
+    *       (name mangling based on usage is inherently unstable).
+    *       Now that traits are compiled 1:1 to interfaces, they can have private members,
+    *       so there's also less need to make trait members non-private
+    *       (they still may need to be implemented in subclasses, though we could make those protected...).
+    */
   class ExplicitOuterTransformer(unit: CompilationUnit) extends OuterPathTransformer(unit) {
     transformer =>
 
@@ -382,7 +360,7 @@ abstract class ExplicitOuter extends InfoTransform
       assert(outerAcc != NoSymbol, "No outer accessor for inner mixin " + mixinClass + " in " + currentClass)
       assert(outerAcc.alternatives.size == 1, s"Multiple outer accessors match inner mixin $mixinClass in $currentClass : ${outerAcc.alternatives.map(_.defString)}")
       // I added the mixinPrefix.typeArgs.nonEmpty condition to address the
-      // crash in SI-4970.  I feel quite sure this can be improved.
+      // crash in scala/bug#4970.  I feel quite sure this can be improved.
       val path = (
         if (mixinClass.owner.isTerm) gen.mkAttributedThis(mixinClass.owner.enclClass)
         else if (mixinPrefix.typeArgs.nonEmpty) gen.mkAttributedThis(mixinPrefix.typeSymbol)
@@ -395,9 +373,9 @@ abstract class ExplicitOuter extends InfoTransform
     /** The main transformation method */
     override def transform(tree: Tree): Tree = {
       val sym = tree.symbol
-      if (sym != null && sym.isType) { //(9)
+      if (sym != null && sym.isType) { // (9)
         if (sym.isPrivate) sym setFlag notPRIVATE
-        if (sym.isProtected) sym setFlag notPROTECTED
+        if (sym.isProtected && !sym.isJavaDefined) sym setFlag notPROTECTED
       }
       tree match {
         case Template(parents, self, decls) =>
@@ -434,7 +412,7 @@ abstract class ExplicitOuter extends InfoTransform
                       reporter.error(tree.pos, s"Implementation restriction: ${clazz.fullLocationString} requires premature access to ${clazz.outerClass}.")
                     }
                     val outerParam =
-                      sym.newValueParameter(nme.OUTER, sym.pos) setInfo clazz.outerClass.thisType
+                      sym.newValueParameter(nme.OUTER, sym.pos, ARTIFACT) setInfo clazz.outerClass.thisType
                     ((ValDef(outerParam) setType NoType) :: vparamss.head) :: vparamss.tail
                   } else vparamss
                 super.transform(copyDefDef(tree)(vparamss = vparamss1))
@@ -450,10 +428,10 @@ abstract class ExplicitOuter extends InfoTransform
           // make not private symbol accessed from inner classes, as well as
           // symbols accessed from @inline methods
           //
-          // See SI-6552 for an example of why `sym.owner.enclMethod hasAnnotation ScalaInlineClass`
+          // See scala/bug#6552 for an example of why `sym.owner.enclMethod hasAnnotation ScalaInlineClass`
           // is not suitable; if we make a method-local class non-private, it mangles outer pointer names.
           def enclMethodIsInline = closestEnclMethod(currentOwner) hasAnnotation ScalaInlineClass
-          // SI-8710 The extension method condition reflects our knowledge that a call to `new Meter(12).privateMethod`
+          // scala/bug#8710 The extension method condition reflects our knowledge that a call to `new Meter(12).privateMethod`
           //         with later be rewritten (in erasure) to `Meter.privateMethod$extension(12)`.
           if ((currentClass != sym.owner || enclMethodIsInline) && !sym.isMethodWithExtension)
             sym.makeNotPrivate(sym.owner)
@@ -486,11 +464,11 @@ abstract class ExplicitOuter extends InfoTransform
           val acc = outerAccessor(outerFor)
 
           if (acc == NoSymbol ||
-              // since we can't fix SI-4440 properly (we must drop the outer accessors of final classes when there's no immediate reference to them in sight)
+              // since we can't fix scala/bug#4440 properly (we must drop the outer accessors of final classes when there's no immediate reference to them in sight)
               // at least don't crash... this duplicates maybeOmittable from constructors
               (acc.owner.isEffectivelyFinal && !acc.isOverridingSymbol)) {
             if (!base.tpe.hasAnnotation(UncheckedClass))
-              currentRun.reporting.uncheckedWarning(tree.pos, "The outer reference in this type test cannot be checked at run time.")
+              runReporting.warning(tree.pos, "The outer reference in this type test cannot be checked at run time.", WarningCategory.Unchecked, currentOwner)
             transform(TRUE) // urgh... drop condition if there's no accessor (or if it may disappear after constructors)
           } else {
             // println("(base, acc)= "+(base, acc))

@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala.tools.nsc
 package typechecker
 
@@ -95,7 +107,7 @@ trait StdAttachments {
   /** Determines whether a tree should not be expanded, because someone has put SuppressMacroExpansionAttachment on it or one of its children.
    */
   def isMacroExpansionSuppressed(tree: Tree): Boolean =
-    (  settings.Ymacroexpand.value == settings.MacroExpand.None // SI-6812
+    (  settings.Ymacroexpand.value == settings.MacroExpand.None // scala/bug#6812
     || tree.hasAttachment[SuppressMacroExpansionAttachment.type]
     || (tree match {
         // we have to account for the fact that during typechecking an expandee might become wrapped,
@@ -156,7 +168,7 @@ trait StdAttachments {
    *  from typedNamedApply, the applyDynamicNamed argument rewriter, the latter
    *  doesn’t know whether it needs to apply the rewriting because the application
    *  has just been desugared or it needs to hold on because it’s already performed
-   *  a desugaring on this tree. This has led to SI-8006.
+   *  a desugaring on this tree. This has led to scala/bug#8006.
    *
    *  This attachment solves the problem by providing a means of communication
    *  between the two Dynamic desugarers, which solves the aforementioned issue.
@@ -165,4 +177,24 @@ trait StdAttachments {
   def markDynamicRewrite(tree: Tree): Tree = tree.updateAttachment(DynamicRewriteAttachment)
   def unmarkDynamicRewrite(tree: Tree): Tree = tree.removeAttachment[DynamicRewriteAttachment.type]
   def isDynamicRewrite(tree: Tree): Boolean = tree.attachments.get[DynamicRewriteAttachment.type].isDefined
+
+  /**
+   * Marks a tree that has been adapted by typer and sets the original tree that was in place before.
+   * 
+   * Keeping track of the original trees were is an important feature for some compiler plugins (like
+   * Scalameta) and the incremental compiler (Zinc). In both cases, adapting trees loses information
+   * in some sense and do not allow external tools to capture some information stored in user-defined
+   * trees that are optimized away by early phases (mostly, typer).
+   * 
+   * See how the absence of this attachment blocks Zinc: https://github.com/sbt/zinc/issues/227.
+   * Related: https://github.com/scala/scala-dev/issues/340.
+   * 
+   * This attachment is, at the moment, only used to keep track of constant-folded constants. It
+   * has a generic wording in the hope that in the future can be reused in the same context to keep
+   * track of other adapted trees.
+   */
+  case class OriginalTreeAttachment(original: Tree)
+
+  /** Added to trees that appear in a method value, e.g., to `f(x)` in `f(x) _` */
+  case object MethodValueAttachment
 }

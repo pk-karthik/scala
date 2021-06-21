@@ -1,3 +1,4 @@
+// scalac: -deprecation
 object Test extends App {
   // TESTS
 
@@ -185,4 +186,22 @@ object t3685 {
   class u19 { def x: Int = u.f(x = "32") }
   class u20 { val x: Int = u.f(x = "32") }
   class u21 { var x: Int = u.f(x = "32") }
+}
+
+trait t10336 {
+  case class C(a: Int = 10, b: String = "20")
+
+  class X {
+    def c(c: C): (Int, String) = (c.a, c.b)
+    def f() = {
+      val (x, y) = c(C(b = "30"))
+      val a = y.toInt
+      ()
+    }
+    def g() = {
+      val (x, y) = c(C(10, "20").copy(b = "30"))
+      val a = y.toInt
+      ()
+    }
+  }
 }

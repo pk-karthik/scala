@@ -9,11 +9,11 @@
 ##############################################################################
 
 findScalaHome () {
-  # see SI-2092 and SI-5792
+  # see scala/bug#2092 and scala/bug#5792
   local source="${BASH_SOURCE[0]}"
   while [ -h "$source" ] ; do
     local linked="$(readlink "$source")"
-    local dir="$( cd -P $(dirname "$source") && cd -P $(dirname "$linked") && pwd )"
+    local dir="$( cd -P "$(dirname "$source")" && cd -P "$(dirname "$linked")" && pwd )"
     source="$dir/$(basename "$linked")"
   done
   ( cd -P "$(dirname "$source")/.." && pwd )
@@ -78,7 +78,6 @@ SEP=":"
 
 # Possible additional command line options
 WINDOWS_OPT=""
-EMACS_OPT="-Denv.emacs=$EMACS"
 
 # Remove spaces from SCALA_HOME on windows
 if [[ -n "$cygwin" ]]; then
@@ -92,7 +91,7 @@ TOOL_CLASSPATH="@classpath@"
 if [[ -z "$TOOL_CLASSPATH" ]]; then
     for ext in "$SCALA_HOME"/lib/* ; do
         file_extension="${ext##*.}"
-        # SI-8967 Only consider directories and files named '*.jar'
+        # scala/bug#8967 Only consider directories and files named '*.jar'
         if [[ -d "$ext" || $file_extension == "jar" ]]; then
           if [[ -z "$TOOL_CLASSPATH" ]]; then
               TOOL_CLASSPATH="$ext"
@@ -133,7 +132,7 @@ fi
 declare -a java_args
 declare -a scala_args
 
-# SI-8358, SI-8368 -- the default should really be false,
+# scala/bug#8358, scala/bug#8368 -- the default should really be false,
 # but I don't want to flip the default during 2.11's RC cycle
 OVERRIDE_USEJAVACP="-Dscala.usejavacp=true"
 
@@ -160,7 +159,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     -nobootcp)
-      unset usebootcp
+      usebootcp="false"
       shift
       ;;
     -usebootcp)
@@ -189,15 +188,19 @@ declare -a classpath_args
 
 # default to the boot classpath for speed, except on cygwin/mingw/msys because
 # JLine on Windows requires a custom DLL to be loaded.
-unset usebootcp
-if [[ -z "$cygwin$mingw$msys" ]]; then
+if [[ "$usebootcp" != "false" && -z "$cygwin$mingw$msys" ]]; then
   usebootcp="true"
 fi
 
 # If using the boot classpath, also pass an empty classpath
 # to java to suppress "." from materializing.
-if [[ -n $usebootcp ]]; then
+if [[ "$usebootcp" == "true" ]]; then
   classpath_args=("-Xbootclasspath/a:$TOOL_CLASSPATH" -classpath "\"\"")
+  # Java 9 removed sun.boot.class.path, and the supposed replacement to at least see
+  # the appended boot classpath (jdk.boot.class.path.append) is not visible.
+  # So we have to pass a custom system property that PathResolver will find.
+  # We do this for all JVM versions, rather than getting into the business of JVM version detection.
+  classpath_args+=("-Dscala.boot.class.path=$TOOL_CLASSPATH")
 else
   classpath_args=(-classpath "$TOOL_CLASSPATH")
 fi
@@ -212,7 +215,6 @@ execCommand \
   "${classpath_args[@@]}" \
   -Dscala.home="$SCALA_HOME" \
   $OVERRIDE_USEJAVACP \
-  "$EMACS_OPT" \
   $WINDOWS_OPT \
   @properties@ @class@ @toolflags@ "$@@"
 

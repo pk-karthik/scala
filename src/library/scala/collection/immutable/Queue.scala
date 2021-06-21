@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -25,9 +29,8 @@ import mutable.{ Builder, ListBuffer }
  *  `n` remove operations with `O(1)` cost are guaranteed. Removing an item is on average `O(1)`.
  *
  *  @author  Erik Stenman
- *  @version 1.0, 08/07/2003
  *  @since   1
- *  @see [[http://docs.scala-lang.org/overviews/collections/concrete-immutable-collection-classes.html#immutable_queues "Scala's Collection Library overview"]]
+ *  @see [[http://docs.scala-lang.org/overviews/collections/concrete-immutable-collection-classes.html#immutable-queues "Scala's Collection Library overview"]]
  *  section on `Immutable Queues` for more information.
  *
  *  @define Coll `immutable.Queue`
@@ -84,6 +87,16 @@ sealed class Queue[+A] protected(protected val in: List[A], protected val out: L
     else if (in.nonEmpty) new Queue(Nil, in.reverse.tail)
     else throw new NoSuchElementException("tail on empty queue")
 
+  /* This is made to avoid inefficient implementation of iterator. */
+  override def forall(p: A => Boolean): Boolean =
+    in.forall(p) && out.forall(p)
+
+  /* This is made to avoid inefficient implementation of iterator. */
+  override def exists(p: A => Boolean): Boolean =
+    in.exists(p) || out.exists(p)
+
+  override def stringPrefix = "Queue"
+
   /** Returns the length of the queue.
    */
   override def length = in.length + out.length
@@ -98,6 +111,23 @@ sealed class Queue[+A] protected(protected val in: List[A], protected val out: L
     case _                               => super.:+(elem)(bf)
   }
 
+  override def ++[B >: A, That](that: GenTraversableOnce[B])(implicit bf: CanBuildFrom[Queue[A], B, That]): That = {
+    if (bf eq Queue.ReusableCBF) {
+      val newIn =
+        if (that.isInstanceOf[Queue[_]]) {
+          val thatQueue: Queue[B] = that.asInstanceOf[Queue[B]]
+          thatQueue.in ++ (thatQueue.out reverse_::: this.in)
+        } else {
+          val lb = new ListBuffer[B]
+          that.seq.foreach(_ +=: lb)
+          lb.prependToList(this.in)
+        }
+      new Queue[B](newIn, this.out).asInstanceOf[That]
+    } else {
+      super.++(that)(bf)
+    }
+  }
+
   /** Creates a new queue with element added at the end
    *  of the old queue.
    *
@@ -108,7 +138,7 @@ sealed class Queue[+A] protected(protected val in: List[A], protected val out: L
   /** Returns a new queue with all elements provided by an `Iterable` object
    *  added at the end of the queue.
    *
-   *  The elements are prepended in the order they are given out by the
+   *  The elements are appended in the order they are given out by the
    *  iterator.
    *
    *  @param  iter        an iterable object

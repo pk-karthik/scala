@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2002-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 
@@ -71,7 +75,7 @@ import scala.io.StdIn
  *
  * @groupname assertions Assertions
  * @groupprio assertions 20
- * @groupdesc assertions These methods support program verfication and runtime correctness.
+ * @groupdesc assertions These methods support program verification and runtime correctness.
  *
  * @groupname console-output Console Output
  * @groupprio console-output 30
@@ -93,9 +97,9 @@ import scala.io.StdIn
  * @groupprio implicit-classes-any 70
  * @groupdesc implicit-classes-any These implicit classes add useful extension methods to every type.
  *
- * @groupname implicit-classes-char CharSequence Conversions
- * @groupprio implicit-classes-char 80
- * @groupdesc implicit-classes-char These implicit classes add CharSequence methods to Array[Char] and IndexedSeq[Char] instances.
+ * @groupname char-sequence-wrappers CharSequence Wrappers
+ * @groupprio char-sequence-wrappers 80
+ * @groupdesc char-sequence-wrappers Wrappers that implements CharSequence and were implicit classes.
  *
  * @groupname conversions-java-to-anyval Java to Scala
  * @groupprio conversions-java-to-anyval 90
@@ -326,7 +330,7 @@ object Predef extends LowPriorityImplicits with DeprecatedPredef {
     @inline def formatted(fmtstr: String): String = fmtstr format self
   }
 
-  // SI-8229 retaining the pre 2.11 name for source compatibility in shadowing this implicit
+  // scala/bug#8229 retaining the pre 2.11 name for source compatibility in shadowing this implicit
   /** @group implicit-classes-any */
   implicit final class any2stringadd[A](private val self: A) extends AnyVal {
     def +(other: String): String = String.valueOf(self) + other
@@ -337,21 +341,36 @@ object Predef extends LowPriorityImplicits with DeprecatedPredef {
     @deprecated("use Throwable#getStackTrace", "2.11.0") def getStackTraceString = self.getStackTrace().mkString("", EOL, EOL)
   }
 
-  /** @group implicit-classes-char */
-  implicit final class SeqCharSequence(val __sequenceOfChars: scala.collection.IndexedSeq[Char]) extends CharSequence {
+  // Sadly we have to do `@deprecatedName(null, "2.12.0")` because
+  // `@deprecatedName(since="2.12.0")` incurs a warning about
+  //   Usage of named or default arguments transformed this annotation constructor call into a block.
+  //   The corresponding AnnotationInfo will contain references to local values and default getters
+  //   instead of the actual argument trees
+  // and `@deprecatedName(Symbol("<none>"), "2.12.0")` crashes scalac with
+  //   scala.reflect.internal.Symbols$CyclicReference: illegal cyclic reference involving object Symbol
+  // in run/repl-no-imports-no-predef-power.scala.
+  /** @group char-sequence-wrappers */
+  final class SeqCharSequence(@deprecated("will be made private", "2.12.0") @deprecatedName(null, "2.12.0") val __sequenceOfChars: scala.collection.IndexedSeq[Char]) extends CharSequence {
     def length: Int                                     = __sequenceOfChars.length
     def charAt(index: Int): Char                        = __sequenceOfChars(index)
     def subSequence(start: Int, end: Int): CharSequence = new SeqCharSequence(__sequenceOfChars.slice(start, end))
     override def toString                               = __sequenceOfChars mkString ""
   }
 
-  /** @group implicit-classes-char */
-  implicit final class ArrayCharSequence(val __arrayOfChars: Array[Char]) extends CharSequence {
+  /** @group char-sequence-wrappers */
+  def SeqCharSequence(sequenceOfChars: scala.collection.IndexedSeq[Char]): SeqCharSequence = new SeqCharSequence(sequenceOfChars)
+
+  /** @group char-sequence-wrappers */
+  @deprecated("use `java.nio.CharBuffer.wrap` instead", "2.12.13")
+  final class ArrayCharSequence(@deprecated("will be made private", "2.12.0") @deprecatedName(null, "2.12.0") val __arrayOfChars: Array[Char]) extends CharSequence {
     def length: Int                                     = __arrayOfChars.length
     def charAt(index: Int): Char                        = __arrayOfChars(index)
     def subSequence(start: Int, end: Int): CharSequence = new runtime.ArrayCharSequence(__arrayOfChars, start, end)
     override def toString                               = __arrayOfChars mkString ""
   }
+
+  /** @group char-sequence-wrappers */
+  def ArrayCharSequence(arrayOfChars: Array[Char]): ArrayCharSequence = new ArrayCharSequence(arrayOfChars)
 
   implicit val StringCanBuildFrom: CanBuildFrom[String, Char, String] = new CanBuildFrom[String, Char, String] {
     def apply(from: String) = apply()
@@ -420,28 +439,16 @@ object Predef extends LowPriorityImplicits with DeprecatedPredef {
     case null              => null
   }).asInstanceOf[ArrayOps[T]]
 
-  // TODO: when we remove, these should we drop the underscores from the new generation below? (For source compatibility in case someone was shadowing these.)
-  @deprecated("For binary compatibility only. Release new partest and remove in M3.", "2.12.0-M2") def booleanArrayOps(xs: Array[Boolean]): ArrayOps[Boolean] = new ArrayOps.ofBoolean(xs)
-  @deprecated("For binary compatibility only. Release new partest and remove in M3.", "2.12.0-M2") def byteArrayOps(xs: Array[Byte]): ArrayOps[Byte]          = new ArrayOps.ofByte(xs)
-  @deprecated("For binary compatibility only. Release new partest and remove in M3.", "2.12.0-M2") def charArrayOps(xs: Array[Char]): ArrayOps[Char]          = new ArrayOps.ofChar(xs)
-  @deprecated("For binary compatibility only. Release new partest and remove in M3.", "2.12.0-M2") def doubleArrayOps(xs: Array[Double]): ArrayOps[Double]    = new ArrayOps.ofDouble(xs)
-  @deprecated("For binary compatibility only. Release new partest and remove in M3.", "2.12.0-M2") def floatArrayOps(xs: Array[Float]): ArrayOps[Float]       = new ArrayOps.ofFloat(xs)
-  @deprecated("For binary compatibility only. Release new partest and remove in M3.", "2.12.0-M2") def intArrayOps(xs: Array[Int]): ArrayOps[Int]             = new ArrayOps.ofInt(xs)
-  @deprecated("For binary compatibility only. Release new partest and remove in M3.", "2.12.0-M2") def longArrayOps(xs: Array[Long]): ArrayOps[Long]          = new ArrayOps.ofLong(xs)
-  @deprecated("For binary compatibility only. Release new partest and remove in M3.", "2.12.0-M2") def refArrayOps[T <: AnyRef](xs: Array[T]): ArrayOps[T]    = new ArrayOps.ofRef[T](xs)
-  @deprecated("For binary compatibility only. Release new partest and remove in M3.", "2.12.0-M2") def shortArrayOps(xs: Array[Short]): ArrayOps[Short]       = new ArrayOps.ofShort(xs)
-  @deprecated("For binary compatibility only. Release new partest and remove in M3.", "2.12.0-M2") def unitArrayOps(xs: Array[Unit]): ArrayOps[Unit]          = new ArrayOps.ofUnit(xs)
-
-  implicit def _booleanArrayOps(xs: Array[Boolean]): ArrayOps.ofBoolean   = new ArrayOps.ofBoolean(xs)
-  implicit def _byteArrayOps(xs: Array[Byte]): ArrayOps.ofByte            = new ArrayOps.ofByte(xs)
-  implicit def _charArrayOps(xs: Array[Char]): ArrayOps.ofChar            = new ArrayOps.ofChar(xs)
-  implicit def _doubleArrayOps(xs: Array[Double]): ArrayOps.ofDouble      = new ArrayOps.ofDouble(xs)
-  implicit def _floatArrayOps(xs: Array[Float]): ArrayOps.ofFloat         = new ArrayOps.ofFloat(xs)
-  implicit def _intArrayOps(xs: Array[Int]): ArrayOps.ofInt               = new ArrayOps.ofInt(xs)
-  implicit def _longArrayOps(xs: Array[Long]): ArrayOps.ofLong            = new ArrayOps.ofLong(xs)
-  implicit def _refArrayOps[T <: AnyRef](xs: Array[T]): ArrayOps.ofRef[T] = new ArrayOps.ofRef[T](xs)
-  implicit def _shortArrayOps(xs: Array[Short]): ArrayOps.ofShort         = new ArrayOps.ofShort(xs)
-  implicit def _unitArrayOps(xs: Array[Unit]): ArrayOps.ofUnit            = new ArrayOps.ofUnit(xs)
+  implicit def booleanArrayOps(xs: Array[Boolean]): ArrayOps.ofBoolean   = new ArrayOps.ofBoolean(xs)
+  implicit def byteArrayOps(xs: Array[Byte]): ArrayOps.ofByte            = new ArrayOps.ofByte(xs)
+  implicit def charArrayOps(xs: Array[Char]): ArrayOps.ofChar            = new ArrayOps.ofChar(xs)
+  implicit def doubleArrayOps(xs: Array[Double]): ArrayOps.ofDouble      = new ArrayOps.ofDouble(xs)
+  implicit def floatArrayOps(xs: Array[Float]): ArrayOps.ofFloat         = new ArrayOps.ofFloat(xs)
+  implicit def intArrayOps(xs: Array[Int]): ArrayOps.ofInt               = new ArrayOps.ofInt(xs)
+  implicit def longArrayOps(xs: Array[Long]): ArrayOps.ofLong            = new ArrayOps.ofLong(xs)
+  implicit def refArrayOps[T <: AnyRef](xs: Array[T]): ArrayOps.ofRef[T] = new ArrayOps.ofRef[T](xs)
+  implicit def shortArrayOps(xs: Array[Short]): ArrayOps.ofShort         = new ArrayOps.ofShort(xs)
+  implicit def unitArrayOps(xs: Array[Unit]): ArrayOps.ofUnit            = new ArrayOps.ofUnit(xs)
 
   // "Autoboxing" and "Autounboxing" ---------------------------------------------------
 
@@ -503,7 +510,7 @@ object Predef extends LowPriorityImplicits with DeprecatedPredef {
   sealed abstract class <:<[-From, +To] extends (From => To) with Serializable
   private[this] final val singleton_<:< = new <:<[Any,Any] { def apply(x: Any): Any = x }
   // The dollar prefix is to dodge accidental shadowing of this method
-  // by a user-defined method of the same name (SI-7788).
+  // by a user-defined method of the same name (scala/bug#7788).
   // The collections rely on this method.
   /** @group type-constraints */
   implicit def $conforms[A]: A <:< A = singleton_<:<.asInstanceOf[A <:< A]
@@ -547,7 +554,7 @@ private[scala] trait DeprecatedPredef {
   @deprecated("use `StringFormat`", "2.11.0") def any2stringfmt(x: Any): StringFormat[Any]                                  = new StringFormat(x)
   @deprecated("use `Throwable` directly", "2.11.0") def exceptionWrapper(exc: Throwable)                                    = new RichException(exc)
   @deprecated("use `SeqCharSequence`", "2.11.0") def seqToCharSequence(xs: scala.collection.IndexedSeq[Char]): CharSequence = new SeqCharSequence(xs)
-  @deprecated("use `ArrayCharSequence`", "2.11.0") def arrayToCharSequence(xs: Array[Char]): CharSequence                   = new ArrayCharSequence(xs)
+  @deprecated("use `java.nio.CharBuffer.wrap`", "2.11.0") def arrayToCharSequence(xs: Array[Char]): CharSequence = new ArrayCharSequence(xs)
 
   @deprecated("use the method in `scala.io.StdIn`", "2.11.0") def readLine(): String                 = StdIn.readLine()
   @deprecated("use the method in `scala.io.StdIn`", "2.11.0") def readLine(text: String, args: Any*) = StdIn.readLine(text, args: _*)
@@ -573,7 +580,7 @@ private[scala] trait DeprecatedPredef {
 *  @author  Martin Odersky
 *  @since 2.8
 */
-// SI-7335 Parents of Predef are defined in the same compilation unit to avoid
+// scala/bug#7335 Parents of Predef are defined in the same compilation unit to avoid
 // cyclic reference errors compiling the standard library *without* a previously
 // compiled copy on the classpath.
 private[scala] abstract class LowPriorityImplicits {

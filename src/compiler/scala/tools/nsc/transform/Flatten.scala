@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
@@ -57,8 +64,9 @@ abstract class Flatten extends InfoTransform {
   private val flattened = new TypeMap {
     def apply(tp: Type): Type = tp match {
       case TypeRef(pre, sym, args) if isFlattenablePrefix(pre) =>
-        assert(args.isEmpty && sym.enclosingTopLevelClass != NoSymbol, sym.ownerChain)
-        typeRef(sym.enclosingTopLevelClass.owner.thisType, sym, Nil)
+        val top = sym.enclosingTopLevelClass
+        assert(args.isEmpty && top != NoSymbol, sym.ownerChain)
+        typeRef(top.owner.thisType, sym, Nil)
       case ClassInfoType(parents, decls, clazz) =>
         var parents1 = parents
         val decls1 = scopeTransform(clazz) {
@@ -76,9 +84,9 @@ abstract class Flatten extends InfoTransform {
                 decls1 enter sym
                 if (sym.isModule) {
                   // In theory, we could assert(sym.isMethod), because nested, non-static modules are
-                  // transformed to methods (lateMETHOD flag added in RefChecks). But this requires
+                  // transformed to methods (METHOD flag added in UnCurry). But this requires
                   // forcing sym.info (see comment on isModuleNotMethod), which forces stub symbols
-                  // too eagerly (SI-8907).
+                  // too eagerly (scala/bug#8907).
 
                   // Note that module classes are not entered into the 'decls' of the ClassInfoType
                   // of the outer class, only the module symbols are. So the current loop does
@@ -123,10 +131,10 @@ abstract class Flatten extends InfoTransform {
           liftedDefs(tree.symbol.owner) = new ListBuffer
           super.transform(tree)
         case ClassDef(_, _, _, _) if tree.symbol.isNestedClass =>
-          // SI-5508 Ordering important. In `object O { trait A { trait B } }`, we want `B` to appear after `A` in
+          // scala/bug#5508 Ordering important. In `object O { trait A { trait B } }`, we want `B` to appear after `A` in
           //         the sequence of lifted trees in the enclosing package. Why does this matter? Currently, mixin
           //         needs to transform `A` first to a chance to create accessors for private[this] trait fields
-          //         *before* it transforms inner classes that refer to them. This also fixes SI-6231.
+          //         *before* it transforms inner classes that refer to them. This also fixes scala/bug#6231.
           //
           //         Alternative solutions
           //            - create the private[this] accessors eagerly in Namer (but would this cover private[this] fields

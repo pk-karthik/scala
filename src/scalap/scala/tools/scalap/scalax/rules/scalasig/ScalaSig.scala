@@ -1,10 +1,14 @@
-/*     ___ ____ ___   __   ___   ___
-**    / _// __// _ | / /  / _ | / _ \    Scala classfile decoder
-**  __\ \/ /__/ __ |/ /__/ __ |/ ___/    (c) 2003-2013, LAMP/EPFL
-** /____/\___/_/ |_/____/_/ |_/_/        http://scala-lang.org/
-**
-*/
-
+/*
+ * Scala classfile decoder (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala.tools.scalap
 package scalax
@@ -20,7 +24,7 @@ import scala.reflect.internal.pickling.ByteCodecs
 object ScalaSigParser {
   import Main.{ BYTES_VALUE, SCALA_LONG_SIG_ANNOTATION, SCALA_SIG, SCALA_SIG_ANNOTATION }
 
-  // TODO SI-9296 duplicated code, refactor
+  // TODO scala/bug#9296 duplicated code, refactor
   def scalaSigFromAnnotation(classFile: ClassFile): Option[ScalaSig] = {
     import classFile._
 
@@ -242,7 +246,9 @@ object ScalaSigEntryParsers extends RulesWithState with MemoisableRules {
       32 -~ longValue ^^ (java.lang.Double.longBitsToDouble),
       33 -~ nameRef,
       34 -^ null,
-      35 -~ typeRef)
+      35 -~ typeRef,
+      36 -~ symbolRef
+    )
 
   lazy val attributeInfo = 40 -~ symbolRef ~ typeRef ~ (constantRef?) ~ (nameRef ~ constantRef *) ^~~~^ AttributeInfo // sym_Ref info_Ref {constant_Ref} {nameRef constantRef}
   lazy val children = 41 -~ (nat*) ^^ Children //sym_Ref {sym_Ref}

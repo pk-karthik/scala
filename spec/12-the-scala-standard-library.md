@@ -10,14 +10,14 @@ The Scala standard library consists of the package `scala` with a
 number of classes and modules. Some of these classes are described in
 the following.
 
-![Class hierarchy of Scala](public/images/classhierarchy.pdf)
+![Class hierarchy of Scala](public/images/classhierarchy.png)
 
 ## Root Classes
 
 The root of this hierarchy is formed by class `Any`.
 Every class in a Scala execution environment inherits directly or
 indirectly from this class.  Class `Any` has two direct
-subclasses: `AnyRef` and AnyVal`.
+subclasses: `AnyRef` and `AnyVal`.
 
 The subclass `AnyRef` represents all values which are represented
 as objects in the underlying host system. Classes written in other languages
@@ -141,7 +141,7 @@ Byte - Short
 whereas `Double` is the highest-ranked.  Ranking does _not_
 imply a [conformance relationship](03-types.html#conformance); for
 instance `Int` is not a subtype of `Long`.  However, object
-[`Predef`](#the-predef-object) defines [views](07-implicit-parameters-and-views.html#views)
+[`Predef`](#the-predef-object) defines [views](07-implicits.html#views)
 from every numeric value type to all higher-ranked numeric value types.
 Therefore, lower-ranked types are implicitly converted to higher-ranked types
 when required by the [context](06-expressions.html#implicit-conversions).
@@ -467,7 +467,7 @@ val ys: Array[Object] = xs.asInstanceOf[Array[Object]] // OK
 
 The instantiation of an array with a polymorphic element type $T$ requires
 information about type $T$ at runtime.
-This information is synthesized by adding a [context bound](07-implicit-parameters-and-views.html#context-bounds-and-view-bounds)
+This information is synthesized by adding a [context bound](07-implicits.html#context-bounds-and-view-bounds)
 of `scala.reflect.ClassTag` to type $T$.
 An example is the
 following implementation of method `mkArray`, which creates
@@ -777,7 +777,7 @@ The available high-priority implicits include definitions falling into the follo
   * An implicit wrapper that adds `ensuring` methods
     with the following overloaded variants to type `Any`.
 
-    ```
+    ```scala
     def ensuring(cond: Boolean): A = { assert(cond); x }
     def ensuring(cond: Boolean, msg: Any): A = { assert(cond, msg); x }
     def ensuring(cond: A => Boolean): A = { assert(cond(x)); x }
@@ -787,7 +787,7 @@ The available high-priority implicits include definitions falling into the follo
   * An implicit wrapper that adds a `->` method with the following implementation
     to type `Any`.
 
-    ```
+    ```scala
     def -> [B](y: B): (A, B) = (x, y)
     ```
 
@@ -801,7 +801,7 @@ The available high-priority implicits include definitions falling into the follo
   * An implicit wrapper that adds `+` and `formatted` method with the following
     implementations to type `Any`.
 
-    ```
+    ```scala
     def +(other: String) = String.valueOf(self) + other
     def formatted(fmtstr: String): String = fmtstr format self
     ```
@@ -835,7 +835,7 @@ The available high-priority implicits include definitions falling into the follo
   * An implicit definition that generates instances of type `T <:< T`, for
     any type `T`. Here, `<:<` is a class defined as follows.
 
-    ```
+    ```scala
     sealed abstract class <:<[-From, +To] extends (From => To)
     ```
 

@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala
@@ -9,7 +16,7 @@ package internal
 package util
 
 /** @inheritdoc */
-class Position extends scala.reflect.api.Position with InternalPositionImpl with DeprecatedPosition {
+class Position extends macros.EmptyAttachments with api.Position with InternalPositionImpl with DeprecatedPosition {
   type Pos = Position
   def pos: Position = this
   def withPos(newPos: Position): macros.Attachments { type Pos = Position.this.Pos } = newPos
@@ -94,6 +101,8 @@ sealed abstract class UndefinedPosition extends Position {
   override def start           = fail("start")
   override def point           = fail("point")
   override def end             = fail("end")
+
+  override def samePointAs(that: Position) = false
 }
 
 private[util] trait InternalPositionImpl {
@@ -200,6 +209,10 @@ private[util] trait InternalPositionImpl {
     else "[NoPosition]"
   )
 
+  /* Same as `this.focus == that.focus`, but less allocation-y. */
+  def samePointAs(that: Position): Boolean =
+    that.isDefined && this.point == that.point && this.source.file == that.source.file
+
   private def asOffset(point: Int): Position = Position.offset(source, point)
   private def copyRange(source: SourceFile = source, start: Int = start, point: Int = point, end: Int = end): Position =
     Position.range(source, start, point, end)
@@ -222,7 +235,7 @@ private[util] trait InternalPositionImpl {
 private[util] trait DeprecatedPosition {
   self: Position =>
 
-  @deprecated("use `point`", "2.9.0") // Used in SBT 0.12.4
+  @deprecated("use `point`", "2.9.0") // Used in sbt 0.12.4
   def offset: Option[Int] = if (isDefined) Some(point) else None
 
   @deprecated("use `focus`", "2.11.0")

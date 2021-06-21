@@ -25,14 +25,26 @@ object Test extends App {
   }
 
   val code =
-    s"""|// Generated Code, validated by run/t6240-universe-code-gen.scala
+    s"""|/*
+        | * Scala (https://www.scala-lang.org)
+        | *
+        | * Copyright EPFL and Lightbend, Inc.
+        | *
+        | * Licensed under Apache License 2.0
+        | * (http://www.apache.org/licenses/LICENSE-2.0).
+        | *
+        | * See the NOTICE file distributed with this work for
+        | * additional information regarding copyright ownership.
+        | */
+        |
+        |// Generated Code, validated by run/t6240-universe-code-gen.scala
         |package scala.reflect
         |package runtime
         |
         |trait JavaUniverseForce { self: runtime.JavaUniverse  =>
         |  def force() {
         |    Literal(Constant(42)).duplicate
-        |    nme.flattenedName()
+        |    nme.flattenedName(NoSymbol, nme.NO_NAME)
         |    nme.raw
         |    WeakTypeTag
         |    TypeTag
@@ -54,7 +66,7 @@ object Test extends App {
         |
         |${forceCode("this", JavaUniverseTpe)}
         |${forceCode("definitions", DefinitionsModule.info)}
-        |${forceCode("refChecks", typeOf[scala.reflect.internal.transform.RefChecks])}
+        |
         |${forceCode("uncurry", typeOf[scala.reflect.internal.transform.UnCurry])}
         |${forceCode("erasure", typeOf[scala.reflect.internal.transform.Erasure])}
         |  }

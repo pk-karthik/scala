@@ -1,7 +1,15 @@
-/* NSC -- new Scala compiler
- * Copyright 2009-2013 Typesafe/Scala Solutions and LAMP/EPFL
- * @author Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
+
 package scala.tools.nsc
 package interactive
 
@@ -37,7 +45,7 @@ trait ContextTrees { self: Global =>
    *  the parent ContextTree.
    *
    *  This is required to always return a context which contains the all the imports
-   *  declared up to `pos` (see SI-7280 for a test case).
+   *  declared up to `pos` (see scala/bug#7280 for a test case).
    *
    *  Can return None if `pos` is before any valid Scala code.
    */
@@ -59,7 +67,8 @@ trait ContextTrees { self: Global =>
       c.retyping = false
       c
     }
-    locateContextTree(contexts, pos) map locateFinestContextTree map (ct => sanitizeContext(ct.context))
+    val tree = locateContextTree(contexts, pos)
+    tree map locateFinestContextTree map (ct => sanitizeContext(ct.context))
   }
 
   /** Returns the ContextTree containing `pos`, or the ContextTree positioned just before `pos`,
@@ -71,7 +80,7 @@ trait ContextTrees { self: Global =>
       // binary search on contexts, loop invar: lo <= hi, recursion metric: `hi - lo`
       @tailrec
       def loop(lo: Int, hi: Int, previousSibling: Option[ContextTree]): Option[ContextTree] = {
-        // [SI-8239] enforce loop invariant & ensure recursion metric decreases monotonically on every recursion
+        // [scala/bug#8239] enforce loop invariant & ensure recursion metric decreases monotonically on every recursion
         if (lo > hi) previousSibling
         else if (pos properlyPrecedes contexts(lo).pos)
           previousSibling
@@ -87,9 +96,9 @@ trait ContextTrees { self: Global =>
             // since (hi - ((lo + hi)/2 + 1)) - (hi - lo) = lo - ((lo + hi)/2 + 1) < 0
             // since 2*lo - lo - hi - 2 = lo - hi - 2 < 0
             // since lo < hi + 2
-            // can violate lo <= hi, hence the lo > hi check at the top [SI-8239]
+            // can violate lo <= hi, hence the lo > hi check at the top [scala/bug#8239]
             loop(mid + 1, hi, Some(contexts(mid)))
-          else if (lo != hi) // avoid looping forever (lo == hi violates the recursion metric) [SI-8239]
+          else if (lo != hi) // avoid looping forever (lo == hi violates the recursion metric) [scala/bug#8239]
             // recursion metric: ((lo + hi)/2) - lo < (hi - lo)
             // since ((lo + hi)/2) - lo - (hi - lo) = ((lo + hi)/2) - hi < 0
             // since 2 * (((lo + hi)/2) - hi) = lo - hi < 0 since lo < hi
@@ -107,10 +116,14 @@ trait ContextTrees { self: Global =>
    */
   def addContext(contexts: Contexts, context: Context): Unit = {
     val cpos = context.tree.pos
-    if (cpos.isTransparent)
-      for (t <- context.tree.children flatMap solidDescendants)
-        addContext(contexts, context, t.pos)
-    else
+    if (cpos.isTransparent) {
+      val traverser = new ChildSolidDescendantsCollector() {
+        override def traverseSolidChild(t: Tree): Unit = {
+          addContext(contexts, context, t.pos)
+        }
+      }
+      traverser.apply(context.tree)
+    } else
       addContext(contexts, context, cpos)
   }
 

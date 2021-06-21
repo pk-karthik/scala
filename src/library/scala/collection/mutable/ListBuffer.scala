@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -19,9 +23,8 @@ import java.io.{ObjectOutputStream, ObjectInputStream}
  *
  *  @author  Matthias Zenger
  *  @author  Martin Odersky
- *  @version 2.8
  *  @since   1
- *  @see [[http://docs.scala-lang.org/overviews/collections/concrete-mutable-collection-classes.html#list_buffers "Scala's Collection Library overview"]]
+ *  @see [[http://docs.scala-lang.org/overviews/collections/concrete-mutable-collection-classes.html#list-buffers "Scala's Collection Library overview"]]
  *  section on `List Buffers` for more information.
  *
  *  @tparam A    the type of this list buffer's elements.
@@ -63,8 +66,8 @@ final class ListBuffer[A]
    */
   private var start: List[A] = Nil
   private var last0: ::[A] = _
-  private var exported: Boolean = false
-  private var len = 0
+  private[this] var exported: Boolean = false
+  private[this] var len = 0
 
   protected def underlying: List[A] = start
 
@@ -119,6 +122,10 @@ final class ListBuffer[A]
   // Don't use the inherited size, which forwards to a List and is O(n).
   override def size = length
 
+  // Override with efficient implementations using the extra size information available to ListBuffer.
+  override def isEmpty: Boolean = len == 0
+  override def nonEmpty: Boolean = len > 0
+
   // Implementations of abstract methods in Buffer
 
   override def apply(n: Int): A =
@@ -136,7 +143,7 @@ final class ListBuffer[A]
   def update(n: Int, x: A) {
     // We check the bounds early, so that we don't trigger copying.
     if (n < 0 || n >= len) throw new IndexOutOfBoundsException(n.toString)
-    if (exported) copy()
+    ensureUnaliased()
     if (n == 0) {
       val newElem = new :: (x, start.tail)
       if (last0 eq start) {
@@ -164,15 +171,10 @@ final class ListBuffer[A]
    *  @return   this $coll.
    */
   def += (x: A): this.type = {
-    if (exported) copy()
-    if (isEmpty) {
-      last0 = new :: (x, Nil)
-      start = last0
-    } else {
-      val last1 = last0
-      last0 = new :: (x, Nil)
-      last1.tl = last0
-    }
+    ensureUnaliased()
+    val last1 = new ::[A](x, Nil)
+    if (len == 0) start = last1 else last0.tl = last1
+    last0 = last1
     len += 1
     this
   }
@@ -202,7 +204,7 @@ final class ListBuffer[A]
    *  @return   this $coll.
    */
   def +=: (x: A): this.type = {
-    if (exported) copy()
+    ensureUnaliased()
     val newElem = new :: (x, start)
     if (isEmpty) last0 = newElem
     start = newElem
@@ -221,7 +223,7 @@ final class ListBuffer[A]
   def insertAll(n: Int, seq: Traversable[A]) {
     // We check the bounds early, so that we don't trigger copying.
     if (n < 0 || n > len) throw new IndexOutOfBoundsException(n.toString)
-    if (exported) copy()
+    ensureUnaliased()
     var elems = seq.toList.reverse
     len += elems.length
     if (n == 0) {
@@ -269,7 +271,7 @@ final class ListBuffer[A]
     if (count < 0) throw new IllegalArgumentException("removing negative number of elements: " + count.toString)
     else if (count == 0) return  // Nothing to do
     if (n < 0 || n > len - count) throw new IndexOutOfBoundsException("at " + n.toString + " deleting " + count.toString)
-    if (exported) copy()
+    ensureUnaliased()
     val n1 = n max 0
     val count1 = count min (len - n1)
     if (n1 == 0) {
@@ -304,12 +306,17 @@ final class ListBuffer[A]
   def result: List[A] = toList
 
   /** Converts this buffer to a list. Takes constant time. The buffer is
-   *  copied lazily, the first time it is mutated.
+   *  copied lazily the first time it is mutated.
    */
   override def toList: List[A] = {
     exported = !isEmpty
     start
   }
+
+  // scala/bug#11869
+  override def toSeq: collection.Seq[A] = toList
+  override def toIterable: collection.Iterable[A] = toList
+  override def toStream: immutable.Stream[A] = toList.toStream // mind the laziness
 
 // New methods in ListBuffer
 
@@ -320,7 +327,7 @@ final class ListBuffer[A]
   def prependToList(xs: List[A]): List[A] = {
     if (isEmpty) xs
     else {
-      if (exported) copy()
+      ensureUnaliased()
       last0.tl = xs
       toList
     }
@@ -338,7 +345,7 @@ final class ListBuffer[A]
    */
   def remove(n: Int): A = {
     if (n < 0 || n >= len) throw new IndexOutOfBoundsException(n.toString())
-    if (exported) copy()
+    ensureUnaliased()
     var old = start.head
     if (n == 0) {
       start = start.tail
@@ -364,7 +371,7 @@ final class ListBuffer[A]
    *  @return      this $coll.
    */
   override def -= (elem: A): this.type = {
-    if (exported) copy()
+    ensureUnaliased()
     if (isEmpty) {}
     else if (start.head == elem) {
       start = start.tail
@@ -385,6 +392,25 @@ final class ListBuffer[A]
     }
     this
   }
+
+  /** Selects the last element.
+   *
+   *  Runs in constant time.
+   *
+   *  @return the last element of this buffer.
+   *  @throws NoSuchElementException if this buffer is empty.
+   */
+  override def last: A =
+    if (last0 eq null) throw new NoSuchElementException("last of empty ListBuffer")
+    else last0.head
+
+  /** Optionally selects the last element.
+   *
+   *  Runs in constant time.
+   *
+   *  @return `Some` of the last element of this buffer if the buffer is nonempty, `None` if it is empty.
+   */
+  override def lastOption: Option[A] = if (last0 eq null) None else Some(last0.head)
 
   /** Returns an iterator over this `ListBuffer`.  The iterator will reflect
    *  changes made to the underlying `ListBuffer` beyond the next element;
@@ -413,6 +439,9 @@ final class ListBuffer[A]
   }
 
   // Private methods
+  private def ensureUnaliased() = {
+    if (exported) copy()
+  }
 
   /** Copy contents of this buffer */
   private def copy() {

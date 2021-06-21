@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala
 package collection
 package mutable
@@ -28,7 +40,6 @@ object TreeMap extends MutableSortedMapFactory[TreeMap] {
  * @tparam B the type of the values associated with the keys.
  *
  * @author Rui Gonçalves
- * @version 2.12
  * @since 2.12
  *
  * @define Coll mutable.TreeMap
@@ -179,6 +190,9 @@ sealed class TreeMap[A, B] private (tree: RB.Tree[A, B])(implicit val ordering: 
       iterator.foreach { case (key, value) => update(key, f(key, value)) }
       this
     }
+
+    override def valuesIterator: Iterator[B] = RB.valuesIterator(tree, from, until)
+    override def keysIterator: Iterator[A] = RB.keysIterator(tree, from, until)
 
     override def clone() = super.clone().rangeImpl(from, until)
   }

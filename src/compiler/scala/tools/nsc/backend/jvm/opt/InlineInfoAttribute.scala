@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2014 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
@@ -51,7 +58,6 @@ case class InlineInfoAttribute(inlineInfo: InlineInfo) extends Attribute(InlineI
     if (inlineInfo.isEffectivelyFinal)      flags |= 1
     //                                      flags |= 2 // no longer written
     if (inlineInfo.sam.isDefined)           flags |= 4
-    if (inlineInfo.lateInterfaces.nonEmpty) flags |= 8
     result.putByte(flags)
 
     for (samNameDesc <- inlineInfo.sam) {
@@ -61,13 +67,10 @@ case class InlineInfoAttribute(inlineInfo: InlineInfo) extends Attribute(InlineI
     }
 
     // The method count fits in a short (the methods_count in a classfile is also a short)
-    result.putShort(inlineInfo.methodInfos.size)
+    result.putShort(inlineInfo.methodInfosSorted.size)
 
     // Sort the methodInfos for stability of classfiles
-    for ((nameAndType, info) <- inlineInfo.methodInfos.toList.sortBy(_._1)) {
-      val (name, desc) = nameAndType.span(_ != '(')
-      // Name and desc are added separately because a NameAndType entry also stores them separately.
-      // This makes sure that we use the existing constant pool entries for the method.
+    for (((name, desc), info) <- inlineInfo.methodInfosSorted) {
       result.putShort(cw.newUTF8(name))
       result.putShort(cw.newUTF8(desc))
 
@@ -78,15 +81,11 @@ case class InlineInfoAttribute(inlineInfo: InlineInfo) extends Attribute(InlineI
       if (info.annotatedNoInline) inlineInfo |= 8
       result.putByte(inlineInfo)
     }
-
-    result.putShort(inlineInfo.lateInterfaces.length)
-    for (i <- inlineInfo.lateInterfaces) result.putShort(cw.newUTF8(i))
-
     result
   }
 
   /**
-   * De-serialize the attribute into an InlineInfo. The attribute starts at cr.b(off), but we don't
+   * Deserialize the attribute into an InlineInfo. The attribute starts at cr.b(off), but we don't
    * need to access that array directly, we can use the `read` methods provided by the ClassReader.
    *
    * `buf` is a pre-allocated character array that is guaranteed to be long enough to hold any
@@ -105,7 +104,6 @@ case class InlineInfoAttribute(inlineInfo: InlineInfo) extends Attribute(InlineI
       val isFinal           = (flags & 1) != 0
       val hasSelf           = (flags & 2) != 0
       val hasSam            = (flags & 4) != 0
-      val hasLateInterfaces = (flags & 8) != 0
 
       if (hasSelf) nextUTF8() // no longer used
 
@@ -125,16 +123,10 @@ case class InlineInfoAttribute(inlineInfo: InlineInfo) extends Attribute(InlineI
         //             = (inlineInfo & 2) != 0 // no longer used
         val isInline   = (inlineInfo & 4) != 0
         val isNoInline = (inlineInfo & 8) != 0
-        (name + desc, MethodInlineInfo(isFinal, isInline, isNoInline))
+        ((name, desc), MethodInlineInfo(isFinal, isInline, isNoInline))
       }).toMap
 
-      val lateInterfaces = if (!hasLateInterfaces) Nil else {
-        val numLateInterfaces = nextShort()
-        (0 until numLateInterfaces).map(_ => nextUTF8())
-      }
-
       val info = InlineInfo(isFinal, sam, infos, None)
-      info.lateInterfaces ++= lateInterfaces
       InlineInfoAttribute(info)
     } else {
       val msg = UnknownScalaInlineInfoVersion(cr.getClassName, version)
@@ -161,8 +153,6 @@ object InlineInfoAttribute {
    *   [u2]  name (reference)
    *   [u2]  descriptor (reference)
    *   [u1]  isFinal (<< 0), traitMethodWithStaticImplementation (<< 1), hasInlineAnnotation (<< 2), hasNoInlineAnnotation (<< 3)
-   * [u2]?   numLateInterfaces
-   *   [u2]  lateInterface (reference)
    */
   final val VERSION: Byte = 1
 
@@ -170,7 +160,7 @@ object InlineInfoAttribute {
 }
 
 /**
- * In order to instruct the ASM framework to de-serialize the ScalaInlineInfo attribute, we need
+ * In order to instruct the ASM framework to deserialize the ScalaInlineInfo attribute, we need
  * to pass a prototype instance when running the class reader.
  */
 object InlineInfoAttributePrototype extends InlineInfoAttribute(InlineInfo(false, null, null, null))

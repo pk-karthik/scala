@@ -105,6 +105,54 @@ class IteratorTest {
     assertFalse(r3 contains 5)
     assertTrue(r3.isEmpty)
   }
+  @Test def rangeOverflow(): Unit = {
+    val step = 100000000
+    val numExpectedSamples = 22
+    def createIterator = Iterator.range(0, Int.MaxValue, step)
+    assertEquals(createIterator.size, numExpectedSamples)
+    assertEquals(createIterator.min, 0)
+    assertEquals(createIterator.max, (numExpectedSamples - 1) * step)
+  }
+  @Test def rangeOverflow2() : Unit = {
+    val step = (Int.MaxValue / 2) + 1
+    val numExpectedSamples = 2
+    def createIterator = Iterator.range(0, Int.MaxValue, step)
+    assertEquals(createIterator.size, numExpectedSamples)
+    assertEquals(createIterator.min, 0)
+    assertEquals(createIterator.max, step)
+  }
+  @Test def rangeOverflow3() : Unit = {
+    val step = 1000000000
+    val numExpectedSamples = 5
+    def createIterator = Iterator.range(Int.MinValue +10,Int.MaxValue - 10,step)
+    assertEquals(createIterator.size, numExpectedSamples)
+    assertEquals(createIterator.min, Int.MinValue + 10)
+    assertEquals(createIterator.max, Int.MinValue + 10 + (numExpectedSamples - 1) * step)
+  }
+  @Test def rangeUnderflow() : Unit = {
+    val step = -100000000
+    val numExpectedSamples = 22
+    def createIterator = Iterator.range(0, -Int.MaxValue, step)
+    assertEquals(createIterator.size, numExpectedSamples)
+    assertEquals(createIterator.min, (numExpectedSamples - 1) * step)
+    assertEquals(createIterator.max, 0)
+  }
+  @Test def rangeUnderflow2() : Unit = {
+    val step = -(Int.MaxValue / 2) - 1
+    val numExpectedSamples = 2
+    def createIterator = Iterator.range(0, -Int.MaxValue, step)
+    assertEquals(createIterator.size, numExpectedSamples)
+    assertEquals(createIterator.min, step)
+    assertEquals(createIterator.max, 0)
+  }
+  @Test def rangeUnderflow3() : Unit = {
+    val step = -1000000000
+    val numExpectedSamples = 5
+    def createIterator = Iterator.range(Int.MaxValue -10,Int.MinValue + 10,step)
+    assertEquals(createIterator.size, numExpectedSamples)
+    assertEquals(createIterator.min, Int.MaxValue - 10 + (numExpectedSamples - 1) * step)
+    assertEquals(createIterator.max, Int.MaxValue - 10)
+  }
   @Test def take(): Unit = {
     assertEquals(10, (Iterator from 0 take 10).size)
   }
@@ -155,7 +203,7 @@ class IteratorTest {
     //Iterator.iterate((1 to 5).toList)(_.tail).takeWhile(_.nonEmpty).toList  // suffices
     Iterator.iterate((1 to 5).toList)(_.tail).takeWhile(_.nonEmpty).map(_.head).toList
   }
-  // SI-3516
+  // scala/bug#3516
   @Test def toStreamIsSufficientlyLazy(): Unit = {
     val results = collection.mutable.ListBuffer.empty[Int]
     def mkIterator = (1 to 5).iterator map (x => { results += x ; x })
@@ -168,7 +216,7 @@ class IteratorTest {
     results += (Stream from 1).toIterator.drop(10).toStream.drop(10).toIterator.next()
     assertSameElements(List(1,1,21), results)
   }
-  // SI-8552
+  // scala/bug#8552
   @Test def indexOfShouldWorkForTwoParams(): Unit = {
     assertEquals(1, List(1, 2, 3).iterator.indexOf(2, 0))
     assertEquals(-1, List(5 -> 0).iterator.indexOf(5, 0))
@@ -176,7 +224,7 @@ class IteratorTest {
     assertEquals(-1, List(5 -> 0, 9 -> 2, 0 -> 3).iterator.indexOf(9, 2))
     assertEquals(1, List(5 -> 0, 9 -> 2, 0 -> 3).iterator.indexOf(9 -> 2))
   }
-  // SI-9332
+  // scala/bug#9332
   @Test def spanExhaustsLeadingIterator(): Unit = {
     def it = Iterator.iterate(0)(_ + 1).take(6)
     val (x, y) = it.span(_ != 1)
@@ -186,7 +234,13 @@ class IteratorTest {
     assertEquals(1, y.next)
     assertFalse(x.hasNext)   // was true, after advancing underlying iterator
   }
-  // SI-9623
+  // scala/bug#9913
+  @Test def `span leading iterator finishes at state -1`(): Unit = {
+    val (yes, no) = Iterator(1, 2, 3).span(_ => true)
+    assertFalse(no.hasNext)
+    assertTrue(yes.hasNext)
+  }
+  // scala/bug#9623
   @Test def noExcessiveHasNextInJoinIterator: Unit = {
     var counter = 0
     val exp = List(1,2,3,1,2,3)
@@ -213,5 +267,154 @@ class IteratorTest {
     (Iterator.empty ++ it ++ it).foreach(res += _)
     assertSameElements(exp, res)
     assertEquals(8, counter) // was 14
+  }
+  // scala/bug#9691
+  @Test def bufferedHeadOptionReturnsValueWithHeadOrNone(): Unit = {
+    // Checks BufferedIterator returns Some(value) when there is a value
+    val validHeadOption = List(1,2,3).iterator.buffered.headOption
+    assertEquals(Some(1), validHeadOption)
+    // Checks BufferedIterator returns None when there is no value
+    val invalidHeadOption = List(1,2,3).iterator.drop(10).buffered.headOption
+    assertEquals(None: Option[Int], invalidHeadOption)
+    // Checks BufferedIterator returns Some(value) in the last position with a value
+    val validHeadOptionAtTail = List(1,2,3).iterator.drop(2).buffered.headOption
+    assertEquals(Some(3), validHeadOptionAtTail)
+    // Checks BufferedIterator returns None at the first position without a value
+    val invalidHeadOptionOnePastTail = List(1,2,3).iterator.drop(3).buffered.headOption
+    assertEquals(None, invalidHeadOptionOnePastTail)
+    // Checks BufferedIterator returns Some(null) if the next value is null.
+    val nullHandingList = List(null, "yellow").iterator.buffered.headOption
+    assertEquals(Some(null), nullHandingList)
+    // Checks that BufferedIterator is idempotent. That the head is not
+    // changed by its invocation, nor the headOption by the next call to head.
+    val it = List(1,2,3).iterator.buffered
+    val v1 = it.head
+    val v2 = it.headOption
+    val v3 = it.head
+    val v4 = it.headOption
+    assertEquals(v1, v3)
+    assertEquals(v2, v4)
+    assertEquals(Some(v1), v2)
+  }
+  // scala/bug#10709
+  @Test def `scan is lazy enough`(): Unit = {
+    val results = collection.mutable.ListBuffer.empty[Int]
+    val it = new AbstractIterator[Int] {
+      var cur = 1
+      val max = 3
+      override def hasNext = {
+        results += -cur
+        cur < max
+      }
+      override def next() = {
+        val res = cur
+        results += -res
+        cur += 1
+        res
+      }
+    }
+    val xy = it.scanLeft(10)((sum, x) => {
+      results += -(sum + x)
+      sum + x
+    })
+    val scan = collection.mutable.ListBuffer.empty[Int]
+    for (i <- xy) {
+      scan += i
+      results += i
+    }
+    assertSameElements(List(10,11,13), scan)
+    assertSameElements(List(10,-1,-1,-11,11,-2,-2,-13,13,-3), results)
+  }
+  // scala/bug#11153
+  @Test def handleExhaustedConcatSubIterator(): Unit = {
+    val it = Iterator.empty ++ Iterator.empty
+    // exhaust and clear internal state
+    it.hasNext
+    val concat = Iterator.empty ++ it
+    while (concat.hasNext) concat.next()
+  }
+  @Test def `scan trailing avoids extra hasNext`(): Unit = {
+    val it = new AbstractIterator[Int] {
+      var i = 0
+      var checkedAt = -1
+      def hasNext =
+        if (checkedAt == i) false
+        else {
+          checkedAt = i
+          true
+        }
+      def next() = {
+        i += 1
+        i
+      }
+    }
+    val (lo, hi) = it.span(_ < 3)
+    assertTrue(lo.hasNext)
+    assertEquals(1, lo.next())
+    assertTrue(hi.hasNext)
+    assertEquals(3, hi.next())
+    assertTrue(hi.hasNext)
+    assertTrue(hi.hasNext) // no longer delegated
+    assertTrue(hi.hasNext)
+  }
+  @Test def `flatMap is memory efficient in previous element`(): Unit = {
+    import java.lang.ref._
+    // Array.iterator holds onto array reference; by contrast, iterating over List walks tail.
+    // Avoid reaching seq1 through test class. Avoid testing Array.iterator.
+    class C extends Iterable[String] {
+      val ss = Array("first", "second")
+
+      def iterator = new Iterator[String] {
+        var i = 0
+
+        def hasNext = i < ss.length
+
+        def next() = if (hasNext) { i += 1; ss(i-1) } else Iterator.empty.next()
+      }
+
+      def apply(i: Int) = ss(i)
+    }
+    val seq1 = new WeakReference(new C)
+    val seq2 = List("third")
+    val it0: Iterator[Int] = Iterator(1, 2)
+    lazy val it: Iterator[String] = it0.flatMap {
+      case 1 => Option(seq1.get).getOrElse(Nil)
+      case 2 => check(); seq2
+      case _ => ???
+    }
+
+    def noop = ()
+
+    def check() = assertNotReachable(seq1.get, it)(noop)
+
+    def checkHasElement() = assertNotReachable(Option(seq1.get).map(_.apply(1)).orNull, it)(noop)
+
+    assert(it.hasNext)
+    assertEquals("first", it.next())
+
+    // verify that we're in the middle of seq1
+    assertThrows[AssertionError](checkHasElement(), _.contains("held reference"))
+    assertThrows[AssertionError](check(), _.contains("held reference"))
+    assert(it.hasNext)
+    assertEquals("second", it.next())
+
+    assert(it.hasNext)
+    assertNotReachable(seq1.get, it) {
+      assertEquals("third", it.next())
+    }
+    assert(!it.hasNext)
+  }
+  @Test def `t11807 multiply-merged concat iterators`(): Unit = {
+    val it0 = Iterator(1)
+    val it1 = Iterator(2) ++ Iterator(3)
+    val it2 = it0 ++ it1
+
+    assertEquals(1, it2.next())
+    assertTrue(it2.hasNext)
+
+    val it3 = it2 ++ Iterator(4)
+    assertEquals(2, it3.next())
+    assertEquals(3, it3.next())
+    assertTrue("concatted tail of it3 should be next", it3.hasNext)
   }
 }

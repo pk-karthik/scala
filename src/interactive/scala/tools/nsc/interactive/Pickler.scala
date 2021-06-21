@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala.tools.nsc.interactive
 
 import Lexer._
@@ -38,7 +50,7 @@ abstract class Pickler[T] {
   /** Reads value from pickled form.
    *
    *  @param  rd   the lexer from which lexemes are read
-   *  @return An `UnpickleSuccess value if the current input corresponds to the
+   *  @return An `UnpickleSuccess` value if the current input corresponds to the
    *          kind of value that is unpickled by the current subclass of `Pickler`,
    *          an `UnpickleFailure` value otherwise.
    *  @throws  `Lexer.MalformedInput` if input is invalid, or if
@@ -235,7 +247,7 @@ object Pickler {
       .cond (x eq _.asInstanceOf[AnyRef])
 
   /** A pickler the handles instances of classes that have an empty constructor.
-   *  It represents than as `$new ( <name of class> )`.
+   *  It represents than as `\$new ( <name of class> )`.
    *  When unpickling, a new instance of the class is created using the empty
    *  constructor of the class via `Class.forName(<name of class>).newInstance()`.
    */

@@ -1,20 +1,26 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
 
 import generic._
-import mutable.{ Builder }
-import scala.annotation.migration
-import scala.annotation.unchecked.{ uncheckedVariance => uV }
+import mutable.Builder
+import scala.annotation.{migration, tailrec}
+import scala.annotation.unchecked.{uncheckedVariance => uV}
 import parallel.ParIterable
+import scala.collection.immutable.{::, List, Nil}
 import scala.language.higherKinds
+import scala.runtime.AbstractFunction0
 
 /** A template trait for traversable collections of type `Traversable[A]`.
  *
@@ -58,7 +64,6 @@ import scala.language.higherKinds
  *  order they were inserted into the `HashMap`.
  *
  *  @author Martin Odersky
- *  @version 2.8
  *  @since   2.8
  *  @tparam A    the element type of the collection
  *  @tparam Repr the type of the actual collection containing the elements.
@@ -141,11 +146,35 @@ trait TraversableLike[+A, +Repr] extends Any
   def hasDefiniteSize = true
 
   def ++[B >: A, That](that: GenTraversableOnce[B])(implicit bf: CanBuildFrom[Repr, B, That]): That = {
-    val b = bf(repr)
-    if (that.isInstanceOf[IndexedSeqLike[_, _]]) b.sizeHint(this, that.seq.size)
-    b ++= thisCollection
-    b ++= that.seq
-    b.result
+    def defaultPlusPlus: That = {
+      val b = bf(repr)
+      if (that.isInstanceOf[IndexedSeqLike[_, _]]) b.sizeHint(this, that.seq.size)
+      b ++= thisCollection
+      b ++= that.seq
+      b.result
+    }
+
+    if (bf eq immutable.Set.canBuildFrom) {
+      this match {
+        case s: immutable.Set[A] if that.isInstanceOf[GenSet[A]] =>
+          (s union that.asInstanceOf[GenSet[A]]).asInstanceOf[That]
+        case _ => defaultPlusPlus
+      }
+    } else if (bf eq immutable.HashSet.canBuildFrom) {
+      this match {
+        case s: immutable.HashSet[A] if that.isInstanceOf[GenSet[A]] =>
+          (s union that.asInstanceOf[GenSet[A]]).asInstanceOf[That]
+        case _ => defaultPlusPlus
+      }
+    } else {
+      this match {
+        case thisTS: collection.immutable.TreeSet[A] =>
+          thisTS.addAllImpl[B, That](that)(bf.asInstanceOf[CanBuildFrom[immutable.TreeSet[A], B, That]])
+        case _ =>
+          defaultPlusPlus
+      }
+    }
+
   }
 
   /** As with `++`, returns a new collection containing the elements from the left operand followed by the
@@ -181,11 +210,34 @@ trait TraversableLike[+A, +Repr] extends Any
    *                  followed by all elements of `that`.
    */
   def ++:[B >: A, That](that: TraversableOnce[B])(implicit bf: CanBuildFrom[Repr, B, That]): That = {
-    val b = bf(repr)
-    if (that.isInstanceOf[IndexedSeqLike[_, _]]) b.sizeHint(this, that.size)
-    b ++= that
-    b ++= thisCollection
-    b.result
+    def defaultPlusPlus: That = {
+      val b = bf(repr)
+      if (that.isInstanceOf[IndexedSeqLike[_, _]]) b.sizeHint(this, that.size)
+      b ++= that
+      b ++= thisCollection
+      b.result
+    }
+    if (bf eq immutable.Set.canBuildFrom) {
+      this match {
+        case s: immutable.Set[A] if that.isInstanceOf[GenSet[A]] =>
+          (s union that.asInstanceOf[GenSet[A]]).asInstanceOf[That]
+        case _ => defaultPlusPlus
+      }
+    } else if (bf eq immutable.HashSet.canBuildFrom) {
+      this match {
+        case s: immutable.HashSet[A] if that.isInstanceOf[GenSet[A]] =>
+          (s union that.asInstanceOf[GenSet[A]]).asInstanceOf[That]
+        case _ => defaultPlusPlus
+      }
+    } else {
+      this match {
+        case thisTS: immutable.TreeSet[A] =>
+          thisTS.addAllImpl[B, That](that)(bf.asInstanceOf[CanBuildFrom[immutable.TreeSet[A], B, That]])
+        case _ =>
+          defaultPlusPlus
+      }
+    }
+
   }
 
   /** As with `++`, returns a new collection containing the elements from the
@@ -243,11 +295,95 @@ trait TraversableLike[+A, +Repr] extends Any
   }
 
   private[scala] def filterImpl(p: A => Boolean, isFlipped: Boolean): Repr = {
-    val b = newBuilder
-    for (x <- this)
-      if (p(x) != isFlipped) b += x
+    this match {
+      case as: List[A] =>
+        filterImplList(as, p, isFlipped).asInstanceOf[Repr]
+      case _ =>
+        val b = newBuilder
+        for (x <- this)
+          if (p(x) != isFlipped) b += x
 
-    b.result
+        b.result
+    }
+  }
+
+  private[this] def filterImplList[A](self: List[A], p: A => Boolean, isFlipped: Boolean): List[A] = {
+
+    // everything seen so far so far is not included
+    @tailrec def noneIn(l: List[A]): List[A] = {
+      if (l.isEmpty)
+        Nil
+      else {
+        val h = l.head
+        val t = l.tail
+        if (p(h) != isFlipped)
+          allIn(l, t)
+        else
+          noneIn(t)
+      }
+    }
+
+    // everything from 'start' is included, if everything from this point is in we can return the origin
+    // start otherwise if we discover an element that is out we must create a new partial list.
+    @tailrec def allIn(start: List[A], remaining: List[A]): List[A] = {
+      if (remaining.isEmpty)
+        start
+      else {
+        val x = remaining.head
+        if (p(x) != isFlipped)
+          allIn(start, remaining.tail)
+        else
+          partialFill(start, remaining)
+      }
+    }
+
+    // we have seen elements that should be included then one that should be excluded, start building
+    def partialFill(origStart: List[A], firstMiss: List[A]): List[A] = {
+      val newHead = new ::(origStart.head, Nil)
+      var toProcess = origStart.tail
+      var currentLast = newHead
+
+      // we know that all elements are :: until at least firstMiss.tail
+      while (!(toProcess eq firstMiss)) {
+        val newElem = new ::(toProcess.head, Nil)
+        currentLast.tl = newElem
+        currentLast = newElem
+        toProcess = toProcess.tail
+      }
+
+      // at this point newHead points to a list which is a duplicate of all the 'in' elements up to the first miss.
+      // currentLast is the last element in that list.
+
+      // now we are going to try and share as much of the tail as we can, only moving elements across when we have to.
+      var next = firstMiss.tail
+      var nextToCopy = next // the next element we would need to copy to our list if we cant share.
+      while (!next.isEmpty) {
+        // generally recommended is next.isNonEmpty but this incurs an extra method call.
+        val head: A = next.head
+        if (p(head) != isFlipped) {
+          next = next.tail
+        } else {
+          // its not a match - do we have outstanding elements?
+          while (!(nextToCopy eq next)) {
+            val newElem = new ::(nextToCopy.head, Nil)
+            currentLast.tl = newElem
+            currentLast = newElem
+            nextToCopy = nextToCopy.tail
+          }
+          nextToCopy = next.tail
+          next = next.tail
+        }
+      }
+
+      // we have remaining elements - they are unchanged attach them to the end
+      if (!nextToCopy.isEmpty)
+        currentLast.tl = nextToCopy
+
+      newHead
+    }
+
+    val result = noneIn(self)
+    result
   }
 
   /** Selects all elements of this $coll which satisfy a predicate.
@@ -316,17 +452,77 @@ trait TraversableLike[+A, +Repr] extends Any
   }
 
   def groupBy[K](f: A => K): immutable.Map[K, Repr] = {
-    val m = mutable.Map.empty[K, Builder[A, Repr]]
-    for (elem <- this) {
-      val key = f(elem)
-      val bldr = m.getOrElseUpdate(key, newBuilder)
-      bldr += elem
-    }
-    val b = immutable.Map.newBuilder[K, Repr]
-    for ((k, v) <- m)
-      b += ((k, v.result))
+    object grouper extends AbstractFunction0[Builder[A, Repr]] with Function1[A, Unit] {
+      var k0, k1, k2, k3: K = null.asInstanceOf[K]
+      var v0, v1, v2, v3    = (null : Builder[A, Repr])
+      var size              = 0
+      var hashMap: mutable.HashMap[K, Builder[A, Repr]] = null
+      override def apply(): mutable.Builder[A, Repr] = {
+        size += 1
+        newBuilder
+      }
+      def apply(elem: A): Unit = {
+        val key  = f(elem)
+        val bldr = builderFor(key)
+        bldr += elem
+      }
+      def builderFor(key: K): Builder[A, Repr] =
+        size match {
+          case 0 =>
+            k0 = key
+            v0 = apply()
+            v0
+          case 1 =>
+            if (k0 == key) v0
+            else {k1 = key; v1 = apply(); v1 }
+          case 2 =>
+            if (k0 == key) v0
+            else if (k1 == key) v1
+            else {k2 = key; v2 = apply(); v2 }
+          case 3 =>
+            if (k0 == key) v0
+            else if (k1 == key) v1
+            else if (k2 == key) v2
+            else {k3 = key; v3 = apply(); v3 }
+          case 4 =>
+            if (k0 == key) v0
+            else if (k1 == key) v1
+            else if (k2 == key) v2
+            else if (k3 == key) v3
+            else {
+              hashMap = new mutable.HashMap
+              hashMap(k0) = v0
+              hashMap(k1) = v1
+              hashMap(k2) = v2
+              hashMap(k3) = v3
+              val bldr = apply()
+              hashMap(key) = bldr
+              bldr
+            }
+          case _ =>
+            hashMap.getOrElseUpdate(key, apply())
+        }
 
-    b.result
+      def result(): immutable.Map[K, Repr] =
+        size match {
+          case 0 => immutable.Map.empty
+          case 1 => new immutable.Map.Map1(k0, v0.result())
+          case 2 => new immutable.Map.Map2(k0, v0.result(), k1, v1.result())
+          case 3 => new immutable.Map.Map3(k0, v0.result(), k1, v1.result(), k2, v2.result())
+          case 4 => new immutable.Map.Map4(k0, v0.result(), k1, v1.result(), k2, v2.result(), k3, v3.result())
+          case _ =>
+            val it = hashMap.entriesIterator0
+            val m1 = immutable.HashMap.newBuilder[K, Repr]
+            while (it.hasNext) {
+              val entry = it.next()
+              m1.+=((entry.key, entry.value.result()))
+            }
+            m1.result()
+        }
+
+    }
+    this.seq.foreach(grouper)
+    grouper.result()
   }
 
   def forall(p: A => Boolean): Boolean = {
@@ -415,7 +611,7 @@ trait TraversableLike[+A, +Repr] extends Any
    *  $orderDependent
    *  @return  a $coll consisting of all elements of this $coll
    *           except the first one.
-   *  @throws `UnsupportedOperationException` if the $coll is empty.
+   *  @throws java.lang.UnsupportedOperationException if the $coll is empty.
    */
   override def tail: Repr = {
     if (isEmpty) throw new UnsupportedOperationException("empty.tail")
@@ -605,13 +801,69 @@ trait TraversableLike[+A, +Repr] extends Any
    *           applied to this $coll. By default the string prefix is the
    *           simple name of the collection class $coll.
    */
-  def stringPrefix : String = {
-    var string = repr.getClass.getName
-    val idx1 = string.lastIndexOf('.' : Int)
-    if (idx1 != -1) string = string.substring(idx1 + 1)
-    val idx2 = string.indexOf('$')
-    if (idx2 != -1) string = string.substring(0, idx2)
-    string
+  def stringPrefix: String = {
+    /* This method is written in a style that avoids calling `String.split()`
+     * as well as methods of java.lang.Character that require the Unicode
+     * database information. This is mostly important for Scala.js, so that
+     * using the collection library does automatically bring java.util.regex.*
+     * and the Unicode database in the generated code.
+     *
+     * This algorithm has the additional benefit that it won't allocate
+     * anything except the result String in the common case, where the class
+     * is not an inner class (i.e., when the result contains no '.').
+     */
+    val fqn = repr.getClass.getName
+    var pos: Int = fqn.length - 1
+
+    // Skip trailing $'s
+    while (pos != -1 && fqn.charAt(pos) == '$') {
+      pos -= 1
+    }
+    if (pos == -1 || fqn.charAt(pos) == '.') {
+      return ""
+    }
+
+    var result: String = ""
+    while (true) {
+      // Invariant: if we enter the loop, there is a non-empty part
+
+      // Look for the beginning of the part, remembering where was the last non-digit
+      val partEnd = pos + 1
+      while (pos != -1 && fqn.charAt(pos) <= '9' && fqn.charAt(pos) >= '0') {
+        pos -= 1
+      }
+      val lastNonDigit = pos
+      while (pos != -1 && fqn.charAt(pos) != '$' && fqn.charAt(pos) != '.') {
+        pos -= 1
+      }
+      val partStart = pos + 1
+
+      // A non-last part which contains only digits marks a method-local part -> drop the prefix
+      if (pos == lastNonDigit && partEnd != fqn.length) {
+        return result
+      }
+
+      // Skip to the next part, and determine whether we are the end
+      while (pos != -1 && fqn.charAt(pos) == '$') {
+        pos -= 1
+      }
+      val atEnd = pos == -1 || fqn.charAt(pos) == '.'
+
+      // Handle the actual content of the part (we ignore parts that are likely synthetic)
+      def isPartLikelySynthetic = {
+        val firstChar = fqn.charAt(partStart)
+        (firstChar > 'Z' && firstChar < 0x7f) || (firstChar < 'A')
+      }
+      if (atEnd || !isPartLikelySynthetic) {
+        val part = fqn.substring(partStart, partEnd)
+        result = if (result.isEmpty) part else part + '.' + result
+        if (atEnd)
+          return result
+      }
+    }
+
+    // dead code
+    result
   }
 
   /** Creates a non-strict view of this $coll.

@@ -130,7 +130,7 @@ object Test extends App {
 
 
   // test overflow protection
-  for (unit ← Seq(DAYS, HOURS, MINUTES, SECONDS, MILLISECONDS, MICROSECONDS, NANOSECONDS)) {
+  for (unit <- Seq(DAYS, HOURS, MINUTES, SECONDS, MILLISECONDS, MICROSECONDS, NANOSECONDS)) {
     val x = unit.convert(Long.MaxValue, NANOSECONDS)
     val dur = Duration(x, unit)
     val mdur = Duration(-x, unit)
@@ -174,6 +174,20 @@ object Test extends App {
   (1.second + 1.millisecond).unit mustBe MILLISECONDS
 
 
+  // test unit labels
+  for ((unit, labels) <- Seq(
+    DAYS         -> "d day days",
+    HOURS        -> "h hr hrs hour hours",
+    MINUTES      -> "m min mins minute minutes",
+    SECONDS      -> "s sec secs second seconds",
+    MILLISECONDS -> "ms milli millis millisecond milliseconds",
+    MICROSECONDS -> "µs micro micros microsecond microseconds",
+    NANOSECONDS  -> "ns nano nanos nanosecond nanoseconds"
+  ); label <- labels.split(" ")) {
+    Duration("1" + label).unit mustBe unit
+  }
+
+
   // test Deadline
   val dead = 2.seconds.fromNow
   val dead2 = 2 seconds fromNow
@@ -202,4 +216,12 @@ object Test extends App {
   ((2 seconds fromNow).timeLeft: FiniteDuration) < 4.seconds mustBe true
   val finite3: FiniteDuration = 3.5 seconds span
 
+  // scala/bug#9949
+  Duration(-1.0, DAYS) mustBe Duration(-1, DAYS)
+  Duration("-10 s").toNanos mustBe -10000000000L
+  Duration(1.0, DAYS) mustBe Duration(1, DAYS)
+  Duration("10 s").toNanos mustBe 10000000000L
+  
+  // scala/bug#10320
+  Duration("6803536004516701ns").toNanos mustBe 6803536004516701L
 }

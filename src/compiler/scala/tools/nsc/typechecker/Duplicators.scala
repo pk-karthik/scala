@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
@@ -151,8 +158,12 @@ abstract class Duplicators extends Analyzer {
             ldef.symbol = newsym
             debuglog("newsym: " + newsym + " info: " + newsym.info)
 
-          case vdef @ ValDef(mods, name, _, rhs) if mods.hasFlag(Flags.LAZY) =>
-            debuglog("ValDef " + name + " sym.info: " + vdef.symbol.info)
+          // don't retypecheck val members or local lazy vals -- you'll end up with duplicate symbols because
+          // entering a valdef results in synthesizing getters etc
+          // TODO: why retype check any valdefs?? I checked and the rhs is specialized just fine this way
+          // (and there are no args/type params/... to warrant full type checking?)
+          case vdef @ ValDef(mods, name, _, rhs) if mods.hasFlag(Flags.LAZY) || owner.isClass =>
+            debuglog(s"ValDef $name in $owner sym.info: ${vdef.symbol.info}")
             invalidSyms(vdef.symbol) = vdef
             val newowner = owner orElse context.owner
             val newsym = vdef.symbol.cloneSymbol(newowner)
@@ -163,7 +174,8 @@ abstract class Duplicators extends Analyzer {
 
           case DefDef(_, name, tparams, vparamss, _, rhs) =>
             // invalidate parameters
-            invalidateAll(tparams ::: vparamss.flatten)
+            invalidateAll(tparams)
+            vparamss foreach (x => invalidateAll(x))
             tree.symbol = NoSymbol
 
           case Function(vparams, _) =>
@@ -235,10 +247,6 @@ abstract class Duplicators extends Analyzer {
           if (ddef.hasAttachment[DelambdafyTarget.type])
             result.symbol.updateAttachment(DelambdafyTarget)
           result
-
-        case fun: Function =>
-          debuglog("Clearing the type and retyping Function: " + fun)
-          super.typed(fun.clearType, mode, pt)
 
         case vdef @ ValDef(mods, name, tpt, rhs) =>
           // log("vdef fixing tpe: " + tree.tpe + " with sym: " + tree.tpe.typeSymbol + " and " + invalidSyms)

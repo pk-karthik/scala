@@ -8,7 +8,6 @@ import org.junit.runner.RunWith
 import org.junit.runners.JUnit4
 
 import scala.tools.asm.Opcodes._
-import scala.tools.partest.ASMConverters
 import scala.tools.partest.ASMConverters._
 import scala.tools.testing.BytecodeTesting._
 
@@ -232,5 +231,62 @@ class SimplifyJumpsTest {
     val method = genMethod()(ops(List(Jump(IF_ICMPGE, Label(1)))): _*)
     assertTrue(LocalOptImpls.simplifyJumps(method))
     assertSameCode(instructionsFromMethod(method), ops(List(Op(POP), Op(POP))))
+  }
+
+  @Test
+  def simplifyIfEqConstTrue(): Unit = {
+    def ops(br: List[Instruction]) = List(
+      Op(ICONST_0)) ::: br ::: List(
+      VarOp(ILOAD, 2),
+      Label(1),
+      Op(RETURN)
+    )
+    val method = genMethod()(ops(Jump(IFEQ, Label(1)) :: Nil): _*)
+    assertTrue(LocalOptImpls.simplifyJumps(method))
+    assertSameCode(instructionsFromMethod(method), ops(Op(POP) :: Jump(GOTO, Label(1)) :: Nil))
+  }
+
+  @Test
+  def simplifyIsNullConstFalse(): Unit = {
+    def ops(br: List[Instruction]) = List(
+      Op(ACONST_NULL)) ::: br ::: List(
+      VarOp(ILOAD, 2),
+      Label(1),
+      Op(RETURN)
+    )
+    val method = genMethod()(ops(Jump(IFNONNULL, Label(1)) :: Nil): _*)
+    assertTrue(LocalOptImpls.simplifyJumps(method))
+    assertSameCode(instructionsFromMethod(method), ops(Op(POP) :: Nil))
+  }
+
+  @Test
+  def noSimplifyNonConst(): Unit = {
+    val ops = List(
+      Ldc(LDC, ""),
+      Invoke(INVOKEVIRTUAL, "java/lang/String", "length", "()I", itf = false),
+      Jump(IFEQ, Label(1)),
+      Ldc(LDC, "nonempty"),
+      Jump(GOTO, Label(2)),
+      Label(1),
+      Ldc(LDC, "empty"),
+      Label(2),
+      Op(RETURN)
+    )
+  }
+
+  @Test
+  def noSimplifyOverJumpTarget(): Unit = {
+    val ops = List(
+      Op(ACONST_NULL),
+      Label(1),
+      Jump(IFNULL, Label(2)),
+      VarOp(ALOAD, 2),
+      Jump(IFNULL, Label(1)),
+      Label(2),
+      Op(RETURN)
+    )
+    val method = genMethod()(ops: _*)
+    assertFalse(LocalOptImpls.simplifyJumps(method))
+    assertSameCode(instructionsFromMethod(method), ops)
   }
 }

@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala.concurrent.duration
 
@@ -34,7 +38,7 @@ object Duration {
    * Construct a finite duration from the given length and time unit, where the latter is
    * looked up in a list of string representation. Valid choices are:
    *
-   * `d, day, h, hour, min, minute, s, sec, second, ms, milli, millisecond, µs, micro, microsecond, ns, nano, nanosecond`
+   * `d, day, h, hr, hour, m, min, minute, s, sec, second, ms, milli, millisecond, µs, micro, microsecond, ns, nano, nanosecond`
    * and their pluralized forms (for every but the first mentioned form of each unit, i.e. no "ds", but "days").
    */
   def apply(length: Long, unit: String): FiniteDuration   = new FiniteDuration(length,  Duration.timeUnit(unit))
@@ -47,7 +51,7 @@ object Duration {
    * whitespace is allowed before, between and after the parts. Infinities are
    * designated by `"Inf"`, `"PlusInf"`, `"+Inf"` and `"-Inf"` or `"MinusInf"`.
    *
-   * @throws NumberFormatException if format is not parseable
+   * @throws NumberFormatException if format is not parsable
    */
   def apply(s: String): Duration = {
     val s1: String = s filterNot (_.isWhitespace)
@@ -55,7 +59,7 @@ object Duration {
       case "Inf" | "PlusInf" | "+Inf" => Inf
       case "MinusInf" | "-Inf"        => MinusInf
       case _                          =>
-        val unitName = s1.reverse.takeWhile(_.isLetter).reverse;
+        val unitName = s1.reverse.takeWhile(_.isLetter).reverse
         timeUnit get unitName match {
           case Some(unit) =>
             val valueStr = s1 dropRight unitName.length
@@ -75,8 +79,8 @@ object Duration {
   }
   private[this] val timeUnitLabels = List(
     DAYS         -> "d day",
-    HOURS        -> "h hour",
-    MINUTES      -> "min minute",
+    HOURS        -> "h hr hour",
+    MINUTES      -> "m min minute",
     SECONDS      -> "s sec second",
     MILLISECONDS -> "ms milli millisecond",
     MICROSECONDS -> "µs micro microsecond",
@@ -120,12 +124,12 @@ object Duration {
   def fromNanos(nanos: Double): Duration = {
     if (nanos.isInfinite)
       if (nanos > 0) Inf else MinusInf
-    else if (nanos.isNaN)
+    else if (JDouble.isNaN(nanos))
       Undefined
     else if (nanos > Long.MaxValue || nanos < Long.MinValue)
       throw new IllegalArgumentException("trying to construct too large duration with " + nanos + "ns")
     else
-      fromNanos((nanos + 0.5).toLong)
+      fromNanos(nanos.round)
   }
 
   private[this] final val  µs_per_ns = 1000L
@@ -196,11 +200,11 @@ object Duration {
     }
 
     def *(factor: Double): Duration =
-      if (factor == 0d || factor.isNaN) Undefined
+      if (factor == 0d || JDouble.isNaN(factor)) Undefined
       else if (factor < 0d) -this
       else this
     def /(divisor: Double): Duration =
-      if (divisor.isNaN || divisor.isInfinite) Undefined
+      if (JDouble.isNaN(divisor) || divisor.isInfinite) Undefined
       else if ((divisor compare 0d) < 0) -this
       else this
     def /(divisor: Duration): Double = divisor match {
@@ -285,7 +289,7 @@ object Duration {
    * whitespace is allowed before, between and after the parts. Infinities are
    * designated by `"Inf"`, `"PlusInf"`, `"+Inf"` and `"-Inf"` or `"MinusInf"`.
    *
-   * @throws NumberFormatException if format is not parseable
+   * @throws NumberFormatException if format is not parsable
    */
   def create(s: String): Duration                          = apply(s)
 
@@ -627,16 +631,16 @@ final class FiniteDuration(val length: Long, val unit: TimeUnit) extends Duratio
 
   def *(factor: Double) =
     if (!factor.isInfinite) fromNanos(toNanos * factor)
-    else if (factor.isNaN) Undefined
+    else if (JDouble.isNaN(factor)) Undefined
     else if ((factor > 0) ^ (this < Zero)) Inf
     else MinusInf
 
   def /(divisor: Double) =
     if (!divisor.isInfinite) fromNanos(toNanos / divisor)
-    else if (divisor.isNaN) Undefined
+    else if (JDouble.isNaN(divisor)) Undefined
     else Zero
 
-  // if this is made a constant, then scalac will elide the conditional and always return +0.0, SI-6331
+  // if this is made a constant, then scalac will elide the conditional and always return +0.0, scala/bug#6331
   private[this] def minusZero = -0d
   def /(divisor: Duration): Double =
     if (divisor.isFinite()) toNanos.toDouble / divisor.toNanos

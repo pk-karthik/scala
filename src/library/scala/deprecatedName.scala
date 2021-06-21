@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2010-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 
@@ -15,14 +19,19 @@ import scala.annotation.meta._
   *
   *  Using this name in a named argument generates a deprecation warning.
   *
-  *  For instance, evaluating the code below in the Scala interpreter (with `-deprecation`)
+  *  Library authors should state the library's deprecation policy in their documentation to give
+  *  developers guidance on how long a deprecated name will be preserved.
+  *
+  *  Library authors should prepend the name of their library to the version number to help
+  *  developers distinguish deprecations coming from different libraries:
+  *
   *  {{{
-  *  def inc(x: Int, @deprecatedName('y, "2.12") n: Int): Int = x + n
+  *  def inc(x: Int, @deprecatedName('y, "FooLib 12.0") n: Int): Int = x + n
   *  inc(1, y = 2)
   *  }}}
   *  will produce the following warning:
   *  {{{
-  *  warning: the parameter name y is deprecated (since 2.12): use n instead
+  *  warning: the parameter name y is deprecated (since FooLib 12.0): use n instead
   *  inc(1, y = 2)
   *           ^
   *  }}}

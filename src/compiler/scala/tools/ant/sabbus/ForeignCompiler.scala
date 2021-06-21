@@ -1,11 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala Ant Tasks                      **
-**    / __/ __// _ | / /  / _ |    (c) 2005-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
-
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala.tools.ant.sabbus
 
@@ -43,7 +46,7 @@ class ForeignCompiler {
   def compile(files: Array[File]): Int = {
     val command = new CompilerCommand(files.toList map (_.toString), settings)
     (new nsc.Run) compile command.files
-    reporter.ERROR.count << 16 | reporter.WARNING.count
+    reporter.errorCount << 16 | reporter.warningCount
   }
 
 }

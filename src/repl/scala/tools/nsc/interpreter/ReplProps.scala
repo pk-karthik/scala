@@ -1,23 +1,30 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author Paul Phillips
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
 package interpreter
 
-import Properties.{ javaVersion, javaVmName, shellPromptString, shellWelcomeString,
-                    versionString, versionNumberString }
+import Properties.{javaVersion, javaVmName, shellPromptString, shellWelcomeString,
+                    versionString, versionNumberString}
 import scala.sys._
 import Prop._
-import java.util.{ Formattable, FormattableFlags, Formatter }
+import java.util.{Formattable, FormattableFlags, Formatter}
 
 class ReplProps {
   private def bool(name: String) = BooleanProp.keyExists(name)
   private def int(name: String)  = Prop[Int](name)
 
   // This property is used in TypeDebugging. Let's recycle it.
-  val colorOk = bool("scala.color")
+  val colorOk = Properties.coloredOutputEnabled
 
   val info  = bool("scala.repl.info")
   val debug = bool("scala.repl.debug")
@@ -52,16 +59,20 @@ class ReplProps {
   val continueString = Prop[String]("scala.repl.continue").option getOrElse "| "
   val continueText   = {
     val text   = enversion(continueString)
-    val margin = promptText.lines.toList.last.length - text.length
+    val margin = promptText.linesIterator.toList.last.length - text.length
     if (margin > 0) " " * margin + text else text
   }
   val continuePrompt = encolor(continueText)
 
-  // Next time.
-  //def welcome = enversion(Prop[String]("scala.repl.welcome") or shellWelcomeString)
+  // -Dscala.repl.welcome=banner uses shell.welcome property
   def welcome = enversion {
     val p = Prop[String]("scala.repl.welcome")
-    if (p.isSet) p.get else shellWelcomeString
+    if (p.isSet) p.get match {
+      case "banner" => shellWelcomeString
+      case text     => text
+    } else
+      """Welcome to Scala %1$#s (%3$s, Java %2$s).
+        |Type in expressions for evaluation. Or try :help.""".stripMargin
   }
 
   val pasteDelimiter = Prop[String]("scala.repl.here")

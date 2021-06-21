@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Paul Phillips
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
@@ -15,19 +22,19 @@ trait AbsSettings extends scala.reflect.internal.settings.AbsSettings {
   type Setting <: AbsSetting      // Fix to the concrete Setting type
   type ResultOfTryToSet           // List[String] in mutable, (Settings, List[String]) in immutable
   def errorFn: String => Unit
-  protected def allSettings: scala.collection.Set[Setting]
+  protected def allSettings: scala.collection.Map[String, Setting]
 
   // settings minus internal usage settings
-  def visibleSettings = allSettings filterNot (_.isInternalOnly)
+  def visibleSettings: List[Setting] = allSettings.valuesIterator.filterNot(_.isInternalOnly).toList
 
   // only settings which differ from default
-  def userSetSettings = visibleSettings filterNot (_.isDefault)
+  def userSetSettings: List[Setting] = visibleSettings.filterNot(_.isDefault)
 
   // an argument list which (should) be usable to recreate the Settings
-  def recreateArgs = userSetSettings.toList flatMap (_.unparse)
+  def recreateArgs: List[String] = userSetSettings flatMap (_.unparse)
 
   // checks both name and any available abbreviations
-  def lookupSetting(cmd: String): Option[Setting] = allSettings find (_ respondsTo cmd)
+  def lookupSetting(cmd: String): Option[Setting] = allSettings.valuesIterator find (_ respondsTo cmd)
 
   // two AbsSettings objects are equal if their visible settings are equal.
   override def hashCode() = visibleSettings.size  // going for cheap
@@ -87,6 +94,12 @@ trait AbsSettings extends scala.reflect.internal.settings.AbsSettings {
 
     /** Issue error and return */
     def errorAndValue[T](msg: String, x: T): T = { errorFn(msg) ; x }
+
+    /** If this method returns true, print the [[help]] message and exit. */
+    def isHelping: Boolean = false
+
+    /** The help message to be printed if [[isHelping]]. */
+    def help: String = ""
 
     /** After correct Setting has been selected, tryToSet is called with the
      *  remainder of the command line.  It consumes any applicable arguments and

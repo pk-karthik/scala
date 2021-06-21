@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 
@@ -22,12 +26,31 @@ import scala.annotation.implicitNotFound
  * == Common Imports ==
  *
  * When working with Futures, you will often find that importing the whole concurrent
- * package is convenient, furthermore you are likely to need an implicit ExecutionContext
- * in scope for many operations involving Futures and Promises:
+ * package is convenient:
  *
  * {{{
  * import scala.concurrent._
- * import ExecutionContext.Implicits.global
+ * }}}
+ *
+ * When using things like `Future`s, it is often required to have an implicit `ExecutionContext`
+ * in scope. The general advice for these implicits are as follows.
+ *
+ * If the code in question is a class or method definition, and no `ExecutionContext` is available,
+ * request one from the caller by adding an implicit parameter list:
+ *
+ * {{{
+ * def myMethod(myParam: MyType)(implicit ec: ExecutionContext) = …
+ * //Or
+ * class MyClass(myParam: MyType)(implicit ec: ExecutionContext) { … }
+ * }}}
+ *
+ * This allows the caller of the method, or creator of the instance of the class, to decide which
+ * `ExecutionContext` should be used.
+ *
+ * For typical REPL usage and experimentation, importing the global `ExecutionContext` is often desired.
+ *
+ * {{{
+ * import scala.concurrent.ExcutionContext.Implicits.global
  * }}}
  *
  * == Specifying Durations ==
@@ -140,17 +163,20 @@ package concurrent {
   /**
    * `Await` is what is used to ensure proper handling of blocking for `Awaitable` instances.
    *
-   * While occasionally useful, e.g. for testing, it is recommended that you avoid Await
-   * when possible in favor of callbacks and combinators like onComplete and use in
-   * for comprehensions. Await will block the thread on which it runs, and could cause
-   * performance and deadlock issues.
+   * While occasionally useful, e.g. for testing, it is recommended that you avoid Await whenever possible—
+   * instead favoring combinators and/or callbacks.
+   * Await's `result` and `ready` methods will block the calling thread's execution until they return,
+   * which will cause performance degradation, and possibly, deadlock issues.
    */
   object Await {
     /**
      * Await the "completed" state of an `Awaitable`.
      *
      * Although this method is blocking, the internal use of [[scala.concurrent.blocking blocking]] ensures that
-     * the underlying [[ExecutionContext]] is prepared to properly manage the blocking.
+     * the underlying [[ExecutionContext]] is given an opportunity to properly manage the blocking.
+     *
+     * WARNING: It is strongly discouraged to supply lengthy timeouts since the progress of the calling thread will be
+     * suspended—blocked—until either the `Awaitable` becomes ready or the timeout expires.
      *
      * @param  awaitable
      *         the `Awaitable` to be awaited
@@ -165,14 +191,19 @@ package concurrent {
      */
     @throws(classOf[TimeoutException])
     @throws(classOf[InterruptedException])
-    def ready[T](awaitable: Awaitable[T], atMost: Duration): awaitable.type =
-      blocking(awaitable.ready(atMost)(AwaitPermission))
+    def ready[T](awaitable: Awaitable[T], atMost: Duration): awaitable.type = awaitable match {
+      case f: Future[T] if f.isCompleted => awaitable.ready(atMost)(AwaitPermission)
+      case _ => blocking(awaitable.ready(atMost)(AwaitPermission))
+    }
 
     /**
      * Await and return the result (of type `T`) of an `Awaitable`.
      *
      * Although this method is blocking, the internal use of [[scala.concurrent.blocking blocking]] ensures that
-     * the underlying [[ExecutionContext]] to properly detect blocking and ensure that there are no deadlocks.
+     * the underlying [[ExecutionContext]] is given an opportunity to properly manage the blocking.
+     *
+     * WARNING: It is strongly discouraged to supply lengthy timeouts since the progress of the calling thread will be
+     * suspended—blocked—until either the `Awaitable` has a result or the timeout expires.
      *
      * @param  awaitable
      *         the `Awaitable` to be awaited
@@ -185,8 +216,11 @@ package concurrent {
      * @throws TimeoutException         if after waiting for the specified time `awaitable` is still not ready
      * @throws IllegalArgumentException if `atMost` is [[scala.concurrent.duration.Duration.Undefined Duration.Undefined]]
      */
-    @throws(classOf[Exception])
-    def result[T](awaitable: Awaitable[T], atMost: Duration): T =
-      blocking(awaitable.result(atMost)(AwaitPermission))
+    @throws(classOf[TimeoutException])
+    @throws(classOf[InterruptedException])
+    def result[T](awaitable: Awaitable[T], atMost: Duration): T = awaitable match {
+      case f: Future[_] if f.isCompleted => awaitable.result(atMost)(AwaitPermission)
+      case _ => blocking(awaitable.result(atMost)(AwaitPermission))
+    }
   }
 }

@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -16,7 +20,7 @@ import scala.collection.parallel.mutable.ParHashMap
 /** This class implements mutable maps using a hashtable.
  *
  *  @since 1
- *  @see [[http://docs.scala-lang.org/overviews/collections/concrete-mutable-collection-classes.html#hash_tables "Scala's Collection Library overview"]]
+ *  @see [[http://docs.scala-lang.org/overviews/collections/concrete-mutable-collection-classes.html#hash-tables "Scala's Collection Library overview"]]
  *  section on `Hash Tables` for more information.
  *
  *  @tparam A    the type of the keys contained in this hash map.
@@ -72,6 +76,52 @@ extends AbstractMap[A, B]
     else Some(e.value)
   }
 
+  override def getOrElseUpdate(key: A, defaultValue: => B): B = {
+    val hash = elemHashCode(key)
+    val i = index(hash)
+    val firstEntry = findEntry(key, i)
+    if (firstEntry != null) firstEntry.value
+    else {
+      val table0 = table
+      val default = defaultValue
+      // Avoid recomputing index if the `defaultValue()` hasn't triggered
+      // a table resize.
+      val newEntryIndex = if (table0 eq table) i else index(hash)
+      val e = createNewEntry(key, default)
+      // Repeat search
+      // because evaluation of `default` can bring entry with `key`
+      val secondEntry = findEntry(key, newEntryIndex)
+      if (secondEntry == null) addEntry(e, newEntryIndex)
+      else secondEntry.value = default
+      default
+    }
+  }
+
+
+  /* inlined HashTable.findEntry0 to preserve its visibility */
+  private[this] def findEntry(key: A, h: Int): Entry = {
+    var e = table(h).asInstanceOf[Entry]
+    while (notFound(key, e))
+      e = e.next
+    e
+  }
+  private[this] def notFound(key: A, e: Entry): Boolean = (e != null) && !elemEquals(e.key, key)
+
+  /* inlined HashTable.addEntry0 to preserve its visibility */
+  private[this] def addEntry(e: Entry, h: Int): B = {
+    if (tableSize >= threshold) addEntry(e)
+    else addEntry0(e, h)
+    e.value
+  }
+
+  /* extracted to make addEntry inlinable */
+  private[this] def addEntry0(e: Entry, h: Int) {
+    e.next = table(h).asInstanceOf[Entry]
+    table(h) = e
+    tableSize += 1
+    nnSizeMapAdd(h)
+  }
+
   override def put(key: A, value: B): Option[B] = {
     val e = findOrAddEntry(key, value)
     if (e eq null) None
@@ -122,6 +172,8 @@ extends AbstractMap[A, B]
     def next()  = iter.next().value
   }
 
+  private[collection] def entriesIterator0: Iterator[DefaultEntry[A, B]] = entriesIterator
+
   /** Toggles whether a size map is used to track hash map statistics.
    */
   def useSizeMap(t: Boolean) = if (t) {
@@ -150,6 +202,9 @@ extends AbstractMap[A, B]
  *  @define coll mutable hash map
  */
 object HashMap extends MutableMapFactory[HashMap] {
-  implicit def canBuildFrom[A, B]: CanBuildFrom[Coll, (A, B), HashMap[A, B]] = new MapCanBuildFrom[A, B]
+  implicit def canBuildFrom[A, B]: CanBuildFrom[Coll, (A, B), HashMap[A, B]] =
+    ReusableCBF.asInstanceOf[MapCanBuildFrom[A, B]]
+  private[this] val ReusableCBF = new MapCanBuildFrom[Any, Any]
+
   def empty[A, B]: HashMap[A, B] = new HashMap[A, B]
 }

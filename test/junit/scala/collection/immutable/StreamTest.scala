@@ -56,17 +56,17 @@ class StreamTest {
     assertStreamOpAllowsGC(_.filter(_ => true).foreach(_), _ => ())
   }
 
-  @Test // SI-8990
+  @Test // scala/bug#8990
   def withFilter_after_first_foreach_allows_GC: Unit = {
     assertStreamOpAllowsGC(_.withFilter(_ > 1).foreach(_), _ => ())
   }
 
-  @Test // SI-8990
+  @Test // scala/bug#8990
   def withFilter_after_first_withFilter_foreach_allows_GC: Unit = {
     assertStreamOpAllowsGC(_.withFilter(_ > 1).withFilter(_ < 100).foreach(_), _ => ())
   }
 
-  @Test // SI-8990
+  @Test // scala/bug#8990
   def withFilter_can_retry_after_exception_thrown_in_filter: Unit = {
     // use mutable state to control an intermittent failure in filtering the Stream
     var shouldThrow = true
@@ -98,13 +98,29 @@ class StreamTest {
     assertTrue( evaluated == expectedEvaluated )
   }
 
-  @Test // SI-9134
+  @Test // scala/bug#9134
   def filter_map_properly_lazy_in_tail: Unit = {
     assertStreamOpLazyInTail(_.filter(_ % 2 == 0).map(identity), List(1, 2))
   }
 
-  @Test // SI-9134
+  @Test // scala/bug#9134
   def withFilter_map_properly_lazy_in_tail: Unit = {
     assertStreamOpLazyInTail(_.withFilter(_ % 2 == 0).map(identity), List(1, 2))
+  }
+
+  @Test // scala/bug#6881
+  def test_reference_equality: Unit = {
+    // Make sure we're tested with reference equality
+    val s = Stream.from(0)
+    assert(s == s, "Referentially identical streams should be equal (==)")
+    assert(s equals s, "Referentially identical streams should be equal (equals)")
+    assert((0 #:: 1 #:: s) == (0 #:: 1 #:: s), "Cons of referentially identical streams should be equal (==)")
+    assert((0 #:: 1 #:: s) equals (0 #:: 1 #:: s), "Cons of referentially identical streams should be equal (equals)")
+  }
+
+  @Test
+  def t9886: Unit = {
+    assertEquals(Stream(None, Some(1)), None #:: Stream(Some(1)))
+    assertEquals(Stream(None, Some(1)), Stream(None) #::: Stream(Some(1)))
   }
 }

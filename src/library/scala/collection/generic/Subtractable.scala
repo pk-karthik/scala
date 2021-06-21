@@ -1,15 +1,20 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
-
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
 package generic
+
+import scala.collection.immutable.{HashSet, TreeMap, TreeSet}
 
 
 /** This trait represents collection-like objects that can be reduced
@@ -18,7 +23,6 @@ package generic
  *  @tparam   A    the type of the elements of the $coll.
  *  @tparam   Repr the type of the $coll itself
  *  @author   Martin Odersky
- *  @version  2.8
  *  @since    2.8
  *  @define   coll collection
  *  @define   Coll Subtractable
@@ -57,5 +61,14 @@ trait Subtractable[A, +Repr <: Subtractable[A, Repr]] { self =>
    *  @return a new $coll that contains all elements of the current $coll
    *  except one less occurrence of each of the elements of `elems`.
    */
-  def --(xs: GenTraversableOnce[A]): Repr = (repr /: xs.seq) (_ - _)
+  def --(xs: GenTraversableOnce[A]): Repr = this match {
+    case hs: HashSet[A] if xs.isInstanceOf[HashSet[A]] =>
+      hs.diff(xs.asInstanceOf[HashSet[A]]).asInstanceOf[Repr]
+    case ts: TreeMap[A, _] =>
+      ts.removeAllImpl(xs).asInstanceOf[Repr]
+    case ts: TreeSet[A]  =>
+      ts.removeAll(xs).asInstanceOf[Repr]
+    case _ =>
+      (repr /: xs.seq) (_ - _)
+  }
 }

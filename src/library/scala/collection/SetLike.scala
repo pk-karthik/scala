@@ -1,18 +1,23 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
 
 import generic._
-import mutable.{ Builder, SetBuilder }
+import mutable.{Builder, SetBuilder}
 import scala.annotation.migration
 import parallel.ParSet
+import scala.collection.immutable.TreeSet
 
 /** A template trait for sets.
  *
@@ -48,7 +53,6 @@ import parallel.ParSet
  *  @tparam This the type of the set itself.
  *
  *  @author  Martin Odersky
- *  @version 2.8
  *
  *  @define coll set
  *  @define Coll Set
@@ -147,7 +151,42 @@ self =>
    *  @param elems     the collection containing the elements to add.
    *  @return a new $coll with the given elements added, omitting duplicates.
    */
-  def ++ (elems: GenTraversableOnce[A]): This = (repr /: elems.seq)(_ + _)
+  def ++ (elems: GenTraversableOnce[A]): This = {
+    import immutable.HashSet
+    //in 2.14 this should be moved to the appropriate place - HashSet and EmptySet.
+    //we can't break binary comparability before then
+    this match {
+      case _ if this eq immutable.Set.empty.asInstanceOf[AnyRef] =>
+        import immutable.Set.{Set1, Set2, Set3, Set4}
+        elems match {
+          case hs: HashSet[A] if hs.size > 4 => hs.asInstanceOf[This]
+          case hs: Set1[A] => hs.asInstanceOf[This]
+          case hs: Set2[A] => hs.asInstanceOf[This]
+          case hs: Set3[A] => hs.asInstanceOf[This]
+          case hs: Set4[A] => hs.asInstanceOf[This]
+          case _  =>
+            if (elems.isEmpty) this.asInstanceOf[This]
+            else (repr /: elems.seq) (_ + _)
+        }
+      case hs: immutable.HashSet[A] =>
+        elems match {
+          case that: GenSet[A] =>
+            hs.union(that).asInstanceOf[This]
+          case _ =>
+            (repr /: elems.seq) (_ + _)
+        }
+      case ts1: TreeSet[A] =>
+        elems match {
+          case ts2: TreeSet[A] if ts1.ordering == ts2.ordering  =>
+            ts1.addAllTreeSetImpl(ts2).asInstanceOf[This]
+          case _ =>
+            (repr /: elems.seq) (_ + _)
+        }
+      case _ =>
+        (repr /: elems.seq) (_ + _)
+
+    }
+  }
 
   /** Creates a new set with a given element removed from this set.
    *
@@ -213,9 +252,9 @@ self =>
     }
   }
 
-  /** An Iterator include all subsets containing exactly len elements.
+  /** An Iterator including all subsets containing exactly len elements.
    *  If the elements in 'This' type is ordered, then the subsets will also be in the same order.
-   *  ListSet(1,2,3).subsets => {1},{2},{3},{1,2},{1,3},{2,3},{1,2,3}}
+   *  ListSet(1,2,3).subsets => {{1},{2},{3},{1,2},{1,3},{2,3},{1,2,3}}
    *
    *  @author Eastsun
    *  @date 2010.12.6

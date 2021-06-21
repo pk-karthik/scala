@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala.tools.nsc
 package doc
 package model
@@ -9,7 +21,7 @@ trait MemberLookup extends base.MemberLookupBase {
   thisFactory: ModelFactory =>
 
   import global._
-  import definitions.{ NothingClass, AnyClass, AnyValClass, AnyRefClass, ListClass }
+  import definitions.{ NothingClass, AnyClass, AnyValClass, AnyRefClass }
 
   override def internalLink(sym: Symbol, site: Symbol): Option[LinkTo] =
     findTemplateMaybe(sym) match {
@@ -37,17 +49,33 @@ trait MemberLookup extends base.MemberLookupBase {
     case _ => link.toString
   }
 
-  override def findExternalLink(sym: Symbol, name: String): Option[LinkToExternal] = {
+  override def findExternalLink(sym: Symbol, name: String): Option[LinkTo] = {
     val sym1 =
-      if (sym == AnyClass || sym == AnyRefClass || sym == AnyValClass || sym == NothingClass) ListClass
+      if (sym == AnyClass || sym == AnyRefClass || sym == AnyValClass || sym == NothingClass)
+        definitions.ScalaPackageClass.info.member(newTermName("package"))
       else if (sym.hasPackageFlag)
         /* Get package object which has associatedFile ne null */
         sym.info.member(newTermName("package"))
       else sym
-    Option(sym1.associatedFile) flatMap (_.underlyingSource) flatMap { src =>
-      val path = src.canonicalPath
-      settings.extUrlMapping get path map { url =>
-        LinkToExternal(name, url + "#" + name)
+    def classpathEntryFor(s: Symbol): Option[String] = {
+      Option(s.associatedFile).flatMap(_.underlyingSource).map { src =>
+        val path = src.canonicalPath
+        if(path.endsWith(".class")) { // Individual class file -> Classpath entry is root dir
+          var nesting = s.ownerChain.count(_.hasPackageFlag)
+          if(nesting > 0) {
+            val p = 0.until(nesting).foldLeft(src) {
+              case (null, _) => null
+              case (f, _) => f.container
+            }
+            if(p eq null) path else p.canonicalPath
+          } else path
+        } else path // JAR file (and fallback option)
+      }
+    }
+    classpathEntryFor(sym1) flatMap { path =>
+      settings.extUrlMapping get path map { url => {
+         LinkToExternalTpl(name, url, makeTemplate(sym))
+        }
       }
     }
   }

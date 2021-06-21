@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -24,7 +28,7 @@ import scala.annotation.migration
  *    is found.
  *  @define bfinfo an implicit value of class `CanBuildFrom` which determines
  *    the result class `That` from the current representation type `Repr` and
- *    and the new element type `B`.
+ *    the new element type `B`.
  *  @define orderDependent
  *
  *    Note: might return different results for different runs, unless the
@@ -249,30 +253,6 @@ trait GenTraversableLike[+A, +Repr] extends Any with GenTraversableOnce[A] with 
    *  @param bf     $bfinfo
    *  @return       a new collection of type `That` which contains all elements
    *                of this $coll followed by all elements of `that`.
-   *
-   *  @usecase def ++[B](that: GenTraversableOnce[B]): $Coll[B]
-   *    @inheritdoc
-   *
-   *    Example:
-   *    {{{
-   *      scala> val a = List(1)
-   *      a: List[Int] = List(1)
-   *
-   *      scala> val b = List(2)
-   *      b: List[Int] = List(2)
-   *
-   *      scala> val c = a ++ b
-   *      c: List[Int] = List(1, 2)
-   *
-   *      scala> val d = List('a')
-   *      d: List[Char] = List(a)
-   *
-   *      scala> val e = c ++ d
-   *      e: List[AnyVal] = List(1, 2, a)
-   *    }}}
-   *
-   *    @return       a new $coll which contains all elements of this $coll
-   *                  followed by all elements of `that`.
    */
   def ++[B >: A, That](that: GenTraversableOnce[B])(implicit bf: CanBuildFrom[Repr, B, That]): That
 
@@ -325,6 +305,7 @@ trait GenTraversableLike[+A, +Repr] extends Any with GenTraversableOnce[A] with 
    *  @param  n    the number of elements to take from this $coll.
    *  @return a $coll consisting only of the first `n` elements of this $coll,
    *          or else the whole $coll, if it has less than `n` elements.
+   *          If `n` is negative, returns an empty $coll.
    */
   def take(n: Int): Repr
 
@@ -333,6 +314,7 @@ trait GenTraversableLike[+A, +Repr] extends Any with GenTraversableOnce[A] with 
    *  @param  n    the number of elements to drop from this $coll.
    *  @return a $coll consisting of all elements of this $coll except the first `n` ones, or else the
    *          empty $coll, if this $coll has less than `n` elements.
+   *          If `n` is negative, don't drop any elements.
    */
   def drop(n: Int): Repr
 

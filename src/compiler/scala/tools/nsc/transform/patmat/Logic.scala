@@ -1,19 +1,24 @@
-/* NSC -- new Scala compiler
+/*
+ * Scala (https://www.scala-lang.org)
  *
- * Copyright 2011-2013 LAMP/EPFL
- * @author Adriaan Moors
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala
 package tools.nsc.transform.patmat
 
 import scala.language.postfixOps
-
 import scala.collection.mutable
-import scala.reflect.internal.util.{NoPosition, Position, Statistics, HashSet}
+import scala.reflect.internal.util.{HashSet, Position}
 
 trait Logic extends Debugging  {
-  import PatternMatchingStats._
+  import global._
 
   private def max(xs: Seq[Int]) = if (xs isEmpty) 0 else xs max
   private def alignedColumns(cols: Seq[Any]): Seq[String] = {
@@ -71,7 +76,7 @@ trait Logic extends Debugging  {
       def unapply(v: Var): Some[Tree]
     }
 
-    def uncheckedWarning(pos: Position, msg: String): Unit
+    def uncheckedWarning(pos: Position, msg: String, site: Symbol): Unit
 
     def reportWarning(message: String): Unit
 
@@ -174,18 +179,60 @@ trait Logic extends Debugging  {
      */
     def simplify(f: Prop): Prop = {
 
-      // limit size to avoid blow up
-      def hasImpureAtom(ops: Seq[Prop]): Boolean = ops.size < 10 &&
-        ops.combinations(2).exists {
-          case Seq(a, Not(b)) if a == b => true
-          case Seq(Not(a), b) if a == b => true
-          case _                        => false
+      def hasImpureAtom(ops0: collection.Iterable[Prop]): Boolean = {
+        // HOT method, imperative rewrite of:
+        // ops.combinations(2).exists {
+        //   case Seq(a, Not(b)) if a == b => true
+        //   case Seq(Not(a), b) if a == b => true
+        //   case _                        => false
+        // }
+
+        def checkPair(a: Prop, b: Prop): Boolean = {
+          b match {
+            case Not(b) if a == b => true
+            case _ =>
+              a match {
+                case Not(a) if a == b => true
+                case _ => false
+              }
+          }
         }
+        val size = ops0.size
+        if (size > 10) false // limit size to avoid blow up
+        else if (size < 2) false // no combinations
+        else if (size == 2) { // Specialized versions for size 2+3
+          val it = ops0.iterator
+          val result = checkPair(it.next(), it.next())
+          assert(!it.hasNext)
+          result
+        } else if (size == 3) {
+          val it = ops0.iterator
+          val a = it.next()
+          val b = it.next()
+          val c = it.next()
+          assert(!it.hasNext)
+          checkPair(a, b) || checkPair(a, c) || checkPair(b, c)
+        } else {
+          val ops = new Array[Prop](size)
+          ops0.copyToArray(ops)
+          var i = 0
+          val len = ops.length
+          while (i < len - 1) {
+            var j = i + 1
+            while (j < len) {
+              if (checkPair(ops(i), ops(j))) return true
+              j += 1
+            }
+            i += 1
+          }
+          false
+        }
+      }
 
       // push negation inside formula
       def negationNormalFormNot(p: Prop): Prop = p match {
-        case And(ops) => Or(ops.map(negationNormalFormNot)) // De'Morgan
-        case Or(ops)  => And(ops.map(negationNormalFormNot)) // De'Morgan
+        case And(ops) => Or(ops.map(negationNormalFormNot)) // De Morgan
+        case Or(ops)  => And(ops.map(negationNormalFormNot)) // De Morgan
         case Not(p)   => negationNormalForm(p)
         case True     => False
         case False    => True
@@ -205,39 +252,50 @@ trait Logic extends Debugging  {
       def simplifyProp(p: Prop): Prop = p match {
         case And(fv)     =>
           // recurse for nested And (pulls all Ands up)
-          val ops = fv.map(simplifyProp) - True // ignore `True`
-
           // build up Set in order to remove duplicates
-          val opsFlattened = ops.flatMap {
-            case And(fv) => fv
-            case f       => Set(f)
-          }.toSeq
+          val opsFlattenedBuilder = collection.immutable.Set.newBuilder[Prop]
+          for (prop <- fv) {
+            val simplified = simplifyProp(prop)
+            if (simplified != True) { // ignore `True`
+              simplified match {
+                case And(fv) => fv.foreach(opsFlattenedBuilder += _)
+                case f => opsFlattenedBuilder += f
+              }
+            }
+          }
+          val opsFlattened = opsFlattenedBuilder.result()
 
-          if (hasImpureAtom(opsFlattened) || opsFlattened.contains(False)) {
+          if (opsFlattened.contains(False) || hasImpureAtom(opsFlattened)) {
             False
           } else {
-            opsFlattened match {
-              case Seq()  => True
-              case Seq(f) => f
-              case ops    => And(ops: _*)
+            opsFlattened.size match {
+              case 0 => True
+              case 1 => opsFlattened.head
+              case _ => new And(opsFlattened)
             }
           }
         case Or(fv)      =>
           // recurse for nested Or (pulls all Ors up)
-          val ops = fv.map(simplifyProp) - False // ignore `False`
+          // build up Set in order to remove duplicates
+          val opsFlattenedBuilder = collection.immutable.Set.newBuilder[Prop]
+          for (prop <- fv) {
+            val simplified = simplifyProp(prop)
+            if (simplified != False) { // ignore `False`
+              simplified match {
+                case Or(fv) => fv.foreach(opsFlattenedBuilder += _)
+                case f => opsFlattenedBuilder += f
+              }
+            }
+          }
+          val opsFlattened = opsFlattenedBuilder.result()
 
-          val opsFlattened = ops.flatMap {
-            case Or(fv) => fv
-            case f      => Set(f)
-          }.toSeq
-
-          if (hasImpureAtom(opsFlattened) || opsFlattened.contains(True)) {
+          if (opsFlattened.contains(True) || hasImpureAtom(opsFlattened)) {
             True
           } else {
-            opsFlattened match {
-              case Seq()  => False
-              case Seq(f) => f
-              case ops    => Or(ops: _*)
+            opsFlattened.size match {
+              case 0 => False
+              case 1 => opsFlattened.head
+              case _ => new Or(opsFlattened)
             }
           }
         case Not(Not(a)) =>
@@ -334,16 +392,15 @@ trait Logic extends Debugging  {
     //       V1 = Nil implies -(V2 = Ci) for all Ci in V2's domain (i.e., it is unassignable)
     // may throw an AnalysisBudget.Exception
     def removeVarEq(props: List[Prop], modelNull: Boolean = false): (Prop, List[Prop]) = {
-      val start = if (Statistics.canEnable) Statistics.startTimer(patmatAnaVarEq) else null
+      val start = if (settings.areStatisticsEnabled) statistics.startTimer(statistics.patmatAnaVarEq) else null
 
       val vars = new mutable.HashSet[Var]
 
       object gatherEqualities extends PropTraverser {
         override def apply(p: Prop) = p match {
-          case Eq(v, c) =>
-            vars += v
-            v.registerEquality(c)
-          case _ => super.apply(p)
+          case Eq(v, NullConst) if !modelNull => vars += v // not modeling equality to null
+          case Eq(v, c)                       => vars += v; v.registerEquality(c)
+          case _                              => super.apply(p)
         }
       }
 
@@ -404,7 +461,7 @@ trait Logic extends Debugging  {
       debug.patmat(s"eqAxioms:\n${eqAxioms.mkString("\n")}")
       debug.patmat(s"pure:${pure.mkString("\n")}")
 
-      if (Statistics.canEnable) Statistics.stopTimer(patmatAnaVarEq, start)
+      if (settings.areStatisticsEnabled) statistics.stopTimer(statistics.patmatAnaVarEq, start)
 
       (And(eqAxioms: _*), pure)
     }
@@ -426,7 +483,7 @@ trait Logic extends Debugging  {
 
     def findModelFor(solvable: Solvable): Model
 
-    def findAllModelsFor(solvable: Solvable, pos: Position = NoPosition): List[Solution]
+    def findAllModelsFor(solvable: Solvable, sym: Symbol = NoSymbol): List[Solution]
   }
 }
 
@@ -525,7 +582,7 @@ trait ScalaLogic extends Interface with Logic with TreeAndTypeAnalysis {
          * (this multi-valued kind of equality is necessary for unreachability)
          * note that we use subtyping as a model for implication between instanceof tests
          * i.e., when S <:< T we assume x.isInstanceOf[S] implies x.isInstanceOf[T]
-         * unfortunately this is not true in general (see e.g. SI-6022)
+         * unfortunately this is not true in general (see e.g. scala/bug#6022)
          */
         def implies(lower: Const, upper: Const): Boolean =
           // values and null
@@ -556,7 +613,7 @@ trait ScalaLogic extends Interface with Logic with TreeAndTypeAnalysis {
          * (3) We only reason about test tests as being excluded by null assignments, otherwise we
          *     only consider value assignments.
          *     TODO: refine this, a == 0 excludes a: String, or `a: Int` excludes `a: String`
-         *     (since no value can be of both types. See also SI-7211)
+         *     (since no value can be of both types. See also scala/bug#7211)
          *
          *  NOTE: V = 1 does not preclude V = Int, or V = Any, it could be said to preclude
          *        V = String, but we don't model that.
@@ -681,8 +738,8 @@ trait ScalaLogic extends Interface with Logic with TreeAndTypeAnalysis {
       // hashconsing trees (modulo value-equality)
       private[TreesAndTypesDomain] def uniqueTpForTree(t: Tree): Type = {
         def freshExistentialSubtype(tp: Type): Type = {
-          // SI-8611 tp.narrow is tempting, but unsuitable. See `testRefinedTypeSI8611` for an explanation.
-          NoSymbol.freshExistential("").setInfo(TypeBounds.upper(tp)).tpe
+          // scala/bug#8611 tp.narrow is tempting, but unsuitable. See `testRefinedTypeSI8611` for an explanation.
+          NoSymbol.freshExistential("", 0).setInfo(TypeBounds.upper(tp)).tpe
         }
 
         if (!t.symbol.isStable) {

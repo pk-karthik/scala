@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala.tools.nsc
 package doc
 package model
@@ -5,15 +17,14 @@ package model
 import scala.collection._
 import scala.reflect.internal.util.{RangePosition, SourceFile}
 
-/** The goal of this trait is , using makeTree,
+/** The goal of this trait is, using makeTree,
   * to browse a tree to
   * 1- have the String of the complete tree (tree.expression)
-  * 2- fill references to create hyperLinks later in html.pageTemplate
+  * 2- fill references to create hyperlinks later in html.pageTemplate
   *
   * It is applied in ModelFactory => makeTree
   *
   */
-
 trait TreeFactory { thisTreeFactory: ModelFactory with TreeFactory =>
 
   val global: Global

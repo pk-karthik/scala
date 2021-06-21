@@ -1,28 +1,50 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2014 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
 package backend.jvm
 package opt
 
-import scala.tools.asm.tree.MethodNode
-import scala.tools.nsc.backend.jvm.BTypes.InternalName
+import java.util.regex.Pattern
+
+import scala.annotation.tailrec
 import scala.collection.JavaConverters._
-import scala.tools.nsc.backend.jvm.BackendReporting.OptimizerWarning
+import scala.tools.asm.Opcodes
+import scala.tools.asm.tree.{AbstractInsnNode, MethodInsnNode, MethodNode}
+import scala.tools.nsc.backend.jvm.BTypes.InternalName
+import scala.tools.nsc.backend.jvm.BackendReporting.{CalleeNotFinal, OptimizerWarning}
+import scala.tools.nsc.backend.jvm.opt.InlinerHeuristics.InlineSourceMatcher
 
-class InlinerHeuristics[BT <: BTypes](val bTypes: BT) {
+abstract class InlinerHeuristics extends PerRunInit {
+  val postProcessor: PostProcessor
+
+  import postProcessor._
   import bTypes._
-  import inliner._
   import callGraph._
+  import frontendAccess.{backendReporting, compilerSettings}
 
-  case class InlineRequest(callsite: Callsite, post: List[InlineRequest], reason: String) {
+  lazy val inlineSourceMatcher: LazyVar[InlineSourceMatcher] = perRunLazy(this)(new InlineSourceMatcher(compilerSettings.optInlineFrom))
+
+  final case class InlineRequest(callsite: Callsite, post: List[InlineRequest], reason: String) {
     // invariant: all post inline requests denote callsites in the callee of the main callsite
     for (pr <- post) assert(pr.callsite.callsiteMethod == callsite.callee.get.callee, s"Callsite method mismatch: main $callsite - post ${pr.callsite}")
   }
 
-  def canInlineFromSource(sourceFilePath: Option[String]) = compilerSettings.optInlineGlobal || sourceFilePath.isDefined
+  def canInlineFromSource(sourceFilePath: Option[String], calleeDeclarationClass: InternalName) = {
+    compilerSettings.optLClasspath ||
+      compilerSettings.optLProject && sourceFilePath.isDefined ||
+      inlineSourceMatcher.get.allowFromSources && sourceFilePath.isDefined ||
+      inlineSourceMatcher.get.allow(calleeDeclarationClass)
+  }
 
   /**
    * Select callsites from the call graph that should be inlined, grouped by the containing method.
@@ -41,39 +63,69 @@ class InlinerHeuristics[BT <: BTypes](val bTypes: BT) {
     compilingMethods.map(methodNode => {
       var requests = Set.empty[InlineRequest]
       callGraph.callsites(methodNode).valuesIterator foreach {
-        case callsite @ Callsite(_, _, _, Right(Callee(callee, calleeDeclClass, safeToInline, sourceFilePath, calleeAnnotatedInline, _, _, callsiteWarning)), _, _, _, pos, _, _) =>
+        case callsite @ Callsite(_, _, _, Right(Callee(callee, _, _, _, _, _, _, callsiteWarning)), _, _, _, pos, _, _) =>
           inlineRequest(callsite, requests) match {
             case Some(Right(req)) => requests += req
-            case Some(Left(w))    =>
-              if ((calleeAnnotatedInline && bTypes.compilerSettings.optWarningEmitAtInlineFailed) || w.emitWarning(compilerSettings)) {
-                val annotWarn = if (calleeAnnotatedInline) " is annotated @inline but" else ""
-                val msg = s"${BackendReporting.methodSignature(calleeDeclClass.internalName, callee)}$annotWarn could not be inlined:\n$w"
-                backendReporting.inlinerWarning(callsite.callsitePosition, msg)
+
+            case Some(Left(w)) =>
+              if (w.emitWarning(compilerSettings)) {
+                backendReporting.optimizerWarning(callsite.callsitePosition, w.toString, backendUtils.optimizerWarningSiteString(callsite))
               }
 
             case None =>
-              if (canInlineFromSource(sourceFilePath) && calleeAnnotatedInline && !callsite.annotatedNoInline && bTypes.compilerSettings.optWarningEmitAtInlineFailed) {
-                // if the callsite is annotated @inline, we report an inline warning even if the underlying
-                // reason is, for example, mixed compilation (which has a separate -opt-warning flag).
-                def initMsg = s"${BackendReporting.methodSignature(calleeDeclClass.internalName, callee)} is annotated @inline but cannot be inlined"
-                def warnMsg = callsiteWarning.map(" Possible reason:\n" + _).getOrElse("")
-                if (!safeToInline)
-                  backendReporting.inlinerWarning(pos, s"$initMsg: the method is not final and may be overridden." + warnMsg)
-                else
-                  backendReporting.inlinerWarning(pos, s"$initMsg." + warnMsg)
-              } else if (callsiteWarning.isDefined && callsiteWarning.get.emitWarning(compilerSettings)) {
-                // when annotatedInline is false, and there is some warning, the callsite metadata is possibly incomplete.
-                backendReporting.inlinerWarning(pos, s"there was a problem determining if method ${callee.name} can be inlined: \n"+ callsiteWarning.get)
-              }
+              if (callsiteWarning.isDefined && callsiteWarning.get.emitWarning(compilerSettings))
+                backendReporting.optimizerWarning(pos, s"there was a problem determining if method ${callee.name} can be inlined: \n"+ callsiteWarning.get, backendUtils.optimizerWarningSiteString(callsite))
           }
 
-        case Callsite(ins, _, _, Left(warning), _, _, _, pos, _, _) =>
+        case callsite @ Callsite(ins, _, _, Left(warning), _, _, _, pos, _, _) =>
           if (warning.emitWarning(compilerSettings))
-            backendReporting.inlinerWarning(pos, s"failed to determine if ${ins.name} should be inlined:\n$warning")
+            backendReporting.optimizerWarning(pos, s"failed to determine if ${ins.name} should be inlined:\n$warning", backendUtils.optimizerWarningSiteString(callsite))
       }
       (methodNode, requests)
     }).filterNot(_._2.isEmpty).toMap
   }
+
+  private def findSingleCall(method: MethodNode, such: MethodInsnNode => Boolean): Option[MethodInsnNode] = {
+    @tailrec def noMoreInvoke(insn: AbstractInsnNode): Boolean = {
+      insn == null || (!insn.isInstanceOf[MethodInsnNode] && noMoreInvoke(insn.getNext))
+    }
+    @tailrec def find(insn: AbstractInsnNode): Option[MethodInsnNode] = {
+      if (insn == null) None
+      else insn match {
+        case mi: MethodInsnNode =>
+          if (such(mi) && noMoreInvoke(insn.getNext)) Some(mi)
+          else None
+        case _ =>
+          find(insn.getNext)
+      }
+    }
+    find(method.instructions.getFirst)
+  }
+
+  private def traitStaticSuperAccessorName(s: String) = s + "$"
+
+  private def traitMethodInvocation(method: MethodNode): Option[MethodInsnNode] =
+    findSingleCall(method, mi => mi.itf && mi.getOpcode == Opcodes.INVOKESPECIAL && traitStaticSuperAccessorName(mi.name) == method.name)
+
+  private def superAccessorInvocation(method: MethodNode): Option[MethodInsnNode] =
+    findSingleCall(method, mi => mi.itf && mi.getOpcode == Opcodes.INVOKESTATIC && mi.name == traitStaticSuperAccessorName(method.name))
+
+  private def isTraitSuperAccessor(method: MethodNode, owner: ClassBType): Boolean = {
+    owner.isInterface == Right(true) &&
+      BytecodeUtils.isStaticMethod(method) &&
+      traitMethodInvocation(method).nonEmpty
+  }
+
+  private def isMixinForwarder(method: MethodNode, owner: ClassBType): Boolean = {
+    owner.isInterface == Right(false) &&
+      !BytecodeUtils.isStaticMethod(method) &&
+      superAccessorInvocation(method).nonEmpty
+  }
+
+  private def isTraitSuperAccessorOrMixinForwarder(method: MethodNode, owner: ClassBType): Boolean = {
+    isTraitSuperAccessor(method, owner) || isMixinForwarder(method, owner)
+  }
+
 
   /**
    * Returns the inline request for a callsite if the callsite should be inlined according to the
@@ -90,61 +142,89 @@ class InlinerHeuristics[BT <: BTypes](val bTypes: BT) {
    *         `Some(Right)` if the callsite should be and can be inlined
    */
   def inlineRequest(callsite: Callsite, selectedRequestsForCallee: Set[InlineRequest]): Option[Either[OptimizerWarning, InlineRequest]] = {
-    val callee = callsite.callee.get
-    def requestIfCanInline(callsite: Callsite, reason: String): Either[OptimizerWarning, InlineRequest] = inliner.earlyCanInlineCheck(callsite) match {
-      case Some(w) => Left(w)
-      case None => Right(InlineRequest(callsite, Nil, reason))
+    def requestIfCanInline(callsite: Callsite, reason: String): Option[Either[OptimizerWarning, InlineRequest]] = {
+      val callee = callsite.callee.get
+      if (!callee.safeToInline) {
+        if (callsite.isInlineAnnotated && callee.canInlineFromSource) {
+          // By default, we only emit inliner warnings for methods annotated @inline. However, we don't
+          // want to be unnecessarily noisy with `-opt-warnings:_`: for example, the inliner heuristic
+          // would attempt to inline `Function1.apply$sp$II`, as it's higher-order (the receiver is
+          // a function), and it's concrete (forwards to `apply`). But because it's non-final, it cannot
+          // be inlined. So we only create warnings here for methods annotated @inline.
+          Some(Left(CalleeNotFinal(
+            callee.calleeDeclarationClass.internalName,
+            callee.callee.name,
+            callee.callee.desc,
+            callsite.isInlineAnnotated)))
+        } else None
+      } else inliner.earlyCanInlineCheck(callsite) match {
+        case Some(w) => Some(Left(w))
+        case None =>
+          val postInlineRequest: List[InlineRequest] = {
+            val postCall =
+              if (isTraitSuperAccessor(callee.callee, callee.calleeDeclarationClass)) {
+                // scala-dev#259: when inlining a trait super accessor, also inline the callsite to the default method
+                val implName = callee.callee.name.dropRight(1)
+                findSingleCall(callee.callee, mi => mi.itf && mi.getOpcode == Opcodes.INVOKESPECIAL && mi.name == implName)
+              } else {
+                // scala-dev#259: when inlining a mixin forwarder, also inline the callsite to the static super accessor
+                superAccessorInvocation(callee.callee)
+              }
+            postCall.flatMap(call => {
+              callGraph.addIfMissing(callee.callee, callee.calleeDeclarationClass)
+              val maybeCallsite = callGraph.findCallSite(callee.callee, call)
+              maybeCallsite.flatMap(requestIfCanInline(_, reason).flatMap(_.right.toOption))
+            }).toList
+          }
+          Some(Right(InlineRequest(callsite, postInlineRequest, reason)))
+      }
     }
 
-    compilerSettings.YoptInlineHeuristics.value match {
-      case "everything" =>
-        if (callee.safeToInline) {
-          val reason = if (compilerSettings.YoptLogInline.isSetByUser) "the inline strategy is \"everything\"" else null
-          Some(requestIfCanInline(callsite, reason))
-        }
-        else None
+    // scala-dev#259: don't inline into static accessors and mixin forwarders
+    if (isTraitSuperAccessorOrMixinForwarder(callsite.callsiteMethod, callsite.callsiteClass)) None
+    else {
+      val callee = callsite.callee.get
+      compilerSettings.optInlineHeuristics match {
+        case "everything" =>
+          val reason = if (compilerSettings.optLogInline.isDefined) "the inline strategy is \"everything\"" else null
+          requestIfCanInline(callsite, reason)
 
-      case "at-inline-annotated" =>
-        if (callee.safeToInline && callee.annotatedInline) {
-          val reason = if (compilerSettings.YoptLogInline.isSetByUser) {
-            val what = if (callee.safeToInline) "callee" else "callsite"
+        case "at-inline-annotated" =>
+          def reason = if (!compilerSettings.optLogInline.isDefined) null else {
+            val what = if (callee.annotatedInline) "callee" else "callsite"
             s"the $what is annotated `@inline`"
-          } else null
-          Some(requestIfCanInline(callsite, reason))
-        }
-        else None
+          }
+          if (callsite.isInlineAnnotated && !callsite.isNoInlineAnnotated) requestIfCanInline(callsite, reason)
+          else None
 
-      case "default" =>
-        if (callee.safeToInline && !callee.annotatedNoInline && !callsite.annotatedNoInline) {
+        case "default" =>
+          def reason = if (!compilerSettings.optLogInline.isDefined) null else {
+            if (callsite.isInlineAnnotated) {
+              val what = if (callee.annotatedInline) "callee" else "callsite"
+              s"the $what is annotated `@inline`"
+            } else {
+              val paramNames = Option(callee.callee.parameters).map(_.asScala.map(_.name).toVector)
+              def param(i: Int) = {
+                def syn = s"<param $i>"
+                paramNames.fold(syn)(v => v.applyOrElse(i, (_: Int) => syn))
+              }
+              def samInfo(i: Int, sam: String, arg: String) = s"the argument for parameter (${param(i)}: $sam) is a $arg"
+              val argInfos = for ((i, sam) <- callee.samParamTypes; info <- callsite.argInfos.get(i)) yield {
+                val argKind = info match {
+                  case FunctionLiteral => "function literal"
+                  case ForwardedParam(_) => "parameter of the callsite method"
+                }
+                samInfo(i, sam.internalName.split('/').last, argKind)
+              }
+              s"the callee is a higher-order method, ${argInfos.mkString(", ")}"
+            }
+          }
           def shouldInlineHO = callee.samParamTypes.nonEmpty && (callee.samParamTypes exists {
             case (index, _) => callsite.argInfos.contains(index)
           })
-          if (callee.annotatedInline || callsite.annotatedInline || shouldInlineHO) {
-            val reason = if (compilerSettings.YoptLogInline.isSetByUser) {
-              if (callee.annotatedInline || callsite.annotatedInline) {
-                val what = if (callee.safeToInline) "callee" else "callsite"
-                s"the $what is annotated `@inline`"
-              } else {
-                val paramNames = Option(callee.callee.parameters).map(_.asScala.map(_.name).toVector)
-                def param(i: Int) = {
-                  def syn = s"<param $i>"
-                  paramNames.fold(syn)(v => v.applyOrElse(i, (_: Int) => syn))
-                }
-                def samInfo(i: Int, sam: String, arg: String) = s"the argument for parameter (${param(i)}: $sam) is a $arg"
-                val argInfos = for ((i, sam) <- callee.samParamTypes; info <- callsite.argInfos.get(i)) yield {
-                  val argKind = info match {
-                    case FunctionLiteral => "function literal"
-                    case ForwardedParam(_) => "parameter of the callsite method"
-                  }
-                  samInfo(i, sam.internalName.split('/').last, argKind)
-                }
-                s"the callee is a higher-order method, ${argInfos.mkString(", ")}"
-              }
-            } else null
-            Some(requestIfCanInline(callsite, reason))
-          }
+          if (!callsite.isNoInlineAnnotated && (callsite.isInlineAnnotated || shouldInlineHO)) requestIfCanInline(callsite, reason)
           else None
-        } else None
+      }
     }
   }
 
@@ -279,4 +359,101 @@ class InlinerHeuristics[BT <: BTypes](val bTypes: BT) {
     ("javafx/util/Callback", "call(Ljava/lang/Object;)Ljava/lang/Object;")
   )
   def javaSam(internalName: InternalName): Option[String] = javaSams.get(internalName)
+}
+
+object InlinerHeuristics {
+  class InlineSourceMatcher(inlineFromSetting: List[String]) {
+    // `terminal` is true if all remaining entries are of the same negation as this one
+    case class Entry(pattern: Pattern, negated: Boolean, terminal: Boolean) {
+      def matches(internalName: InternalName): Boolean = pattern.matcher(internalName).matches()
+    }
+    private val patternStrings = inlineFromSetting.filterNot(_.isEmpty)
+    val startAllow: Boolean = patternStrings.headOption.contains("**")
+    private[this] var _allowFromSources: Boolean = false
+
+    val entries: List[Entry] = parse()
+
+    def allowFromSources = _allowFromSources
+
+    def allow(internalName: InternalName): Boolean = {
+      var answer = startAllow
+      @tailrec def check(es: List[Entry]): Boolean = es match {
+        case e :: rest =>
+          if (answer && e.negated && e.matches(internalName))
+            answer = false
+          else if (!answer && !e.negated && e.matches(internalName))
+            answer = true
+
+          if (e.terminal && answer != e.negated) answer
+          else check(rest)
+
+        case _ =>
+          answer
+      }
+      check(entries)
+    }
+
+    private def parse(): List[Entry] = {
+      var result = List.empty[Entry]
+
+      val patternsRevIterator = {
+        val it = patternStrings.reverseIterator
+        if (startAllow) it.take(patternStrings.length - 1) else it
+      }
+      for (p <- patternsRevIterator) {
+        if (p == "<sources>") _allowFromSources = true
+        else {
+          val len = p.length
+          var index = 0
+
+          def current = if (index < len) p.charAt(index) else 0.toChar
+
+          def next() = index += 1
+
+          val negated = current == '!'
+          if (negated) next()
+
+          val regex = new java.lang.StringBuilder
+
+          while (index < len) {
+            if (current == '*') {
+              next()
+              if (current == '*') {
+                next()
+                val starStarDot = current == '.'
+                if (starStarDot) {
+                  next()
+                  // special case: "a.**.C" matches "a.C", and "**.C" matches "C"
+                  val i = index - 4
+                  val allowEmpty = i < 0 || (i == 0 && p.charAt(i) == '!') || p.charAt(i) == '.'
+                  if (allowEmpty) regex.append("(?:.*/|)")
+                  else regex.append(".*/")
+                } else
+                  regex.append(".*")
+              } else {
+                regex.append("[^/]*")
+              }
+            } else if (current == '.') {
+              next()
+              regex.append('/')
+            } else {
+              val start = index
+              var needEscape = false
+              while (index < len && current != '.' && current != '*') {
+                needEscape = needEscape || "\\.[]{}()*+-?^$|".indexOf(current) != -1
+                next()
+              }
+              if (needEscape) regex.append("\\Q")
+              regex.append(p, start, index)
+              if (needEscape) regex.append("\\E")
+            }
+          }
+
+          val isTerminal = result.isEmpty || result.head.terminal && result.head.negated == negated
+          result ::= Entry(Pattern.compile(regex.toString), negated, isTerminal)
+        }
+      }
+      result
+    }
+  }
 }

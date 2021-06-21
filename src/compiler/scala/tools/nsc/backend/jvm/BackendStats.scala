@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2014 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
@@ -9,17 +16,12 @@ package backend.jvm
 import scala.reflect.internal.util.Statistics
 
 // Enable with `-Ystatistics:jvm`
-object BackendStats {
-  import Statistics.{newTimer, newSubTimer}
-  val bcodeTimer = newTimer("time in backend", "jvm")
+trait BackendStats {
+  self: Statistics =>
 
+  val bcodeTimer      = newTimer("time in backend", "jvm")
   val bcodeInitTimer  = newSubTimer("bcode initialization", bcodeTimer)
   val bcodeGenStat    = newSubTimer("code generation", bcodeTimer)
   val methodOptTimer  = newSubTimer("intra-method optimizations", bcodeTimer)
   val bcodeWriteTimer = newSubTimer("classfile writing", bcodeTimer)
-
-  def timed[T](timer: Statistics.Timer)(body: => T): T = {
-    val start = Statistics.startTimer(timer)
-    try body finally Statistics.stopTimer(timer, start)
-  }
 }

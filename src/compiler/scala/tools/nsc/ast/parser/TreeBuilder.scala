@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
@@ -34,9 +41,6 @@ abstract class TreeBuilder {
     AppliedTypeTree(rootScalaDot(tpnme.BYNAME_PARAM_CLASS_NAME), List(tpe))
   def repeatedApplication(tpe: Tree): Tree =
     AppliedTypeTree(rootScalaDot(tpnme.REPEATED_PARAM_CLASS_NAME), List(tpe))
-
-  // represents `expr _`, as specified in Method Values of spec/06-expressions.md
-  def makeMethodValue(expr: Tree): Tree = Typed(expr, Function(Nil, EmptyTree))
 
   def makeImportSelector(name: Name, nameOffset: Int): ImportSelector =
     ImportSelector(name, nameOffset, name, nameOffset)
@@ -107,7 +111,7 @@ abstract class TreeBuilder {
   def makeCatchFromExpr(catchExpr: Tree): CaseDef = {
     val binder   = freshTermName()
     val pat      = Bind(binder, Typed(Ident(nme.WILDCARD), Ident(tpnme.Throwable)))
-    val catchDef = ValDef(Modifiers(ARTIFACT), freshTermName("catchExpr"), TypeTree(), catchExpr)
+    val catchDef = ValDef(Modifiers(ARTIFACT), freshTermName("catchExpr$"), TypeTree(), catchExpr)
     val catchFn  = Ident(catchDef.name)
     val body     = atPos(catchExpr.pos.makeTransparent)(Block(
       List(catchDef),
@@ -139,5 +143,6 @@ abstract class TreeBuilder {
     }
   }
 
-  def makePatDef(mods: Modifiers, pat: Tree, rhs: Tree) = gen.mkPatDef(mods, pat, rhs)
+  final def makePatDef(mods: Modifiers, pat: Tree, rhs: Tree): List[ValDef] = makePatDef(mods, pat, rhs, rhs.pos)
+  def makePatDef(mods: Modifiers, pat: Tree, rhs: Tree, rhsPos: Position) = gen.mkPatDef(mods, pat, rhs, rhsPos)
 }

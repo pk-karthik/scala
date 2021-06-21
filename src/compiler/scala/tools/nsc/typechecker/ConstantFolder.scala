@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala
@@ -8,6 +15,8 @@ package tools.nsc
 package typechecker
 
 import java.lang.ArithmeticException
+
+import scala.tools.nsc.Reporting.WarningCategory
 
 /** This class ...
  *
@@ -20,21 +29,21 @@ abstract class ConstantFolder {
   import global._
 
   /** If tree is a constant operation, replace with result. */
-  def apply(tree: Tree): Tree = fold(tree, tree match {
+  def apply(tree: Tree, site: Symbol): Tree = fold(tree, tree match {
     case Apply(Select(Literal(x), op), List(Literal(y))) => foldBinop(op, x, y)
     case Select(Literal(x), op) => foldUnop(op, x)
     case _ => null
-  })
+  }, site)
 
   /** If tree is a constant value that can be converted to type `pt`, perform
    *  the conversion.
    */
-  def apply(tree: Tree, pt: Type): Tree = fold(apply(tree), tree.tpe match {
+  def apply(tree: Tree, pt: Type, site: Symbol): Tree = fold(apply(tree, site), tree.tpe match {
     case ConstantType(x) => x convertTo pt
     case _ => null
-  })
+  }, site)
 
-  private def fold(tree: Tree, compX: => Constant): Tree =
+  private def fold(tree: Tree, compX: => Constant, site: Symbol): Tree =
     try {
       val x = compX
       if ((x ne null) && x.tag != UnitTag) tree setType ConstantType(x)
@@ -42,7 +51,7 @@ abstract class ConstantFolder {
     } catch {
       case e: ArithmeticException =>
         if (settings.warnConstant)
-          warning(tree.pos, s"Evaluation of a constant expression results in an arithmetic error: ${e.getMessage}")
+          runReporting.warning(tree.pos, s"Evaluation of a constant expression results in an arithmetic error: ${e.getMessage}", WarningCategory.LintConstant, site)
         tree
     }
 
@@ -103,13 +112,13 @@ abstract class ConstantFolder {
     case nme.XOR => Constant(x.longValue ^ y.longValue)
     case nme.AND => Constant(x.longValue & y.longValue)
     case nme.LSL if x.tag <= IntTag
-                 => Constant(x.intValue << y.longValue.toInt) // TODO: remove .toInt once starr includes the fix for SI-9516 (2.12.0-M5)
+                 => Constant(x.intValue << y.longValue)
     case nme.LSL => Constant(x.longValue <<  y.longValue)
     case nme.LSR if x.tag <= IntTag
-                 => Constant(x.intValue >>> y.longValue.toInt) // TODO: remove .toInt once starr includes the fix for SI-9516 (2.12.0-M5)
+                 => Constant(x.intValue >>> y.longValue)
     case nme.LSR => Constant(x.longValue >>> y.longValue)
     case nme.ASR if x.tag <= IntTag
-                 => Constant(x.intValue >> y.longValue.toInt) // TODO: remove .toInt once starr includes the fix for SI-9516 (2.12.0-M5)
+                 => Constant(x.intValue >> y.longValue)
     case nme.ASR => Constant(x.longValue >> y.longValue)
     case nme.EQ  => Constant(x.longValue == y.longValue)
     case nme.NE  => Constant(x.longValue != y.longValue)

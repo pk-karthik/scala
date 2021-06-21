@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2006-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package util
@@ -120,9 +124,6 @@ class Random(val self: java.util.Random) extends AnyRef with Serializable {
 
     (bf(xs) ++= buf).result()
   }
-
-  @deprecated("Preserved for backwards binary compatibility. To remove in 2.12.x.", "2.11.6")
-  final def `scala$util$Random$$isAlphaNum$1`(c: Char) = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
 
   /** Returns a Stream of pseudorandomly chosen alphanumeric characters,
    *  equally chosen from A-Z, a-z, and 0-9.

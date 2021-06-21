@@ -1,16 +1,23 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author Stepan Koltsov
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala
 package tools.nsc
 package interpreter
 
-import java.io.{ BufferedReader }
+import java.io.{BufferedReader, StringReader}
 import session.NoHistory
 
-/** Reads using standard JDK API */
+/** Reads using standard JDK API. */
 class SimpleReader(
   in: BufferedReader,
   out: JPrintWriter,
@@ -43,6 +50,13 @@ object SimpleReader {
 
   def apply(in: BufferedReader = defaultIn, out: JPrintWriter = defaultOut, interactive: Boolean = true): SimpleReader =
     new SimpleReader(in, out, interactive)
+
+  // a non-interactive SimpleReader that returns the given text
+  def apply(text: String): SimpleReader = apply(
+    in  = new BufferedReader(new StringReader(text)),
+    out = defaultOut,
+    interactive = false
+  )
 }
 
 // pretend we are a console for verbose purposes

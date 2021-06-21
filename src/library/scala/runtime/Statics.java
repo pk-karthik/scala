@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala.runtime;
 
 /** Not for public consumption.  Usage by the runtime only.
@@ -103,12 +115,20 @@ public final class Statics {
     if (x == null)
       return 0;
 
+    if (x instanceof java.lang.Number) {
+      return anyHashNumber((java.lang.Number) x);
+    }
+
+    return x.hashCode();
+  }
+
+  private static int anyHashNumber(Number x) {
     if (x instanceof java.lang.Long)
       return longHash(((java.lang.Long)x).longValue());
-
+  
     if (x instanceof java.lang.Double)
       return doubleHash(((java.lang.Double)x).doubleValue());
-
+  
     if (x instanceof java.lang.Float)
       return floatHash(((java.lang.Float)x).floatValue());
 

@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala
 package reflect
 package runtime
@@ -5,7 +17,9 @@ package runtime
 import scala.reflect.internal.{TreeInfo, SomePhase}
 import scala.reflect.internal.{SymbolTable => InternalSymbolTable}
 import scala.reflect.runtime.{SymbolTable => RuntimeSymbolTable}
+import scala.reflect.internal.util.Statistics
 import scala.reflect.api.{TypeCreator, Universe}
+import scala.reflect.internal.util.Statistics
 
 /** An implementation of [[scala.reflect.api.Universe]] for runtime reflection using JVM classloaders.
  *
@@ -18,19 +32,20 @@ class JavaUniverse extends InternalSymbolTable with JavaUniverseForce with Refle
   def erasurePhase = SomePhase
   lazy val settings = new Settings
 
+  override final val statistics = new Statistics(JavaUniverse.this, settings) with ReflectStats
   private val isLogging = sys.props contains "scala.debug.reflect"
   def log(msg: => AnyRef): Unit = if (isLogging) Console.err.println("[reflect] " + msg)
 
   // TODO: why put output under isLogging? Calls to inform are already conditional on debug/verbose/...
-  import scala.reflect.internal.{Reporter, ReporterImpl}
-  override def reporter: Reporter = new ReporterImpl {
+  import scala.reflect.internal.Reporter
+  override def reporter: Reporter = new Reporter {
     protected def info0(pos: Position, msg: String, severity: Severity, force: Boolean): Unit = log(msg)
   }
 
   // minimal Run to get Reporting wired
   def currentRun = new RunReporting {}
   class PerRunReporting extends PerRunReportingBase {
-    def deprecationWarning(pos: Position, msg: String, since: String): Unit = reporter.warning(pos, msg)
+    def deprecationWarning(pos: Position, msg: String, since: String, site: String, origin: String): Unit = reporter.warning(pos, msg)
   }
   protected def PerRunReporting = new PerRunReporting
 
@@ -44,7 +59,7 @@ class JavaUniverse extends InternalSymbolTable with JavaUniverseForce with Refle
 
   override lazy val internal: Internal = new SymbolTableInternal {
     override def typeTagToManifest[T: ClassTag](mirror0: Any, tag: Universe # TypeTag[T]): Manifest[T] = {
-      // SI-6239: make this conversion more precise
+      // scala/bug#6239: make this conversion more precise
       val mirror = mirror0.asInstanceOf[Mirror]
       val runtimeClass = mirror.runtimeClass(tag.in(mirror).tpe)
       Manifest.classType(runtimeClass).asInstanceOf[Manifest[T]]
@@ -91,7 +106,7 @@ class JavaUniverse extends InternalSymbolTable with JavaUniverseForce with Refle
   // Main challenges that runtime reflection presents wrt initialization are:
   //   1) Extravagant completion scheme that enters package members on-demand rather than a result of scanning a directory with class files.
   //      (That's a direct consequence of the fact that in general case we can't enumerate all classes in a classloader.
-  //      As Paul rightfully mentioned, we could specialcase classloaders that point to filesystems, but that is left for future work).
+  //      As Paul rightfully mentioned, we could special case classloaders that point to filesystems, but that is left for future work).
   //   2) Presence of synthetic symbols that aren't loaded by normal means (from classfiles) but are synthesized on-the-fly,
   //      and the necessity to propagate these synthetic symbols from rootMirror to other mirrors,
   //      complicated by the fact that such symbols depend on normal symbols (e.g. AnyRef depends on Object).

@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package sys
@@ -15,8 +19,8 @@ import ProcessBuilder._
 
 /** Represents a sequence of one or more external processes that can be
   * executed. A `ProcessBuilder` can be a single external process, or a
-  * combination of other `ProcessBuilder`. One can control where a
-  * the output of an external process will go to, and where its input will come
+  * combination of other `ProcessBuilder`. One can control where the
+  * output of an external process will go to, and where its input will come
   * from, or leave that decision to whoever starts it.
   *
   * One creates a `ProcessBuilder` through factories provided in
@@ -90,19 +94,19 @@ import ProcessBuilder._
   *
   * If not specified, the input of the external commands executed with `run` or
   * `!` will not be tied to anything, and the output will be redirected to the
-  * stdout and stderr of the Scala process. For the methods `!!` and `lines`, no
+  * stdout and stderr of the Scala process. For the methods `!!` and `lineStream`, no
   * input will be provided, and the output will be directed according to the
   * semantics of these methods.
   *
   * Some methods will cause stdin to be used as input. Output can be controlled
-  * with a [[scala.sys.process.ProcessLogger]] -- `!!` and `lines` will only
+  * with a [[scala.sys.process.ProcessLogger]] -- `!!` and `lineStream` will only
   * redirect error output when passed a `ProcessLogger`. If one desires full
   * control over input and output, then a [[scala.sys.process.ProcessIO]] can be
   * used with `run`.
   *
-  * For example, we could silence the error output from `lines_!` like this:
+  * For example, we could silence the error output from `lineStream_!` like this:
   * {{{
-  * val etcFiles = "find /etc" lines_! ProcessLogger(line => ())
+  * val etcFiles = "find /etc" lineStream_! ProcessLogger(line => ())
   * }}}
   *
   * ==Extended Example==
@@ -186,7 +190,7 @@ trait ProcessBuilder extends Source with Sink {
   def lineStream(log: ProcessLogger): Stream[String]
 
   /** Deprecated (renamed).  Use `lineStream(log: ProcessLogger)` instead. */
-  @deprecated("use stream instead", "2.11.0")
+  @deprecated("use lineStream instead", "2.11.0")
   def lines(log: ProcessLogger): Stream[String] = lineStream(log)
 
   /** Starts the process represented by this builder.  The output is returned as
@@ -210,7 +214,7 @@ trait ProcessBuilder extends Source with Sink {
   def lineStream_!(log: ProcessLogger): Stream[String]
 
   /** Deprecated (renamed).  Use `lineStream_!(log: ProcessLogger)` instead. */
-  @deprecated("use stream_! instead", "2.11.0")
+  @deprecated("use lineStream_! instead", "2.11.0")
   def lines_!(log: ProcessLogger): Stream[String] = lineStream_!(log)
 
   /** Starts the process represented by this builder, blocks until it exits, and
@@ -257,10 +261,9 @@ trait ProcessBuilder extends Source with Sink {
     */
   def run(connectInput: Boolean): Process
 
-  /** Starts the process represented by this builder, blocks until it exits, and
-    * returns the exit code.  Standard output and error are sent to the given
-    * ProcessLogger.  The newly started process reads from standard input of the
-    * current process if `connectInput` is true.
+  /** Starts the process represented by this builder.  Standard output and error
+    * are sent to the given ProcessLogger.  The newly started process reads from
+    * standard input of the current process if `connectInput` is true.
     */
   def run(log: ProcessLogger, connectInput: Boolean): Process
 
@@ -342,7 +345,7 @@ object ProcessBuilder extends ProcessBuilderImpl {
     /** Writes the output stream of this process to a [[scala.sys.process.ProcessBuilder]]. */
     def #>(b: ProcessBuilder): ProcessBuilder = new PipedBuilder(toSource, b, false)
 
-    /** Returnes a [[scala.sys.process.ProcessBuilder]] representing this `Source`. */
+    /** Returns a [[scala.sys.process.ProcessBuilder]] representing this `Source`. */
     def cat = toSource
     private def toFile(f: File, append: Boolean) = #> (new FileOutput(f, append))
   }

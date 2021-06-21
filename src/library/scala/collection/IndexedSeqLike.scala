@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2006-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -29,7 +33,6 @@ package collection
  *  @tparam A    the element type of the $coll
  *  @tparam Repr the type of the actual $coll containing the elements.
  *  @author Martin Odersky
- *  @version 2.8
  *  @since   2.8
  *  @define willNotTerminateInf
  *  @define mayNotTerminateInf
@@ -84,7 +87,11 @@ trait IndexedSeqLike[+A, +Repr] extends Any with SeqLike[A, Repr] {
   }
 
   override /*IterableLike*/
-  def iterator: Iterator[A] = new Elements(0, length)
+  def iterator: Iterator[A] = {
+    val len = length
+    if (len == 0) Iterator.empty
+    else new Elements(0, length)
+  }
 
   /* Overridden for efficiency */
   override def toBuffer[A1 >: A]: mutable.Buffer[A1] = {
@@ -92,4 +99,6 @@ trait IndexedSeqLike[+A, +Repr] extends Any with SeqLike[A, Repr] {
     copyToBuffer(result)
     result
   }
+
+  override protected[collection] def sizeHintIfCheap: Int = size
 }

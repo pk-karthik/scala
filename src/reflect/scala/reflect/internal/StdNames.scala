@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala
@@ -70,7 +77,7 @@ trait StdNames {
       val suffix = s takeRight edge
 
       val cs = s.toArray
-      val bytes = Codec toUTF8 cs
+      val bytes = Codec.toUTF8(new scala.runtime.ArrayCharSequence(cs, 0, cs.length))
       md5 update bytes
       val md5chars = (md5.digest() map (b => (b & 0xFF).toHexString)).mkString
 
@@ -89,15 +96,20 @@ trait StdNames {
     protected val stringToTypeName = null
     protected implicit def createNameType(name: String): NameType
 
-    def flattenedName(segments: Name*): NameType =
-      compactify(segments mkString NAME_JOIN_STRING)
+    def flattenedName(owner: Symbol, name: Name): NameType = {
+      val flat = owner.name.toString + NAME_JOIN_STRING + name.toString
+      if (owner.isJava) flat else compactify(flat) // scala/bug#11277
+    }
 
-    val NAME_JOIN_STRING: String              = NameTransformer.NAME_JOIN_STRING
-    val MODULE_SUFFIX_STRING: String          = NameTransformer.MODULE_SUFFIX_STRING
-    val LOCAL_SUFFIX_STRING: String           = NameTransformer.LOCAL_SUFFIX_STRING
-    val TRAIT_SETTER_SEPARATOR_STRING: String = NameTransformer.TRAIT_SETTER_SEPARATOR_STRING
-
-    val SINGLETON_SUFFIX: String     = ".type"
+    // TODO: what is the purpose of all this duplication!?!?!
+    // I made these constants because we cannot change them without bumping our major version anyway.
+    final val NAME_JOIN_STRING                 = NameTransformer.NAME_JOIN_STRING
+    final val MODULE_SUFFIX_STRING             = NameTransformer.MODULE_SUFFIX_STRING
+    final val MODULE_VAR_SUFFIX_STRING         = NameTransformer.MODULE_VAR_SUFFIX_STRING
+    final val LOCAL_SUFFIX_STRING              = NameTransformer.LOCAL_SUFFIX_STRING
+    final val LAZY_LOCAL_SUFFIX_STRING         = NameTransformer.LAZY_LOCAL_SUFFIX_STRING
+    final val TRAIT_SETTER_SEPARATOR_STRING    = NameTransformer.TRAIT_SETTER_SEPARATOR_STRING
+    final val SINGLETON_SUFFIX                 = ".type"
 
     val ANON_CLASS_NAME: NameType              = "$anon"
     val DELAMBDAFY_LAMBDA_CLASS_NAME: NameType = "$lambda"
@@ -106,7 +118,7 @@ trait StdNames {
     val EMPTY_PACKAGE_NAME: NameType           = "<empty>"
     val IMPORT: NameType                       = "<import>"
     val MODULE_SUFFIX_NAME: NameType           = MODULE_SUFFIX_STRING
-    val MODULE_VAR_SUFFIX: NameType            = "$module"
+    val MODULE_VAR_SUFFIX: NameType            = MODULE_VAR_SUFFIX_STRING
     val PACKAGE: NameType                      = "package"
     val ROOT: NameType                         = "<root>"
     val SPECIALIZED_SUFFIX: NameType           = "$sp"
@@ -116,6 +128,9 @@ trait StdNames {
     val NESTED_IN_ANON_CLASS: String           = NESTED_IN + ANON_CLASS_NAME.toString.replace("$", "")
     val NESTED_IN_ANON_FUN: String             = NESTED_IN + ANON_FUN_NAME.toString.replace("$", "")
     val NESTED_IN_LAMBDA: String               = NESTED_IN + DELAMBDAFY_LAMBDA_CLASS_NAME.toString.replace("$", "")
+
+    val NON_LOCAL_RETURN_KEY_STRING: String    = "nonLocalReturnKey"
+    val LIFTED_TREE: String                    = "liftedTree"
 
     /**
      * Ensures that name mangling does not accidentally make a class respond `true` to any of
@@ -273,6 +288,9 @@ trait StdNames {
     final val TypeDef: NameType             = "TypeDef"
     final val Quasiquote: NameType          = "Quasiquote"
 
+    // async
+    final val stateMachine: NameType        = "stateMachine$async"
+
     // quasiquote-specific names
     final val QUASIQUOTE_FUNCTION: NameType     = "$quasiquote$function$"
     final val QUASIQUOTE_MODS: NameType         = "$quasiquote$mods$"
@@ -301,6 +319,9 @@ trait StdNames {
 
     final val scala_ : NameType = "scala"
 
+    // Scala 3 special type
+    val AND: NameType = nme.AND.toTypeName
+
     def dropSingletonName(name: Name): TypeName = (name dropRight SINGLETON_SUFFIX.length).toTypeName
     def singletonName(name: Name): TypeName     = (name append SINGLETON_SUFFIX).toTypeName
   }
@@ -320,7 +341,9 @@ trait StdNames {
     val EXCEPTION_RESULT_PREFIX        = "exceptionResult"
     val EXPAND_SEPARATOR_STRING        = "$$"
     val FRESH_TERM_NAME_PREFIX         = "x$"
+    val INTERPRETER_IMPORT_LEVEL_UP    = NameTransformer.encode("{{")
     val INTERPRETER_IMPORT_WRAPPER     = "$iw"
+    val INTERPRETER_WRAPPER            = "$read"
     val LOCALDUMMY_PREFIX              = "<local "       // owner of local blocks
     val PROTECTED_PREFIX               = "protected$"
     val PROTECTED_SET_PREFIX           = PROTECTED_PREFIX + "set"
@@ -337,7 +360,6 @@ trait StdNames {
     val DEFAULT_CASE: NameType             = "defaultCase$"
     val EQEQ_LOCAL_VAR: NameType           = "eqEqTemp$"
     val FAKE_LOCAL_THIS: NameType          = "this$"
-    val LAZY_LOCAL: NameType               = "$lzy"
     val LAZY_SLOW_SUFFIX: NameType         = "$lzycompute"
     val UNIVERSE_BUILD_PREFIX: NameType    = "$u.internal.reificationSupport."
     val UNIVERSE_PREFIX: NameType          = "$u."
@@ -381,7 +403,7 @@ trait StdNames {
     def isLocalName(name: Name)             = name endsWith LOCAL_SUFFIX_STRING
     def isLoopHeaderLabel(name: Name)       = (name startsWith WHILE_PREFIX) || (name startsWith DO_WHILE_PREFIX)
     def isProtectedAccessorName(name: Name) = name startsWith PROTECTED_PREFIX
-    def isReplWrapperName(name: Name)       = name containsName INTERPRETER_IMPORT_WRAPPER
+    def isReplWrapperName(name: Name)       = (name containsName INTERPRETER_WRAPPER) || (name containsName INTERPRETER_IMPORT_WRAPPER)
     def isSetterName(name: Name)            = name endsWith SETTER_SUFFIX
     def isTraitSetterName(name: Name)       = isSetterName(name) && (name containsName TRAIT_SETTER_SEPARATOR_STRING)
     def isSingletonName(name: Name)         = name endsWith SINGLETON_SUFFIX
@@ -419,17 +441,23 @@ trait StdNames {
      *  Look backward from the end of the string for "$$", and take the
      *  part of the string after that; but if the string is "$$$" or longer,
      *  be sure to retain the extra dollars.
+     *  If the name happens to be a back quoted name containing literal $$
+     *  or $ followed by an operator that gets encoded, go directly to compiler
+     *  crash. Do not pass go and don't even think about collecting any $$
      */
-    def unexpandedName(name: Name): Name = name lastIndexOf "$$" match {
-      case 0 | -1 => name
-      case idx0   =>
-        // Sketchville - We've found $$ but if it's part of $$$ or $$$$
-        // or something we need to keep the bonus dollars, so e.g. foo$$$outer
-        // has an original name of $outer.
-        var idx = idx0
-        while (idx > 0 && name.charAt(idx - 1) == '$')
-          idx -= 1
-        name drop idx + 2
+    def unexpandedName(name: Name): Name = {
+      if (!name.containsChar('$')) name // lastIndexOf calls Name.toString, add a fast path to avoid that.
+      else name lastIndexOf "$$" match {
+        case 0 | -1 => name
+        case idx0   =>
+          // Sketchville - We've found $$ but if it's part of $$$ or $$$$
+          // or something we need to keep the bonus dollars, so e.g. foo$$$outer
+          // has an original name of $outer.
+          var idx = idx0
+          while (idx > 0 && name.charAt(idx - 1) == '$')
+            idx -= 1
+          name drop idx + 2
+      }
     }
 
     @deprecated("use unexpandedName", "2.11.0") def originalName(name: Name): Name            = unexpandedName(name)
@@ -501,6 +529,10 @@ trait StdNames {
     /** The name of a setter for protected symbols. Used for inherited Java fields. */
     def protSetterName(name: Name): TermName = newTermName(PROTECTED_SET_PREFIX + name)
 
+    private[this] val existentialNames = (0 to 22).map(existentialName0)
+    private def existentialName0(i: Int) = newTypeName("_" + i)
+    final def existentialName(i: Int): TypeName = if (i < existentialNames.length) existentialNames(i) else existentialName0(i)
+
     final val Nil: NameType                 = "Nil"
     final val Predef: NameType              = "Predef"
 
@@ -538,7 +570,7 @@ trait StdNames {
     val x_8 : NameType  = "x$8"
     val x_9 : NameType  = "x$9"
 
-    @switch def syntheticParamName(i: Int): TermName = i match {
+    def syntheticParamName(i: Int): TermName = (i: @switch) match {
       case 0  => nme.x_0
       case 1  => nme.x_1
       case 2  => nme.x_2
@@ -552,7 +584,7 @@ trait StdNames {
       case _  => newTermName("x$" + i)
     }
 
-    @switch def productAccessorName(j: Int): TermName = j match {
+    def productAccessorName(j: Int): TermName = (j: @switch) match {
       case 1  => nme._1
       case 2  => nme._2
       case 3  => nme._3
@@ -591,6 +623,22 @@ trait StdNames {
     val wrapBooleanArray: NameType = "wrapBooleanArray"
     val wrapUnitArray: NameType    = "wrapUnitArray"
     val genericWrapArray: NameType = "genericWrapArray"
+
+    val double2Double: NameType = "double2Double"
+    val float2Float: NameType = "float2Float"
+    val byte2Byte: NameType = "byte2Byte"
+    val short2Short: NameType = "short2Short"
+    val char2Character: NameType = "char2Character"
+    val int2Integer: NameType = "int2Integer"
+    val long2Long: NameType = "long2Long"
+    val boolean2Boolean: NameType = "boolean2Boolean"
+
+    // Scala 3 import syntax
+    val as: NameType              = "as"
+
+    // Scala 3 soft keywords
+    val infix: NameType           = "infix"
+    val open: NameType            = "open"
 
     // Compiler utilized names
 
@@ -659,7 +707,10 @@ trait StdNames {
     val asType: NameType               = "asType"
     val asInstanceOf_ : NameType       = "asInstanceOf"
     val asInstanceOf_Ob : NameType     = "$asInstanceOf"
+    val async : NameType               = "async"
+    val await : NameType               = "await"
     val box: NameType                  = "box"
+    val byteValue: NameType            = "byteValue"
     val bytes: NameType                = "bytes"
     val c: NameType                    = "c"
     val canEqual_ : NameType           = "canEqual"
@@ -674,9 +725,11 @@ trait StdNames {
     val delayedInitArg: NameType       = "delayedInit$body"
     val dollarScope: NameType          = "$scope"
     val doubleHash: NameType           = "doubleHash"
+    val doubleValue: NameType          = "doubleValue"
     val drop: NameType                 = "drop"
     val elem: NameType                 = "elem"
     val noSelfType: NameType           = "noSelfType"
+    val empty: NameType                = "empty"
     val ensureAccessible : NameType    = "ensureAccessible"
     val eq: NameType                   = "eq"
     val equalsNumChar : NameType       = "equalsNumChar"
@@ -693,6 +746,7 @@ trait StdNames {
     val find_ : NameType               = "find"
     val flatMap: NameType              = "flatMap"
     val floatHash: NameType            = "floatHash"
+    val floatValue: NameType           = "floatValue"
     val foreach: NameType              = "foreach"
     val freshTermName: NameType        = "freshTermName"
     val freshTypeName: NameType        = "freshTypeName"
@@ -703,19 +757,26 @@ trait StdNames {
     val immutable: NameType            = "immutable"
     val implicitly: NameType           = "implicitly"
     val in: NameType                   = "in"
+    val initialize : NameType          = "initialize"
+    val initialized : NameType         = "initialized"
     val internal: NameType             = "internal"
+    val intValue: NameType             = "intValue"
     val inlinedEquals: NameType        = "inlinedEquals"
     val isArray: NameType              = "isArray"
     val isDefinedAt: NameType          = "isDefinedAt"
     val isEmpty: NameType              = "isEmpty"
+    val isInfinite: NameType           = "isInfinite"
     val isInstanceOf_ : NameType       = "isInstanceOf"
     val isInstanceOf_Ob : NameType     = "$isInstanceOf"
+    val isNaN: NameType                = "isNaN"
     val java: NameType                 = "java"
     val key: NameType                  = "key"
     val lang: NameType                 = "lang"
     val length: NameType               = "length"
     val lengthCompare: NameType        = "lengthCompare"
+    val locally: NameType              = "locally"
     val longHash: NameType             = "longHash"
+    val longValue: NameType            = "longValue"
     val macroContext : NameType        = "c"
     val main: NameType                 = "main"
     val manifestToTypeTag: NameType    = "manifestToTypeTag"
@@ -748,6 +809,7 @@ trait StdNames {
     val productElement: NameType       = "productElement"
     val productIterator: NameType      = "productIterator"
     val productPrefix: NameType        = "productPrefix"
+    val raw_ : NameType                = "raw"
     val readResolve: NameType          = "readResolve"
     val reify : NameType               = "reify"
     val reificationSupport : NameType  = "reificationSupport"
@@ -755,6 +817,7 @@ trait StdNames {
     val runtime: NameType              = "runtime"
     val runtimeClass: NameType         = "runtimeClass"
     val runtimeMirror: NameType        = "runtimeMirror"
+    val s: NameType                    = "s"
     val scala_ : NameType              = "scala"
     val selectDynamic: NameType        = "selectDynamic"
     val selectOverloadedMethod: NameType = "selectOverloadedMethod"
@@ -765,6 +828,7 @@ trait StdNames {
     val setInfo: NameType              = "setInfo"
     val setSymbol: NameType            = "setSymbol"
     val setType: NameType              = "setType"
+    val shortValue: NameType           = "shortValue"
     val splice: NameType               = "splice"
     val staticClass : NameType         = "staticClass"
     val staticModule : NameType        = "staticModule"
@@ -790,6 +854,7 @@ trait StdNames {
     val unapply: NameType              = "unapply"
     val unapplySeq: NameType           = "unapplySeq"
     val unbox: NameType                = "unbox"
+    val unit: NameType                 = "unit"
     val universe: NameType             = "universe"
     val UnliftListElementwise: NameType = "UnliftListElementwise"
     val UnliftListOfListsElementwise: NameType = "UnliftListOfListsElementwise"
@@ -800,8 +865,19 @@ trait StdNames {
     val values : NameType              = "values"
     val wait_ : NameType               = "wait"
     val withFilter: NameType           = "withFilter"
+    val writeReplace: NameType         = "writeReplace"
     val xml: NameType                  = "xml"
     val zero: NameType                 = "zero"
+
+    // async
+    val result           : NameType       = "result$async"
+    val awaitable        : NameType       = "awaitable$async"
+    val completed        : NameType       = "completed$async"
+    val stateMachine     : NameType       = "stateMachine$async"
+    val state            : NameType       = "state"
+    val tr               : NameType       = "tr$async"
+    val t                : NameType       = "throwable$async"
+    val trGetResult      : NameType       = "tryGetResult$async"
 
     // quasiquote interpolators:
     val q: NameType  = "q"
@@ -861,6 +937,7 @@ trait StdNames {
       final val PLUS : NameType  = "+"
       final val STAR : NameType  = "*"
       final val TILDE: NameType  = "~"
+      final val QMARK: NameType  = "?"
 
       final val isUnary: Set[Name] = Set(MINUS, PLUS, TILDE, BANG)
     }
@@ -1036,6 +1113,7 @@ trait StdNames {
     }
 
     def newBitmapName(bitmapPrefix: Name, n: Int) = bitmapPrefix append ("" + n)
+    def isTransientBitmap(name: Name) = name == nme.BITMAP_TRANSIENT || name == nme.BITMAP_CHECKINIT_TRANSIENT
 
     val BITMAP_NORMAL: NameType              = BITMAP_PREFIX + ""           // initialization bitmap for public/protected lazy vals
     val BITMAP_TRANSIENT: NameType           = BITMAP_PREFIX + "trans$"     // initialization bitmap for transient lazy vals
@@ -1106,6 +1184,7 @@ trait StdNames {
     final val ELSEkw: TermName         = kw("else")
     final val ENUMkw: TermName         = kw("enum")
     final val EXTENDSkw: TermName      = kw("extends")
+    final val FALSEkw: TermName        = kw("false")
     final val FINALkw: TermName        = kw("final")
     final val FINALLYkw: TermName      = kw("finally")
     final val FLOATkw: TermName        = kw("float")
@@ -1135,6 +1214,7 @@ trait StdNames {
     final val THROWkw: TermName        = kw("throw")
     final val THROWSkw: TermName       = kw("throws")
     final val TRANSIENTkw: TermName    = kw("transient")
+    final val TRUEkw: TermName         = kw("true")
     final val TRYkw: TermName          = kw("try")
     final val VOIDkw: TermName         = kw("void")
     final val VOLATILEkw: TermName     = kw("volatile")
@@ -1148,21 +1228,15 @@ trait StdNames {
     protected val stringToTypeName = null
     protected implicit def createNameType(s: String): TypeName = newTypeNameCached(s)
 
-    final val BoxedBoolean: TypeName       = "java.lang.Boolean"
-    final val BoxedByte: TypeName          = "java.lang.Byte"
-    final val BoxedCharacter: TypeName     = "java.lang.Character"
-    final val BoxedDouble: TypeName        = "java.lang.Double"
-    final val BoxedFloat: TypeName         = "java.lang.Float"
-    final val BoxedInteger: TypeName       = "java.lang.Integer"
-    final val BoxedLong: TypeName          = "java.lang.Long"
-    final val BoxedNumber: TypeName        = "java.lang.Number"
-    final val BoxedShort: TypeName         = "java.lang.Short"
-    final val IOOBException: TypeName      = "java.lang.IndexOutOfBoundsException"
-    final val InvTargetException: TypeName = "java.lang.reflect.InvocationTargetException"
-    final val MethodAsObject: TypeName     = "java.lang.reflect.Method"
-    final val NPException: TypeName        = "java.lang.NullPointerException"
-    final val Object: TypeName             = "java.lang.Object"
-    final val Throwable: TypeName          = "java.lang.Throwable"
+    final val BoxedBoolean: String       = "java.lang.Boolean"
+    final val BoxedByte: String          = "java.lang.Byte"
+    final val BoxedCharacter: String     = "java.lang.Character"
+    final val BoxedDouble: String        = "java.lang.Double"
+    final val BoxedFloat: String         = "java.lang.Float"
+    final val BoxedInteger: String       = "java.lang.Integer"
+    final val BoxedLong: String          = "java.lang.Long"
+    final val BoxedNumber: String        = "java.lang.Number"
+    final val BoxedShort: String         = "java.lang.Short"
 
     final val GetCause: TermName         = newTermName("getCause")
     final val GetClass: TermName         = newTermName("getClass")
@@ -1171,10 +1245,11 @@ trait StdNames {
     final val Invoke: TermName           = newTermName("invoke")
     final val InvokeExact: TermName      = newTermName("invokeExact")
 
+    final val Metafactory: TermName         = newTermName("metafactory")
     final val AltMetafactory: TermName      = newTermName("altMetafactory")
     final val Bootstrap: TermName           = newTermName("bootstrap")
 
-    val Boxed = immutable.Map[TypeName, TypeName](
+    val Boxed = immutable.Map[TypeName, String](
       tpnme.Boolean -> BoxedBoolean,
       tpnme.Byte    -> BoxedByte,
       tpnme.Char    -> BoxedCharacter,

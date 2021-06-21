@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala.tools.util
 
 import scala.tools.nsc.io._
@@ -13,7 +25,7 @@ object VerifyClass {
       Class.forName(name, true, cl)
       (name, None)
     } catch {
-      case x: Throwable => // TODO: only catch VerifyError (and related) + ExceptionInInitializationError (for static objects that bomb on classload)
+      case x: Throwable => // TODO: only catch VerifyError (and related) + ExceptionInInitializerError (for static objects that bomb on classload)
         (name, Some(x.toString))
     }
   }
@@ -31,7 +43,7 @@ object VerifyClass {
     if (name endsWith ".jar")  checkClassesInJar(name, cl)
     else checkClassesInDir(name, cl)
 
-  /** Attempts to load all classes on the classpath defined in the args string array.  This method is meant to be used via reflection from tools like SBT or Ant. */
+  /** Attempts to load all classes on the classpath defined in the args string array.  This method is meant to be used via reflection from tools like sbt or Ant. */
   def run(args: Array[String]): java.util.Map[String, String] = {
     val urls = args.map(Path.apply).map(_.toFile.toURI.toURL).toArray
     println("As urls: " + urls.mkString(","))

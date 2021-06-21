@@ -1,22 +1,25 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package util
 
 /** An implementation of Austin Appleby's MurmurHash 3.0 algorithm
- *  (32 bit version); reference: https://github.com/aappleby/smhasher
+ *  (32 bit version); reference: [[https://github.com/aappleby/smhasher]]
  *
  *  This is the hash used by collections and case classes (including
  *  tuples).
  *
  *  @author  Rex Kerr
- *  @version 2.9
  *  @since   2.9
  */
 
@@ -82,7 +85,7 @@ class MurmurHash[@specialized(Int,Long,Float,Double) T](seed: Int) extends (T =>
  *  needs to be called to finalize the hash.
  */
 @deprecated("use the object MurmurHash3 instead", "2.10.0")
-// NOTE: Used by SBT 0.13.0-M2 and below
+// NOTE: Used by sbt 0.13.0-M2 and below
 object MurmurHash {
   // Magic values used for MurmurHash's 32 bit hash.
   // Don't change these without consulting a hashing expert!

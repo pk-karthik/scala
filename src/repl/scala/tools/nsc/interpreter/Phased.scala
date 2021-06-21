@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Paul Phillips
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
@@ -9,7 +16,7 @@ package interpreter
 import scala.language.implicitConversions
 
 /** Mix this into an object and use it as a phasing
- *  swiss army knife.
+ *  Swiss Army knife.
  */
 trait Phased {
   val global: Global
@@ -88,7 +95,7 @@ trait Phased {
 
     lazy val all = List(
       Parser, Namer, Packageobjects, Typer, Superaccessors, Pickler, Refchecks,
-      Uncurry, Tailcalls, Specialize, Explicitouter, Erasure, Lazyvals, Lambdalift,
+      Uncurry, Tailcalls, Specialize, Explicitouter, Erasure, Fields, Lambdalift,
       Constructors, Flatten, Mixin, Cleanup, Delambdafy, Jvm, Terminal
     )
     lazy val nameMap = all.map(x => x.name -> x).toMap withDefaultValue NoPhaseName
@@ -114,12 +121,12 @@ trait Phased {
   case object Pickler extends PhaseName
   case object Refchecks extends PhaseName
   case object Uncurry extends PhaseName
+  case object Fields extends PhaseName
   case object Tailcalls extends PhaseName
   case object Specialize extends PhaseName
   case object Explicitouter extends PhaseName
   case object Erasure extends PhaseName
   case object PostErasure extends PhaseName
-  case object Lazyvals extends PhaseName
   case object Lambdalift extends PhaseName
   case object Constructors extends PhaseName
   case object Flatten extends PhaseName

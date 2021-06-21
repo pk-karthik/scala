@@ -1,11 +1,19 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
 
-import io.File
+import java.nio.file.Files
+
 
 /** A class representing command line info for scalac */
 class CompilerCommand(arguments: List[String], val settings: Settings) {
@@ -97,21 +105,13 @@ class CompilerCommand(arguments: List[String], val settings: Settings) {
     else if (Yhelp)         yusageMsg
     else if (showPlugins)   global.pluginDescriptions
     else if (showPhases)    global.phaseDescriptions + (
-      if (debug) "\n" + global.phaseFlagDescriptions else ""
+      if (settings.isDebug) "\n" + global.phaseFlagDescriptions else ""
     )
     else if (genPhaseGraph.isSetByUser) {
-      val components = global.phaseNames  // global.phaseDescriptors // one initializes
+      val components = global.phaseNames // global.phaseDescriptors // one initializes
       s"Phase graph of ${components.size} components output to ${genPhaseGraph.value}*.dot."
     }
-    // would be nicer if we could ask all the options for their helpful messages
-    else {
-      val sb = new StringBuilder
-      allSettings foreach {
-        case s: MultiChoiceSetting[_] if s.isHelping => sb append s.help
-        case _ =>
-      }
-      sb.toString
-    }
+    else allSettings.valuesIterator.filter(_.isHelping).map(_.help).mkString("\n\n")
   }
 
   /**
@@ -120,11 +120,12 @@ class CompilerCommand(arguments: List[String], val settings: Settings) {
    */
   def expandArg(arg: String): List[String] = {
     def stripComment(s: String) = s takeWhile (_ != '#')
-    val file = File(arg stripPrefix "@")
-    if (!file.exists)
-      throw new java.io.FileNotFoundException("argument file %s could not be found" format file.name)
-
-    settings splitParams (file.lines() map stripComment mkString " ")
+    import java.nio.file._
+    import collection.JavaConverters._
+    val file = Paths.get(arg stripPrefix "@")
+    if (!Files.exists(file))
+      throw new java.io.FileNotFoundException("argument file %s could not be found" format file)
+    settings splitParams (Files.readAllLines(file).asScala map stripComment mkString " ")
   }
 
   // override this if you don't want arguments processed here

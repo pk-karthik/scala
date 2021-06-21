@@ -1,10 +1,14 @@
-/*                     __                                                 *\
-**     ________ ___   / /  ___     Scala API                              **
-**    / __/ __// _ | / /  / _ |    (c) 2015, LAMP/EPFL and Typesafe, Inc. **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/                 **
-** /____/\___/_/ |_/____/_/ | |                                           **
-**                          |/                                            **
-\*                                                                        */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala.concurrent
 import java.util.{concurrent => juc}
@@ -25,7 +29,7 @@ package object forkjoin {
   @deprecated("use java.util.concurrent.ForkJoinTask directly, instead of this alias",         "2.12.0")
   type ForkJoinTask[T] = juc.ForkJoinTask[T]
   @deprecated("use java.util.concurrent.ForkJoinTask directly, instead of this alias",         "2.12.0")
-  object ForkJoinTask {
+  object ForkJoinTask extends scala.Serializable {
     def adapt(runnable: Runnable): ForkJoinTask[_]                           = juc.ForkJoinTask.adapt(runnable)
     def adapt[T](callable: juc.Callable[_ <: T]): ForkJoinTask[T]            = juc.ForkJoinTask.adapt(callable)
     def adapt[T](runnable: Runnable, result: T): ForkJoinTask[T]             = juc.ForkJoinTask.adapt(runnable, result)
@@ -51,7 +55,7 @@ package object forkjoin {
   @deprecated("use java.util.concurrent.ThreadLocalRandom directly, instead of this alias",    "2.12.0")
   type ThreadLocalRandom      = juc.ThreadLocalRandom
   @deprecated("use java.util.concurrent.ThreadLocalRandom directly, instead of this alias",    "2.12.0")
-  object ThreadLocalRandom {
+  object ThreadLocalRandom extends scala.Serializable {
     // For source compatibility, current must declare the empty argument list.
     // Having no argument list makes more sense since it doesn't have any side effects,
     // but existing callers will break if they invoked it as `current()`.

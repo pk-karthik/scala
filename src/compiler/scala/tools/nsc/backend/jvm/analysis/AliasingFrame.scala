@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala.tools.nsc
 package backend.jvm
 package analysis
@@ -388,17 +400,6 @@ class AliasingFrame[V <: Value](nLocals: Int, nStack: Int) extends Frame[V](nLoc
   }
 }
 
-object AliasingFrame {
-//  val start1 = AliasingFrame.timer1.start()
-//  AliasingFrame.timer1.stop(start1)
-  import scala.reflect.internal.util.Statistics._
-  val timer1 = newTimer("t1", "jvm")
-  val timer2 = newTimer("t2", "jvm")
-  val timer3 = newTimer("t3", "jvm")
-  val timers = List(timer1, timer2, timer3)
-  def reset(): Unit = for (t <- timers) { t.nanos = 0; t.timings = 0 }
-}
-
 /**
  * An analyzer that uses AliasingFrames instead of bare Frames. This can be used when an analysis
  * needs to track aliases, but doesn't require a more specific Frame subclass.
@@ -501,9 +502,7 @@ object AliasSet {
     else {
       var newLength = set.length
       while (index >= newLength) newLength *= 2
-      val newSet = new Array[Long](newLength)
-      Array.copy(set, 0, newSet, 0, set.length)
-      newSet
+      java.util.Arrays.copyOf(set, newLength)
     }
   }
 

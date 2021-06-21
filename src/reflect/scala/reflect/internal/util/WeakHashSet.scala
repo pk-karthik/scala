@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala
 package reflect.internal.util
 
@@ -156,7 +168,7 @@ final class WeakHashSet[A <: AnyRef](val initialCapacity: Int, val loadFactor: D
         case null                    => null.asInstanceOf[A]
         case _                       => {
           val entryElem = entry.get
-          if (elem == entryElem) entryElem
+          if (elem.equals(entryElem)) entryElem
           else linkedListLoop(entry.tail)
         }
       }
@@ -185,7 +197,7 @@ final class WeakHashSet[A <: AnyRef](val initialCapacity: Int, val loadFactor: D
         case null                    => add()
         case _                       => {
           val entryElem = entry.get
-          if (elem == entryElem) entryElem
+          if (elem.equals(entryElem)) entryElem
           else linkedListLoop(entry.tail)
         }
       }
@@ -211,9 +223,9 @@ final class WeakHashSet[A <: AnyRef](val initialCapacity: Int, val loadFactor: D
 
       @tailrec
       def linkedListLoop(entry: Entry[A]): Unit = entry match {
-        case null                      => add()
-        case _ if (elem == entry.get) => ()
-        case _                         => linkedListLoop(entry.tail)
+        case null                        => add()
+        case _ if elem.equals(entry.get) => ()
+        case _                           => linkedListLoop(entry.tail)
       }
 
       linkedListLoop(oldHead)
@@ -238,7 +250,7 @@ final class WeakHashSet[A <: AnyRef](val initialCapacity: Int, val loadFactor: D
       @tailrec
       def linkedListLoop(prevEntry: Entry[A], entry: Entry[A]): Unit = entry match {
         case null => ()
-        case _ if (elem == entry.get) => remove(bucket, prevEntry, entry)
+        case _ if elem.equals(entry.get) => remove(bucket, prevEntry, entry)
         case _ => linkedListLoop(entry, entry.tail)
       }
 

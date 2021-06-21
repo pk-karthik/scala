@@ -9,10 +9,56 @@ import scala.tools.asm.Opcodes._
 import scala.tools.partest.ASMConverters._
 import scala.tools.testing.BytecodeTesting
 import scala.tools.testing.BytecodeTesting._
+import scala.collection.JavaConverters._
+import scala.tools.asm.Opcodes
 
 @RunWith(classOf[JUnit4])
 class BytecodeTest extends BytecodeTesting {
   import compiler._
+
+  @Test
+  def staticForwardersBridgeFlag(): Unit = {
+    val code =
+      """ A {
+        |  def f: Object = null
+        |  def g: Object
+        |}
+        |object B extends A {
+        |  override def f: String = "b"
+        |  def g: String = "b"
+        |}
+        |case class K(x: Int, s: String)
+      """.stripMargin
+    for (base <- List("trait", "abstract class")) {
+      val List(a, bMirror, bModule, kClass, kModule) = compileClasses(base + code)
+      assertEquals("B", bMirror.name)
+      assertEquals(List("f()Ljava/lang/String;0x9", "g()Ljava/lang/String;0x9"),
+        bMirror.methods.asScala
+          .filter(m => m.name == "f" || m.name == "g")
+          .map(m => m.name + m.desc + "0x" + Integer.toHexString(m.access)).toList.sorted)
+      assertEquals("K", kClass.name)
+      val List(app) = kClass.methods.asScala.filter(_.name == "apply").toList
+      assertEquals("apply(ILjava/lang/String;)LK;0x9", app.name + app.desc + "0x" + Integer.toHexString(app.access))
+    }
+  }
+
+  @Test
+  def staticForwardersVarargFlag(): Unit = {
+    val code =
+      """ A { @annotation.varargs def f(i: Int*): Object = null }
+        |object B extends A { @annotation.varargs override def f(i: Int*): String = "b" }
+      """.stripMargin
+    for (base <- List("trait", "class")) {
+      val List(a, bMirror, bModule) = compileClasses(base + code)
+      assertEquals("B", bMirror.name)
+      assertEquals(List(
+        "f(Lscala/collection/Seq;)Ljava/lang/String;0x9",
+        "f([I)Ljava/lang/String;0x89"),
+        bMirror.methods.asScala
+          .filter(_.name == "f")
+          .map(m => m.name + m.desc + "0x" + Integer.toHexString(m.access)).toList.sorted)
+    }
+  }
 
   @Test
   def t6288bJumpPosition(): Unit = {
@@ -159,13 +205,124 @@ class BytecodeTest extends BytecodeTesting {
     val t = getMethod(c, "t")
     val isFrameLine = (x: Instruction) => x.isInstanceOf[FrameEntry] || x.isInstanceOf[LineNumber]
     assertSameCode(t.instructions.filterNot(isFrameLine), List(
-      Label(0), Ldc(LDC, ""), Label(3), VarOp(ASTORE, 1),
-      Label(5), VarOp(ALOAD, 1), Jump(IFNULL, Label(21)),
-      Label(10), VarOp(ALOAD, 0), Invoke(INVOKEVIRTUAL, "C", "foo", "()V", false), Label(14), Op(ACONST_NULL), VarOp(ASTORE, 1), Label(18), Jump(GOTO, Label(5)),
-      Label(21), VarOp(ALOAD, 0), Invoke(INVOKEVIRTUAL, "C", "bar", "()V", false), Label(26), Op(RETURN), Label(28)))
+      Label(0), Ldc(LDC, ""), VarOp(ASTORE, 1),
+      Label(4), VarOp(ALOAD, 1), Jump(IFNULL, Label(20)),
+      Label(9), VarOp(ALOAD, 0), Invoke(INVOKEVIRTUAL, "C", "foo", "()V", false), Label(13), Op(ACONST_NULL), VarOp(ASTORE, 1), Label(17), Jump(GOTO, Label(4)),
+      Label(20), VarOp(ALOAD, 0), Invoke(INVOKEVIRTUAL, "C", "bar", "()V", false), Label(25), Op(RETURN), Label(27)))
     val labels = t.instructions collect { case l: Label => l }
     val x = t.localVars.find(_.name == "x").get
     assertEquals(x.start, labels(1))
-    assertEquals(x.end, labels(7))
+    assertEquals(x.end, labels(6))
+  }
+
+  @Test
+  def sd186_traitLineNumber(): Unit = {
+    val code =
+      """trait T {
+        |  def t(): Unit = {
+        |    toString
+        |    toString
+        |  }
+        |}
+      """.stripMargin
+    val t = compileClass(code)
+    val tMethod = getMethod(t, "t$")
+    val invoke = Invoke(INVOKEVIRTUAL, "java/lang/Object", "toString", "()Ljava/lang/String;", false)
+    // ths static accessor is positioned at the line number of the accessed method.
+    assertSameCode(tMethod.instructions,
+      List(Label(0), LineNumber(2, Label(0)), VarOp(ALOAD, 0), Invoke(INVOKESPECIAL, "T", "t", "()V", true), Op(RETURN), Label(4))
+    )
+  }
+
+  @Test
+  def sd233(): Unit = {
+    val code = "def f = { println(1); synchronized(println(2)) }"
+    val m = compileMethod(code)
+    val List(ExceptionHandler(_, _, _, desc)) = m.handlers
+    assert(desc == None, desc)
+  }
+
+  @Test
+  def classesEndingInDollarHaveSignature(): Unit = {
+    // A name-based test in the backend prevented classes ending in $ from getting a Scala signature
+    val code = "class C$"
+    val c = compileClass(code)
+    assertEquals(c.attrs.asScala.toList.map(_.`type`).sorted, List("ScalaInlineInfo", "ScalaSig"))
+  }
+
+  @Test
+  def t10343(): Unit = {
+    val main = "class Main { Person() }"
+    val person = "case class Person(age: Int = 1)"
+
+    def check(code: String) = {
+      val List(_, _, pm) = compileClasses(code)
+      assertEquals(pm.name, "Person$")
+      assertEquals(pm.methods.asScala.map(_.name).toList,
+        // after typer, `"$lessinit$greater$default$1"` is next to `<init>`, but the constructor phase
+        // and code gen change module constructors around. the second `apply` is a bridge, created in erasure.
+        List("<clinit>", "$lessinit$greater$default$1", "toString", "apply", "apply$default$1", "unapply", "readResolve", "apply", "<init>"))
+    }
+    check(s"$main\n$person")
+    check(s"$person\n$main")
+  }
+
+  @Test
+  def t11412(): Unit = {
+    val code = "class A { val a = 0 }; class C extends A with App { val x = 1; val y = x }"
+    val cs = compileClasses(code)
+    val c = cs.find(_.name == "C").get
+    val fs = c.fields.asScala.toList.sortBy(_.name).map(f => (f.name, (f.access & Opcodes.ACC_FINAL) != 0))
+    assertEquals(List(
+      ("executionStart", true), // final in 2.12.x, but that's problem with mixin. was fixed in 2.13 (https://github.com/scala/scala/pull/7028)
+      ("scala$App$$_args", false),
+      ("scala$App$$initCode", true), // also a mixin
+      ("x", false),
+      ("y", false)
+    ), fs)
+    val assignedInConstr = getMethod(c, "<init>").instructions.filter(_.opcode == Opcodes.PUTFIELD)
+    assertEquals(Nil, assignedInConstr)
+  }
+
+  @Test
+  def t11412b(): Unit = {
+    val code = "class C { def f = { var x = 0; val y = 1; class K extends App { def m = x + y } } }"
+    val cs = compileClasses(code)
+    val k = cs.find(_.name == "C$K$1").get
+    val fs = k.fields.asScala.toList.sortBy(_.name).map(f => (f.name, (f.access & Opcodes.ACC_FINAL) != 0))
+    assertEquals(List(
+      ("$outer", true), // mixin
+      ("executionStart", true),
+      ("scala$App$$_args", false), // mixin
+      ("scala$App$$initCode", true),
+      ("x$1", true), // captured, assigned in constructor
+      ("y$1", true)  // captured
+    ), fs)
+    val assignedInConstr = getMethod(k, "<init>").instructions.filter(_.opcode == Opcodes.PUTFIELD) map {
+      case f: Field => f.name
+    }
+    assertEquals(List("$outer", "x$1", "y$1"), assignedInConstr.sorted)
+  }
+
+  @Test
+  def t11718(): Unit = {
+    val code = """class A11718 { private val a = ""; lazy val b = a }"""
+    val cs = compileClasses(code)
+    val A = cs.find(_.name == "A11718").get
+    val a = A.fields.asScala.find(_.name == "a").get
+    assertEquals(0, a.access & Opcodes.ACC_FINAL)
+  }
+
+  @Test
+  def sortedSetMapEqualsSuperAccessor(): Unit = {
+    // ensure super accessors are there (scala/scala#9311)
+
+    val sn = "scala$collection$immutable$SortedSet$$super$equals"
+    val sm = classOf[scala.collection.immutable.TreeSet[_]].getDeclaredMethod(sn, classOf[Object])
+    assertEquals(sn, sm.getName)
+
+    val mn = "scala$collection$immutable$SortedMap$$super$equals"
+    val mm = classOf[scala.collection.immutable.TreeMap[_, _]].getDeclaredMethod(mn, classOf[Object])
+    assertEquals(mn, mm.getName)
   }
 }

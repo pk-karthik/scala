@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -113,12 +117,9 @@ extends GenIterableLike[A, Repr]
    *              as this set.
    */
   override def equals(that: Any): Boolean = that match {
+    // copy/pasted to immutable.SortedSet.equals for binary compat reasons!
     case that: GenSet[_] =>
-      (this eq that) ||
-      (that canEqual this) &&
-      (this.size == that.size) &&
-      (try this subsetOf that.asInstanceOf[GenSet[A]]
-       catch { case ex: ClassCastException => false })
+      GenSet.setEquals(this, that)
     case _ =>
       false
   }

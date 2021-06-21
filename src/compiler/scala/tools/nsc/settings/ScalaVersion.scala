@@ -1,7 +1,15 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  James Iry
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
+
 // $Id$
 
 package scala
@@ -127,7 +135,7 @@ abstract class ScalaBuild extends Ordered[ScalaBuild] {
   def unparse: String
 }
 /**
- * A development, test, nightly, snapshot or other "unofficial" build
+ * A development, test, integration, snapshot or other "unofficial" build
  */
 case class Development(id: String) extends ScalaBuild {
   def unparse = s"-${id}"

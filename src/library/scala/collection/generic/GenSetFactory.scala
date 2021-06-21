@@ -1,12 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
-
-
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -22,8 +24,7 @@ import scala.language.higherKinds
  *  @define factoryInfo
  *    This object provides a set of operations needed to create `$Coll` values.
  *    @author Martin Odersky
- *    @version 2.8
- *    @since 2.8
+ *    @since  2.8
  *  @define canBuildFromInfo
  *    The standard `CanBuildFrom` instance for `$Coll` objects.
  *    @see CanBuildFrom
@@ -40,7 +41,11 @@ abstract class GenSetFactory[CC[X] <: GenSet[X] with GenSetLike[X, CC[X]]]
   /** $setCanBuildFromInfo
    */
   def setCanBuildFrom[A] = new CanBuildFrom[CC[_], A, CC[A]] {
-    def apply(from: CC[_]) = newBuilder[A]
+    def apply(from: CC[_]) = from match {
+      // When building from an existing Set, try to preserve its type:
+      case from: Set[_] => from.genericBuilder.asInstanceOf[Builder[A, CC[A]]]
+      case _ => newBuilder[A]
+    }
     def apply() = newBuilder[A]
   }
 }

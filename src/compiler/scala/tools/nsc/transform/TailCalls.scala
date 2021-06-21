@@ -1,6 +1,13 @@
-/* NSC -- new scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author Iulian Dragos
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala
@@ -63,10 +70,11 @@ abstract class TailCalls extends Transform {
    * <p>
    *   A method call is self-recursive if it calls the current method and
    *   the method is final (otherwise, it could
-   *   be a call to an overridden method in a subclass). Furthermore, If
-   *   the method has type parameters, the call must contain these
-   *   parameters as type arguments. Recursive calls on a different instance
-   *   are optimized. Since 'this' is not a local variable, a dummy local val
+   *   be a call to an overridden method in a subclass). Furthermore, if
+   *   the method has `@specialized` annotated type parameters, the recursive
+   *   call must contain these parameters as type arguments.
+   *   Recursive calls on a different instance are optimized.
+   *   Since 'this' is not a local variable, a dummy local val
    *   is added and used as a label parameter. The backend knows to load
    *   the corresponding argument in the 'this' (local at index 0). This dummy local
    *   is never used and should be cleaned up by dead code elimination (when enabled).
@@ -84,7 +92,7 @@ abstract class TailCalls extends Transform {
    * </p>
    * <p>
    *   Assumes: `Uncurry` has been run already, and no multiple
-   *            parameter lists exit.
+   *            parameter lists exist.
    * </p>
    */
   class TailCallElimination(unit: CompilationUnit) extends Transformer {
@@ -228,7 +236,10 @@ abstract class TailCalls extends Transform {
         def receiverIsSuper   = ctx.enclosingType.widen <:< receiver.tpe.widen
         def isRecursiveCall   = (ctx.method eq fun.symbol) && ctx.tailPos
         def transformArgs     = if (mustTransformArgs) noTailTransforms(args) else args
-        def matchesTypeArgs   = ctx.tparams sameElements (targs map (_.tpe.typeSymbol))
+        def matchesTypeArgs   = (ctx.tparams corresponds targs)((p, a) => !isSpecialized(p) || p == a.tpe.typeSymbol)
+
+        def isSpecialized(tparam: Symbol) =
+          tparam.hasAnnotation(SpecializedClass)
 
         /* Records failure reason in Context for reporting.
          * Position is unchanged (by default, the method definition.)
@@ -258,7 +269,7 @@ abstract class TailCalls extends Transform {
                                         failHere("it contains a recursive call targeting a supertype")
           else                          failHere(defaultReason)
         }
-        else if (!matchesTypeArgs)      failHere("it is called recursively with different type arguments")
+        else if (!matchesTypeArgs)      failHere("it is called recursively with different specialized type arguments")
         else if (receiver == EmptyTree) rewriteTailCall(This(currentClass))
         else if (!receiverIsSame)       failHere("it changes type of 'this' on a polymorphic recursive call")
         else                            rewriteTailCall(receiver)
@@ -274,10 +285,8 @@ abstract class TailCalls extends Transform {
       import runDefinitions.{Boolean_or, Boolean_and}
 
       tree match {
-        case ValDef(_, _, _, _) =>
-          if (tree.symbol.isLazy && tree.symbol.hasAnnotation(TailrecClass))
-            reporter.error(tree.pos, "lazy vals are not tailcall transformed")
-
+        case dd: DefDef if tree.symbol.isLazy && tree.symbol.hasAnnotation(TailrecClass) =>
+          reporter.error(tree.pos, "lazy vals are not tailcall transformed")
           super.transform(tree)
 
         case dd @ DefDef(_, name, _, vparamss0, _, rhs0) if isEligible(dd) =>
@@ -360,7 +369,7 @@ abstract class TailCalls extends Transform {
           )
 
         case Try(block, catches, finalizer @ EmptyTree) =>
-          // SI-1672 Catches are in tail position when there is no finalizer
+          // scala/bug#1672 Catches are in tail position when there is no finalizer
           treeCopy.Try(tree,
             noTailTransform(block),
             transformTrees(catches).asInstanceOf[List[CaseDef]],
@@ -408,7 +417,7 @@ abstract class TailCalls extends Transform {
       }
     }
 
-    // Workaround for SI-6900. Uncurry installs an InfoTransformer and a tree Transformer.
+    // Workaround for scala/bug#6900. Uncurry installs an InfoTransformer and a tree Transformer.
     // These leave us with conflicting view on method signatures; the parameter symbols in
     // the MethodType can be clones of the ones originally found on the parameter ValDef, and
     // consequently appearing in the typechecked RHS of the method.

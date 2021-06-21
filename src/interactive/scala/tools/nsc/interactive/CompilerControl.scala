@@ -1,7 +1,15 @@
-/* NSC -- new Scala compiler
- * Copyright 2009-2013 Typesafe/Scala Solutions and LAMP/EPFL
- * @author Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
+
 package scala.tools.nsc
 package interactive
 
@@ -101,11 +109,11 @@ trait CompilerControl { self: Global =>
    *  the given sources at the head of the list of to-be-compiled sources.
    */
   def askReload(sources: List[SourceFile], response: Response[Unit]) = {
-    val superseeded = scheduler.dequeueAll {
+    val superseded = scheduler.dequeueAll {
       case ri: ReloadItem if ri.sources == sources => Some(ri)
       case _ => None
     }
-    superseeded.foreach(_.response.set(()))
+    superseded.foreach(_.response.set(()))
     postWorkItem(new ReloadItem(sources, response))
   }
 
@@ -126,7 +134,7 @@ trait CompilerControl { self: Global =>
    *  @pre `source` needs to be loaded.
    *  @note Deprecated because of race conditions in the typechecker when the background compiler
    *        is interrupted while typing the same `source`.
-   *  @see  SI-6578
+   *  @see  scala/bug#6578
    */
   @deprecated("Use `askLoadedTyped` instead to avoid race conditions in the typechecker", "2.10.1")
   def askType(source: SourceFile, forceReload: Boolean, response: Response[Tree]) =
@@ -273,7 +281,7 @@ trait CompilerControl { self: Global =>
     val tpe: Type
     val accessible: Boolean
     def implicitlyAdded = false
-    def symNameDropLocal: Name = sym.name.dropLocal
+    def symNameDropLocal: Name = if (sym.name.isTermName) sym.name.dropLocal else sym.name
 
     private def accessible_s = if (accessible) "" else "[inaccessible] "
     def forceInfoString = {

@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2002-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 // DO NOT EDIT, CHANGES WILL BE LOST
 // This auto-generated code can be modified in "project/GenerateAnyVals.scala".
@@ -55,6 +59,7 @@ final abstract class Int private extends AnyVal {
   *         filling in the new right bits with zeroes.
   * @example {{{ 6 << 3 == 48 // in binary: 0110 << 3 == 0110000 }}}
   */
+  @deprecated("shifting a value by a `Long` argument is deprecated (except when the value is a `Long`).\nCall `toInt` on the argument to maintain the current behavior and avoid the deprecation warning.", "2.12.7")
   def <<(x: Long): Int
   /**
   * Returns this value bit-shifted right by the specified number of bits,
@@ -77,6 +82,7 @@ final abstract class Int private extends AnyVal {
   * //            00011111 11111111 11111111 11111101
   * }}}
   */
+  @deprecated("shifting a value by a `Long` argument is deprecated (except when the value is a `Long`).\nCall `toInt` on the argument to maintain the current behavior and avoid the deprecation warning.", "2.12.7")
   def >>>(x: Long): Int
   /**
   * Returns this value bit-shifted right by the specified number of bits,
@@ -99,6 +105,7 @@ final abstract class Int private extends AnyVal {
   * //            11111111 11111111 11111111 11111101
   * }}}
   */
+  @deprecated("shifting a value by a `Long` argument is deprecated (except when the value is a `Long`).\nCall `toInt` on the argument to maintain the current behavior and avoid the deprecation warning.", "2.12.7")
   def >>(x: Long): Int
 
   /** Returns `true` if this value is equal to x, `false` otherwise. */
@@ -439,10 +446,10 @@ final abstract class Int private extends AnyVal {
 }
 
 object Int extends AnyValCompanion {
-  /** The smallest value representable as a Int. */
+  /** The smallest value representable as an Int. */
   final val MinValue = java.lang.Integer.MIN_VALUE
 
-  /** The largest value representable as a Int. */
+  /** The largest value representable as an Int. */
   final val MaxValue = java.lang.Integer.MAX_VALUE
 
   /** Transform a value type into a boxed reference type.

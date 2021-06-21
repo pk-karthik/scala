@@ -1,12 +1,40 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Paul Phillips
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
 package interpreter
 
 import scala.collection.mutable
+
+/** A magic symbol that, when imported in a REPL template, bumps the
+ *  effective nesting level of the typechecker.
+ *
+ *  The REPL inserts this import to control scoping in code templates,
+ *  without excessive lexical noise.
+ *
+ *  {{{
+ *  import p.X
+ *  import scala.tools.nsc.interpreter.`{{`
+ *  import q.X
+ *  X           // q.X
+ *  }}}
+ *
+ *  Its name is chosen to suggest scoping by braces; the brace is doubled
+ *  to avoid confusion in printed output, as the name will be visible to
+ *  a REPL user inspecting generated code.
+ *
+ *  There is no complementary symbol to restore the nesting level.
+ */
+object `{{`
 
 trait Imports {
   self: IMain =>
@@ -27,34 +55,12 @@ trait Imports {
   }
 
   /** Symbols whose contents are language-defined to be imported. */
-  def languageWildcardSyms: List[Symbol] = List(JavaLangPackage, ScalaPackage, PredefModule)
+  private def languageWildcardSyms: List[Symbol] = List(JavaLangPackage, ScalaPackage, PredefModule)
   def languageWildcardHandlers = languageWildcardSyms map makeWildcardImportHandler
-
-  def allImportedNames = importHandlers flatMap (_.importedNames)
-
-  /** Types which have been wildcard imported, such as:
-   *    val x = "abc" ; import x._  // type java.lang.String
-   *    import java.lang.String._   // object java.lang.String
-   *
-   *  Used by tab completion.
-   *
-   *  XXX right now this gets import x._ and import java.lang.String._,
-   *  but doesn't figure out import String._.  There's a lot of ad hoc
-   *  scope twiddling which should be swept away in favor of digging
-   *  into the compiler scopes.
-   */
-  def sessionWildcards: List[Type] = {
-    importHandlers filter (_.importsWildcard) map (_.targetType) distinct
-  }
-
-  def languageSymbols        = languageWildcardSyms flatMap membersAtPickler
-  def sessionImportedSymbols = importHandlers flatMap (_.importedSymbols)
-  def importedSymbols        = languageSymbols ++ sessionImportedSymbols
-  def importedTermSymbols    = importedSymbols collect { case x: TermSymbol => x }
 
   /** Tuples of (source, imported symbols) in the order they were imported.
    */
-  def importedSymbolsBySource: List[(Symbol, List[Symbol])] = {
+  private def importedSymbolsBySource: List[(Symbol, List[Symbol])] = {
     val lang    = languageWildcardSyms map (sym => (sym, membersAtPickler(sym)))
     val session = importHandlers filter (_.targetType != NoType) map { mh =>
       (mh.targetType.typeSymbol, mh.importedSymbols)
@@ -96,7 +102,7 @@ trait Imports {
    */
   case class ComputedImports(header: String, prepend: String, append: String, access: String)
 
-  protected def importsCode(wanted: Set[Name], wrapper: Request#Wrapper, definesClass: Boolean, generousImports: Boolean): ComputedImports = {
+  protected def importsCode(wanted: Set[Name], wrapper: Request#Wrapper, generousImports: Boolean): ComputedImports = {
     val header, code, trailingBraces, accessPath = new StringBuilder
     val currentImps = mutable.HashSet[Name]()
     var predefEscapes = false      // only emit predef import header if name not resolved in history, loosely
@@ -115,8 +121,6 @@ trait Imports {
         // Single symbol imports might be implicits! See bug #1752.  Rather than
         // try to finesse this, we will mimic all imports for now.
         def keepHandler(handler: MemberHandler) = handler match {
-          // While defining classes in class based mode - implicits are not needed.
-          case h: ImportHandler if isClassBased && definesClass => h.importedNames.exists(x => wanted.contains(x))
           case _: ImportHandler     => true
           case x if generousImports => x.definesImplicit || (x.definedNames exists (d => wanted.exists(w => d.startsWith(w))))
           case x                    => x.definesImplicit || (x.definedNames exists wanted)
@@ -140,76 +144,85 @@ trait Imports {
       select(allReqAndHandlers reverseMap { case (r, h) => ReqAndHandler(r, h) }, wanted).reverse
     }
 
+    def addLevelChangingImport() = code.append(s"import _root_.scala.tools.nsc.interpreter.`${nme.INTERPRETER_IMPORT_LEVEL_UP}`\n")
+
     // add code for a new object to hold some imports
-    def addWrapper() {
-      import nme.{ INTERPRETER_IMPORT_WRAPPER => iw }
+    def addWrapperCode(): Unit = {
+      import nme.{INTERPRETER_IMPORT_WRAPPER => iw}
       code append (wrapper.prewrap format iw)
       trailingBraces append wrapper.postwrap
       accessPath append s".$iw"
+    }
+    def addWrapper() {
+      if (useMagicImport) {
+        addLevelChangingImport()
+      } else {
+        addWrapperCode()
+      }
       currentImps.clear()
     }
 
     def maybeWrap(names: Name*) = if (names exists currentImps) addWrapper()
 
-    def wrapBeforeAndAfter[T](op: => T): T = {
-      addWrapper()
-      try op finally addWrapper()
-    }
-
     // imports from Predef are relocated to the template header to allow hiding.
     def checkHeader(h: ImportHandler) = h.referencedNames contains PredefModule.name
 
-    // loop through previous requests, adding imports for each one
-    wrapBeforeAndAfter {
-      // Reusing a single temporary value when import from a line with multiple definitions.
-      val tempValLines = mutable.Set[Int]()
-      for (ReqAndHandler(req, handler) <- reqsToUse) {
-        val objName = req.lineRep.readPathInstance
-        if (isReplTrace)
-          code.append(ss"// $objName definedNames ${handler.definedNames}, curImps $currentImps\n")
-        handler match {
-          case h: ImportHandler if checkHeader(h) =>
-            header.clear()
-            header append f"${h.member}%n"
-          // If the user entered an import, then just use it; add an import wrapping
-          // level if the import might conflict with some other import
-          case x: ImportHandler if x.importsWildcard =>
-            wrapBeforeAndAfter(code append (x.member + "\n"))
-          case x: ImportHandler =>
-            maybeWrap(x.importedNames: _*)
-            code append (x.member + "\n")
-            currentImps ++= x.importedNames
+    if (useMagicImport) code.append("\n") else addWrapperCode()
 
-          case x if isClassBased =>
-            for (sym <- x.definedSymbols) {
-              maybeWrap(sym.name)
-              x match {
-                case _: ClassHandler =>
-                  code.append(s"import ${objName}${req.accessPath}.`${sym.name}`\n")
-                case _ =>
-                  val valName = s"${req.lineRep.packageName}${req.lineRep.readName}"
-                  if (!tempValLines.contains(req.lineRep.lineId)) {
-                    code.append(s"val $valName: ${objName}.type = $objName\n")
-                    tempValLines += req.lineRep.lineId
-                  }
-                  code.append(s"import ${valName}${req.accessPath}.`${sym.name}`\n")
-              }
-              currentImps += sym.name
+    // Reusing a single temporary value when import from a line with multiple definitions.
+    val tempValLines = mutable.Set[Int]()
+
+    // loop through previous requests, adding imports for each one
+    for (ReqAndHandler(req, handler) <- reqsToUse) {
+      val objName = req.lineRep.readPathInstance
+      if (isReplTrace)
+        code.append(ss"// $objName definedNames ${handler.definedNames}, curImps $currentImps\n")
+      handler match {
+        case h: ImportHandler if checkHeader(h) =>
+          header.clear()
+          header append f"${h.member}%n"
+        // If the user entered an import, then just use it; add an import wrapping
+        // level if the import might conflict with some other import
+        case x: ImportHandler if x.importsWildcard =>
+          addWrapper()
+          code append (x.member + "\n")
+          addWrapper()
+        case x: ImportHandler =>
+          maybeWrap(x.importedNames: _*)
+          code append (x.member + "\n")
+          currentImps ++= x.importedNames
+
+        case x if isClassBased =>
+          for (sym <- x.definedSymbols) {
+            maybeWrap(sym.name)
+            x match {
+              case _: ClassHandler =>
+                code.append(s"import ${objName}${req.accessPath}.`${sym.name}`\n")
+              case _ =>
+                val valName = s"${req.lineRep.packageName}${req.lineRep.readName}"
+                if (!tempValLines.contains(req.lineRep.lineId)) {
+                  code.append(s"val $valName: ${objName}.type = $objName; ")
+                  tempValLines += req.lineRep.lineId
+                }
+                code.append(s"import ${valName}${req.accessPath}.`${sym.name}`\n")
             }
-          // For other requests, import each defined name.
-          // import them explicitly instead of with _, so that
-          // ambiguity errors will not be generated. Also, quote
-          // the name of the variable, so that we don't need to
-          // handle quoting keywords separately.
-          case x =>
-            for (sym <- x.definedSymbols) {
-              maybeWrap(sym.name)
-              code append s"import ${x.path}\n"
-              currentImps += sym.name
-            }
-        }
+            currentImps += sym.name
+          }
+        // For other requests, import each defined name.
+        // import them explicitly instead of with _, so that
+        // ambiguity errors will not be generated. Also, quote
+        // the name of the variable, so that we don't need to
+        // handle quoting keywords separately.
+        case x =>
+          for (sym <- x.definedSymbols) {
+            maybeWrap(sym.name)
+            code append s"import ${x.path}\n"
+            currentImps += sym.name
+          }
       }
     }
+
+    addWrapperCode()
 
     val computedHeader = if (predefEscapes) header.toString else ""
     ComputedImports(computedHeader, code.toString, trailingBraces.toString, accessPath.toString)

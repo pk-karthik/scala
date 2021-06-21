@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala
 package collection
 package mutable
@@ -81,13 +93,14 @@ extends AbstractMap[K, V]
     (_size + _vacant) > 0.5*mask || _vacant > _size
 
   private def hashOf(key: K): Int = {
+    // Note: this method must not return 0 or Int.MinValue, as these indicate no element
     if (key eq null) 0x41081989
     else {
       val h = key.hashCode
       // Part of the MurmurHash3 32 bit finalizer
       val i = (h ^ (h >>> 16)) * 0x85EBCA6B
-      val j = (i ^ (i >>> 13))
-      if (j==0) 0x41081989 else j & 0x7FFFFFFF
+      val j = (i ^ (i >>> 13)) & 0x7FFFFFFF
+      if (j==0) 0x41081989 else j
     }
   }
 
@@ -95,8 +108,10 @@ extends AbstractMap[K, V]
     var e = h & mask
     var x = 0
     var g = 0
-    while ({ g = _hashes(e); g != 0}) {
-      if (g == h && { val q = _keys(e); (q eq k) || ((q ne null) && (q equals k)) }) return e
+    val hashes = _hashes
+    val keys = _keys
+    while ({ g = hashes(e); g != 0}) {
+      if (g == h && { val q = keys(e); (q eq k) || ((q ne null) && (q equals k)) }) return e
       x += 1
       e = (e + 2*(x+1)*x - 3) & mask
     }
@@ -411,6 +426,15 @@ extends AbstractMap[K, V]
     this
   }
 
+  override def clear(): Unit = {
+    import java.util.Arrays.fill
+    fill(_keys, null)
+    fill(_values, null)
+    fill(_hashes, 0)
+    _size = 0
+    _vacant = 0
+  }
+
 }
 
 object AnyRefMap {
@@ -426,10 +450,11 @@ object AnyRefMap {
   private val exceptionDefault = new ExceptionDefault
 
   implicit def canBuildFrom[K <: AnyRef, V, J <: AnyRef, U]: CanBuildFrom[AnyRefMap[K,V], (J, U), AnyRefMap[J,U]] =
-    new CanBuildFrom[AnyRefMap[K,V], (J, U), AnyRefMap[J,U]] {
-      def apply(from: AnyRefMap[K,V]): AnyRefMapBuilder[J, U] = apply()
-      def apply(): AnyRefMapBuilder[J, U] = new AnyRefMapBuilder[J, U]
-    }
+    ReusableCBFInstance.asInstanceOf[CanBuildFrom[AnyRefMap[K, V], (J, U), AnyRefMap[J, U]]]
+  private[this] val ReusableCBFInstance = new CanBuildFrom[AnyRefMap[AnyRef, Any], (AnyRef, Any), AnyRefMap[AnyRef, Any]] {
+    def apply(from: AnyRefMap[AnyRef, Any]): AnyRefMapBuilder[AnyRef, Any] = apply()
+    def apply(): AnyRefMapBuilder[AnyRef, Any] = new AnyRefMapBuilder[AnyRef, Any]
+  }
 
   /** A builder for instances of `AnyRefMap`.
    *

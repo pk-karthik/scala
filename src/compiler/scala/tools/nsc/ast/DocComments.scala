@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
@@ -9,6 +16,7 @@ package ast
 import symtab._
 import util.DocStrings._
 import scala.collection.mutable
+import scala.tools.nsc.Reporting.WarningCategory
 
 /*
  *  @author  Martin Odersky
@@ -70,15 +78,16 @@ trait DocComments { self: Global =>
    *  the doc comment of the overridden version is copied instead.
    */
   def cookedDocComment(sym: Symbol, docStr: String = ""): String = cookedDocComments.getOrElseUpdate(sym, {
-    var ownComment = if (docStr.length == 0) docComments get sym map (_.template) getOrElse ""
-                       else DocComment(docStr).template
-    ownComment = replaceInheritDocToInheritdoc(ownComment)
+    val ownComment = replaceInheritDocToInheritdoc {
+      if (docStr.length == 0) docComments get sym map (_.template) getOrElse ""
+      else DocComment(docStr).template
+    }
 
     superComment(sym) match {
       case None =>
-        // SI-8210 - The warning would be false negative when this symbol is a setter
+        // scala/bug#8210 - The warning would be false negative when this symbol is a setter
         if (ownComment.indexOf("@inheritdoc") != -1 && ! sym.isSetter)
-          reporter.warning(sym.pos, s"The comment for ${sym} contains @inheritdoc, but no parent comment is available to inherit from.")
+          runReporting.warning(sym.pos, s"The comment for ${sym} contains @inheritdoc, but no parent comment is available to inherit from.", WarningCategory.Scaladoc, sym)
         ownComment.replaceAllLiterally("@inheritdoc", "<invalid inheritdoc annotation>")
       case Some(sc) =>
         if (ownComment == "") sc
@@ -133,8 +142,12 @@ trait DocComments { self: Global =>
     mapFind(sym :: allInheritedOverriddenSymbols(sym))(docComments get _)
 
   /** The cooked doc comment of an overridden symbol */
-  protected def superComment(sym: Symbol): Option[String] =
-    allInheritedOverriddenSymbols(sym).iterator map (x => cookedDocComment(x)) find (_ != "")
+  protected def superComment(sym: Symbol): Option[String] = {
+    val getter: Symbol = sym.getter
+    allInheritedOverriddenSymbols(getter.orElse(sym)).iterator
+      .map(cookedDocComment(_))
+      .find(_ != "")
+  }
 
   private def mapFind[A, B](xs: Iterable[A])(f: A => Option[B]): Option[B] =
     xs collectFirst scala.Function.unlift(f)
@@ -249,8 +262,8 @@ trait DocComments { self: Global =>
               val sectionTextBounds = extractSectionText(parent, section)
               cleanupSectionText(parent.substring(sectionTextBounds._1, sectionTextBounds._2))
             case None =>
-              reporter.info(sym.pos, "The \"" + getSectionHeader + "\" annotation of the " + sym +
-                  " comment contains @inheritdoc, but the corresponding section in the parent is not defined.", force = true)
+              reporter.echo(sym.pos, "The \"" + getSectionHeader + "\" annotation of the " + sym +
+                  " comment contains @inheritdoc, but the corresponding section in the parent is not defined.")
               "<invalid inheritdoc annotation>"
           }
 
@@ -349,7 +362,7 @@ trait DocComments { self: Global =>
                 case None              =>
                   val pos = docCommentPos(sym)
                   val loc = pos withPoint (pos.start + vstart + 1)
-                  reporter.warning(loc, s"Variable $vname undefined in comment for $sym in $site")
+                  runReporting.warning(loc, s"Variable $vname undefined in comment for $sym in $site", WarningCategory.Scaladoc, sym)
               }
             }
         }
@@ -403,7 +416,7 @@ trait DocComments { self: Global =>
       if (pos == NoPosition) NoPosition
       else {
         val start1 = pos.start + start
-        val end1 = pos.end + end
+        val end1 = pos.start + end
         pos withStart start1 withPoint start1 withEnd end1
       }
 
@@ -478,9 +491,11 @@ trait DocComments { self: Global =>
         }
         val result = (start /: rest)(select(_, _, NoType))
         if (result == NoType)
-          reporter.warning(comment.codePos, "Could not find the type " + variable + " points to while expanding it " +
-                                            "for the usecase signature of " + sym + " in " + site + "." +
-                                            "In this context, " + variable + " = \"" + str + "\".")
+          runReporting.warning(
+            comment.codePos,
+            s"""Could not find the type $variable points to while expanding it for the usecase signature of $sym in $site. In this context, $variable = "$str".""",
+            WarningCategory.Scaladoc,
+            site)
         result
       }
 

@@ -1,19 +1,21 @@
 package scala.tools.nsc.interpreter
 
-import java.io.{StringWriter, PrintWriter}
+import java.io.{PrintWriter, StringWriter}
 
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
+import scala.reflect.internal.util.BatchSourceFile
 import scala.tools.nsc.Settings
 
 class CompletionTest {
   val EmptyString = "" // def string results include the empty string so that JLine won't insert "def ..." at the cursor
 
-  def newIMain(): IMain = {
+  def newIMain(classBased: Boolean = false): IMain = {
     val settings = new Settings()
     settings.Xnojline.value = true
     settings.usejavacp.value = true
+    settings.Yreplclassbased.value = classBased
 
     val writer = new StringWriter
     val out = new PrintWriter(writer)
@@ -27,8 +29,24 @@ class CompletionTest {
   }
 
   @Test
-  def completions(): Unit = {
+  def classBased(): Unit = {
     val intp = newIMain()
+    val completer = new PresentationCompilerCompleter(intp)
+    checkExact(completer, "object O { def x_y_z = 1 }; import O._; x_y")("x_y_z")
+  }
+
+  @Test
+  def completions(): Unit = {
+    testCompletions(classBased = false)
+  }
+
+  @Test
+  def completionsReplClassBased(): Unit = {
+    testCompletions(classBased = true)
+  }
+
+  private def testCompletions(classBased: Boolean): Unit = {
+    val intp = newIMain(classBased)
     val completer = new PresentationCompilerCompleter(intp)
     checkExact(completer, "object O { def x_y_z = 1 }; import O._; x_y")("x_y_z")
     checkExact(completer, "object O { private def x_y_z = 1 }; import O._; x_y")()
@@ -49,6 +67,13 @@ class CompletionTest {
 
     // Output is sorted
     assertEquals(List("prefix_aaa", "prefix_nnn", "prefix_zzz"), completer.complete( """class C { def prefix_nnn = 0; def prefix_zzz = 0; def prefix_aaa = 0; prefix_""").candidates)
+
+    // Enable implicits to check completion enrichment
+    assert(completer.complete("""'c'.""").candidates.contains("toUpper"))
+    assert(completer.complete("""val c = 'c'; c.""").candidates.contains("toUpper"))
+
+    intp.interpret("object O { def x_y_x = 1; def x_y_z = 2; def getFooBarZot = 3}; ")
+    checkExact(new PresentationCompilerCompleter(intp), """object O2 { val x = O.""")("x_y_x", "x_y_z", "getFooBarZot")
   }
 
   @Test
@@ -86,6 +111,8 @@ class CompletionTest {
     checkExact(completer, "object O { def xxxxYyyyyZzzz = 1; def xxxxYyZeee = 1 }; import O._; xYZ")("", "xxxxYyyyyZzzz", "xxxxYyZeee")
     checkExact(completer, "object O { def xxxxYyyyyZzzz = 1; def xxxxYyyyyZeee = 1 }; import O._; xYZ")("xxxxYyyyyZzzz", "xxxxYyyyyZeee")
     checkExact(completer, "object O { class AbstractMetaFactoryFactory }; new O.AMFF")("AbstractMetaFactoryFactory")
+    checkExact(completer, "object O { val DECIMAL_DIGIT_NUMBER = 0 }; import O._; L_")("DECIMAL_DIGIT_NUMBER")
+    checkExact(completer, "object O { val _unusualIdiom = 0 }; import O._; _ui")("_unusualIdiom")
   }
 
   @Test
@@ -94,7 +121,18 @@ class CompletionTest {
     val completer = new PresentationCompilerCompleter(intp)
     checkExact(completer, "object O { def theCatSatOnTheMat = 1 }; import O._; tcso")("theCatSatOnTheMat")
     checkExact(completer, "object O { def theCatSatOnTheMat = 1 }; import O._; sotm")("theCatSatOnTheMat")
+    checkExact(completer, "object O { def theCatSatOnTheMat = 1 }; import O._; caton")("theCatSatOnTheMat")
+    checkExact(completer, "object O { def theCatSatOnTheMat = 1; def catOnYoutube = 2 }; import O._; caton")("", "theCatSatOnTheMat", "catOnYoutube")
     checkExact(completer, "object O { def theCatSatOnTheMat = 1 }; import O._; TCSOTM")()
+  }
+
+  @Test
+  def snakeCompletions(): Unit = {
+    val intp = newIMain()
+    val completer = new PresentationCompilerCompleter(intp)
+    checkExact(completer, "object O { final val THE_CAT_SAT_ON_THE_MAT = 1 }; import O._; TCSO")("THE_CAT_SAT_ON_THE_MAT")
+    checkExact(completer, "object O { final val THE_CAT_SAT_ON_THE_MAT = 1 }; import O._; tcso")("THE_CAT_SAT_ON_THE_MAT")
+    checkExact(completer, "object C { def isIdentifierIgnorable = ??? ; val DECIMAL_DIGIT_NUMBER = 0 }; import C._; iii")("isIdentifierIgnorable")
   }
 
   @Test
@@ -159,6 +197,17 @@ class CompletionTest {
   }
 
   @Test
+  def defStringConstructor(): Unit = {
+    val intp = newIMain()
+    val completer = new PresentationCompilerCompleter(intp)
+    checkExact(completer, "class Shazam(i: Int); new Shaza")("Shazam")
+    checkExact(completer, "class Shazam(i: Int); new Shazam")(EmptyString, "def <init>(i: Int): Shazam")
+
+    checkExact(completer, "class Shazam(i: Int) { def this(x: String) = this(0) }; new Shaza")("Shazam")
+    checkExact(completer, "class Shazam(i: Int) { def this(x: String) = this(0) }; new Shazam")(EmptyString, "def <init>(i: Int): Shazam", "def <init>(x: String): Shazam")
+  }
+
+  @Test
   def treePrint(): Unit = {
     val intp = newIMain()
     val completer = new PresentationCompilerCompleter(intp)
@@ -172,6 +221,100 @@ class CompletionTest {
     checkExact(completer, "class C(val a: Int, val b: Int) { this.")("a", "b")
     assert(Set("asInstanceOf", "==").diff(completer.complete("class C(val a: Int, val b: Int) { this.").candidates.toSet).isEmpty)
     checkExact(completer, "case class D(a: Int, b: Int) { this.a")("a", "asInstanceOf")
+  }
+
+  @Test
+  def replGeneratedCodeDeepPackages(): Unit = {
+    val intp = newIMain()
+    val completer = new PresentationCompilerCompleter(intp)
+    intp.compileSources(new BatchSourceFile("<paste>", "package p1.p2.p3; object Ping { object Pong }"))
+    checkExact(completer, "p1.p2.p")("p3")
+    checkExact(completer, "p1.p2.p3.P")("Ping")
+    checkExact(completer, "p1.p2.p3.Ping.Po")("Pong")
+  }
+
+  @Test
+  def constructor(): Unit = {
+    val intp = newIMain()
+    val completer = new PresentationCompilerCompleter(intp)
+    checkExact(completer, "class Shazam{}; new Shaz")("Shazam")
+
+    intp.interpret("class Shazam {}")
+    checkExact(completer, "new Shaz")("Shazam")
+  }
+
+  @Test
+  def performanceOfLenientMatch(): Unit = {
+    val intp = newIMain()
+    val completer = new PresentationCompilerCompleter(intp)
+    val ident: String = "thisIsAReallyLongMethodNameWithManyManyManyManyChunks"
+    checkExact(completer, s"($ident: Int) => tia")(ident)
+  }
+
+  @Test
+  def completionWithComment(): Unit = {
+    val intp = newIMain()
+    val completer = new PresentationCompilerCompleter(intp)
+
+    val withMultilineCommit =
+      """|Array(1, 2, 3)
+         |  .map(_ + 1) /* then we do reverse */
+         |  .rev""".stripMargin
+    assert(
+      completer.complete(withMultilineCommit).candidates.contains("reverseMap")
+    )
+
+    val withInlineCommit =
+      """|Array(1, 2, 3)
+         |  .map(_ + 1) // then we do reverse
+         |  .rev""".stripMargin
+    assert(
+      completer.complete(withInlineCommit).candidates.contains("reverseMap")
+    )
+  }
+
+  @Test
+  def dependentTypeImplicits_t10353(): Unit = {
+    val code =
+      """
+package test
+
+// tests for autocomplete on repl
+
+object Test {
+  trait Conv[In] {
+    type Out
+    def apply(in: In): Out
+  }
+  object Conv {
+    type Aux[In, Out0] = Conv[In] { type Out = Out0 }
+    implicit val int2String = new Conv[Int] {
+      type Out = String
+      override def apply(i: Int) = i.toString
+    }
+  }
+
+  // autocomplete works on repl: `test.Test.withParens().<TAB>` shows completions for String
+  def withParens[Out]()(implicit conv: Conv.Aux[Int, Out]): Out = "5".asInstanceOf[Out]
+
+  // autocomplete doesn't work on repl: `test.Test.withoutParens.` doesn't suggest anything
+  // when saving intermediate result it works though: `val a = test.Test.withoutParens; a.<TAB>`
+  def withoutParens[Out](implicit conv: Conv.Aux[Int, Out]): Out = "5".asInstanceOf[Out]
+}
+
+// this works fine
+object Test2 {
+  trait A
+  implicit val a: A = ???
+  def withParens()(implicit a: A): String = "something"
+  def withoutParens(implicit a: A): String = "something"
+}
+"""
+    val intp = newIMain()
+    val completer = new PresentationCompilerCompleter(intp)
+    intp.compileSources(new BatchSourceFile("<paste>", code))
+    checkExact(completer, "val x = test.Test.withoutParens; x.charA")("charAt")
+    checkExact(completer, "test.Test.withoutParens.charA")("charAt")
   }
 
   def checkExact(completer: PresentationCompilerCompleter, before: String, after: String = "")(expected: String*): Unit = {

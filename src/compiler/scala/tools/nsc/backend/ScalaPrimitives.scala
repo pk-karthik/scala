@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala
@@ -446,9 +453,10 @@ abstract class ScalaPrimitives {
       inform(s"Unknown primitive method $cls.$method")
     else alts foreach (s =>
       addPrimitive(s,
-        s.info.paramTypes match {
-          case tp :: _ if code == ADD && tp =:= StringTpe => CONCAT
-          case _                                          => code
+        if (code != ADD) code
+        else exitingTyper(s.info).paramTypes match {
+          case tp :: _ if tp =:= StringTpe => CONCAT
+          case _                           => code
         }
       )
     )

@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala.reflect.reify
 package codegen
 
@@ -25,7 +37,7 @@ trait GenTypes {
     if (isSemiConcreteTypeMember(tpe))
       return reifySemiConcreteTypeMember(tpe)
 
-    // SI-6242: splicing might violate type bounds
+    // scala/bug#6242: splicing might violate type bounds
     val spliced = spliceType(tpe)
     if (spliced != EmptyTree)
       return spliced

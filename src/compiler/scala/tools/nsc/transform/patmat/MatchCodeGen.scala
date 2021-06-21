@@ -1,7 +1,13 @@
-/* NSC -- new Scala compiler
+/*
+ * Scala (https://www.scala-lang.org)
  *
- * Copyright 2011-2013 LAMP/EPFL
- * @author Adriaan Moors
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc.transform.patmat
@@ -81,7 +87,7 @@ trait MatchCodeGen extends Interface {
       def drop(tgt: Tree)(n: Int): Tree = {
         def callDirect   = fn(tgt, nme.drop, LIT(n))
         def callRuntime  = Apply(REF(currentRun.runDefinitions.traversableDropMethod), tgt :: LIT(n) :: Nil)
-        def needsRuntime = (tgt.tpe ne null) && (typeOfMemberNamedDrop(tgt.tpe) == NoType)
+        def needsRuntime = (tgt.tpe ne null) && (elementTypeFromDrop(tgt.tpe) == NoType)
 
         if (needsRuntime) callRuntime else callDirect
       }
@@ -150,7 +156,7 @@ trait MatchCodeGen extends Interface {
 
       /** Inline runOrElse and get rid of Option allocations
        *
-       * runOrElse(scrut: scrutTp)(matcher): resTp = matcher(scrut) getOrElse ${catchAll(`scrut`)}
+       * runOrElse(scrut: scrutTp)(matcher): resTp = matcher(scrut) getOrElse \${catchAll(`scrut`)}
        * the matcher's optional result is encoded as a flag, keepGoing, where keepGoing == true encodes result.isEmpty,
        * if keepGoing is false, the result Some(x) of the naive translation is encoded as matchRes == x
        */
@@ -225,7 +231,7 @@ trait MatchCodeGen extends Interface {
           val rest = (
             // only emit a local val for `nextBinder` if it's actually referenced in `next`
             if (next.exists(_.symbol eq nextBinder))
-              BLOCK(ValDef(nextBinder, res), next)
+              Block(ValDef(nextBinder, res) :: Nil, next)
             else next
           )
           ifThenElseZero(cond, rest)

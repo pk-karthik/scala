@@ -1,13 +1,26 @@
-/* NSC -- new Scala compiler
- * Copyright 2007-2013 LAMP/EPFL
- * @author Lex Spoon
- * Updated by Anders Bach Nielsen
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
 package plugins
 
+
+import java.net.URL
+import java.util
+
+import scala.reflect.internal.util.ScalaClassLoader
 import scala.reflect.io.Path
+import scala.tools.nsc.Reporting.WarningCategory
+import scala.tools.nsc.plugins.Plugin.pluginClassLoadersCache
 import scala.tools.nsc.util.ClassPath
 import scala.tools.util.PathResolver.Defaults
 
@@ -31,12 +44,12 @@ trait Plugins { global: Global =>
       def injectDefault(s: String) = if (s.isEmpty) Defaults.scalaPluginPath else s
       asPath(settings.pluginsDir.value) map injectDefault map Path.apply
     }
-    val maybes = Plugin.loadAllFrom(paths, dirs, settings.disable.value)
+    val maybes = Plugin.loadAllFrom(paths, dirs, settings.disable.value, findPluginClassLoader(_))
     val (goods, errors) = maybes partition (_.isSuccess)
     // Explicit parameterization of recover to avoid -Xlint warning about inferred Any
     errors foreach (_.recover[Any] {
       // legacy behavior ignores altogether, so at least warn devs
-      case e: MissingPluginException => if (global.isDeveloper) warning(e.getMessage)
+      case e: MissingPluginException => if (global.isDeveloper) runReporting.warning(NoPosition, e.getMessage, WarningCategory.OtherDebug, site = "")
       case e: Exception              => inform(e.getMessage)
     })
     val classes = goods map (_.get)  // flatten
@@ -45,6 +58,56 @@ trait Plugins { global: Global =>
     // is to register annotation checkers during object construction, so
     // creating multiple plugin instances will leave behind stale checkers.
     classes map (Plugin.instantiate(_, this))
+  }
+
+  /**
+    * Locate or create the classloader to load a compiler plugin with `classpath`.
+    *
+    * Subclasses may override to customise the behaviour. The returned classloader must return the first
+    * from plugin descriptor from `classpath` when `getResource("scalac-plugin.xml")` is called.
+    *
+    * @param classpath
+    * @return
+    */
+  protected def findPluginClassLoader(classpath: Seq[Path]): ClassLoader = {
+    val policy = settings.YcachePluginClassLoader.value
+    val disableCache = policy == settings.CachePolicy.None.name
+    def newLoader = () => {
+      val compilerLoader = classOf[Plugin].getClassLoader
+      val urls = classpath map (_.toURL)
+      new ScalaClassLoader.URLClassLoader(urls, compilerLoader) {
+        // scala/bug#11666 no parent delegation for plugin.xml to avoid getting plugin.xml from parent classloader
+
+        override def getResources(name: String): util.Enumeration[URL] = {
+          if (name == Plugin.PluginXML) findResources(name);
+          else super.getResources(name)
+        }
+
+        override def getResource(name: String): URL = {
+          if (name == Plugin.PluginXML) findResource(name);
+          else super.getResource(name)
+        }
+      }
+    }
+
+    // Create a class loader with the specified locations plus
+    // the loader that loaded the Scala compiler.
+    //
+    // If the class loader has already been created before and the
+    // file stamps are the same, the previous loader is returned to
+    // mitigate the cost of dynamic classloading as it has been
+    // measured in https://github.com/scala/scala-dev/issues/458.
+
+    val cache = pluginClassLoadersCache
+    val checkStamps = policy == settings.CachePolicy.LastModified.name
+    cache.checkCacheability(classpath.map(_.toURL), checkStamps, disableCache) match {
+      case Left(msg) =>
+        val loader = newLoader()
+        closeableRegistry.registerClosable(loader)
+        loader
+      case Right(paths) =>
+        cache.getOrCreate((), classpath.map(_.jfile.toPath()), newLoader, closeableRegistry, checkStamps)
+    }
   }
 
   protected lazy val roughPluginsList: List[Plugin] = loadRoughPluginsList()
@@ -96,7 +159,7 @@ trait Plugins { global: Global =>
     } globalError("bad option: -P:" + opt)
 
     // Plugins may opt out, unless we just want to show info
-    plugs filter (p => p.init(p.options, globalError) || (settings.debug && settings.isInfo))
+    plugs filter (p => p.init(p.options, globalError) || (settings.isDebug && settings.isInfo))
   }
 
   lazy val plugins: List[Plugin] = loadPlugins()

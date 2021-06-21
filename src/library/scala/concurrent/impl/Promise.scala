@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala.concurrent.impl
 
@@ -87,10 +91,10 @@ private[concurrent] object Promise {
    /**
     * Latch used to implement waiting on a DefaultPromise's result.
     *
-    * Inspired by: http://gee.cs.oswego.edu/cgi-bin/viewcvs.cgi/jsr166/src/main/java/util/concurrent/locks/AbstractQueuedSynchronizer.java
+    * Inspired by: [[http://gee.cs.oswego.edu/cgi-bin/viewcvs.cgi/jsr166/src/main/java/util/concurrent/locks/AbstractQueuedSynchronizer.java]]
     * Written by Doug Lea with assistance from members of JCP JSR-166
     * Expert Group and released to the public domain, as explained at
-    * http://creativecommons.org/publicdomain/zero/1.0/
+    * [[http://creativecommons.org/publicdomain/zero/1.0/]]
     */
     private final class CompletionLatch[T] extends AbstractQueuedSynchronizer with (Try[T] => Unit) {
       override protected def tryAcquireShared(ignored: Int): Int = if (getState != 0) 1 else -1
@@ -150,8 +154,8 @@ private[concurrent] object Promise {
    * To make the chains flattenable, the concept of linking promises together
    * needed to become an explicit feature of the DefaultPromise implementation,
    * so that the implementation to navigate and rewire links as needed. The idea
-   * of linking promises is based on the [[Twitter promise implementation
-   * https://github.com/twitter/util/blob/master/util-core/src/main/scala/com/twitter/util/Promise.scala]].
+   * of linking promises is based on the [[https://github.com/twitter/util/blob/master/util-core/src/main/scala/com/twitter/util/Promise.scala
+   *  Twitter promise implementation]].
    *
    * In practice, flattening the chain cannot always be done perfectly. When a
    * promise is added to the end of the chain, it scans the chain and links
@@ -384,7 +388,7 @@ private[concurrent] object Promise {
       private[this] final def thisAs[S]: Future[S] = future.asInstanceOf[Future[S]]
 
       override def onSuccess[U](pf: PartialFunction[T, U])(implicit executor: ExecutionContext): Unit = ()
-      override def failed: Future[Throwable] = thisAs[Throwable]
+      override def failed: Future[Throwable] = KeptPromise(Success(result.exception)).future
       override def foreach[U](f: T => U)(implicit executor: ExecutionContext): Unit = ()
       override def map[S](f: T => S)(implicit executor: ExecutionContext): Future[S] = thisAs[S]
       override def flatMap[S](f: T => Future[S])(implicit executor: ExecutionContext): Future[S] = thisAs[S]

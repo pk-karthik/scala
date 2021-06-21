@@ -1,8 +1,14 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Lex Spoon
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
-
 
 package scala.tools.nsc
 
@@ -19,7 +25,8 @@ trait CommonRunner {
    *  @throws InvocationTargetException
    */
   def run(urls: Seq[URL], objectName: String, arguments: Seq[String]) {
-    (ScalaClassLoader fromURLs urls).run(objectName, arguments)
+    import scala.reflect.internal.util.RichClassLoader._
+    ScalaClassLoader.fromURLsParallelCapable(urls).run(objectName, arguments)
   }
 
   /** Catches exceptions enumerated by run (in the case of InvocationTargetException,

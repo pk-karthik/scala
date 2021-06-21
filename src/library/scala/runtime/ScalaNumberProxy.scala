@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2002-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package runtime
@@ -18,7 +22,6 @@ import Proxy.Typed
  *  As with all classes in scala.runtime.*, this is not a supported API.
  *
  *  @author Paul Phillips
- *  @version 2.9
  *  @since   2.9
  */
 trait ScalaNumberProxy[T] extends Any with ScalaNumericAnyConversions with Typed[T] with OrderedProxy[T] {
@@ -64,10 +67,10 @@ trait FractionalProxy[T] extends Any with ScalaNumberProxy[T] with RangedProxy[T
   type ResultWithoutStep = Range.Partial[T, NumericRange[T]]
 
   def isWhole() = false
-  def until(end: T): ResultWithoutStep                  = new Range.Partial(NumericRange(self, end, _))
-  def until(end: T, step: T): NumericRange.Exclusive[T] = NumericRange(self, end, step)
-  def to(end: T): ResultWithoutStep                     = new Range.Partial(NumericRange.inclusive(self, end, _))
-  def to(end: T, step: T): NumericRange.Inclusive[T]    = NumericRange.inclusive(self, end, step)
+  @deprecated("use BigDecimal range instead", "2.12.6") def until(end: T): ResultWithoutStep                  = new Range.Partial(NumericRange(self, end, _))
+  @deprecated("use BigDecimal range instead", "2.12.6") def until(end: T, step: T): NumericRange.Exclusive[T] = NumericRange(self, end, step)
+  @deprecated("use BigDecimal range instead", "2.12.6") def to(end: T): ResultWithoutStep                     = new Range.Partial(NumericRange.inclusive(self, end, _))
+  @deprecated("use BigDecimal range instead", "2.12.6") def to(end: T, step: T): NumericRange.Inclusive[T]    = NumericRange.inclusive(self, end, step)
 }
 
 trait OrderedProxy[T] extends Any with Ordered[T] with Typed[T] {

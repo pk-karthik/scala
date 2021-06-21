@@ -1,4 +1,14 @@
-/* NSC -- new Scala compiler -- Copyright 2007-2013 LAMP/EPFL */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala.tools.nsc
 package doc
@@ -61,7 +71,7 @@ trait ModelFactoryTypeSupport {
         case TypeRef(pre, aSym, targs) =>
           val preSym = pre.widen.typeSymbol
 
-          // SI-3314/SI-4888: Classes, Traits and Types can be inherited from a template to another:
+          // scala/bug#3314/scala/bug#4888: Classes, Traits and Types can be inherited from a template to another:
           // class Enum { abstract class Value }
           // class Day extends Enum { object Mon extends Value /*...*/ }
           // ===> in such cases we have two options:
@@ -83,8 +93,8 @@ trait ModelFactoryTypeSupport {
               case Some(bTpl) if owner == bSym.owner =>
                 // (0) the owner's class is linked AND has a template - lovely
                 bTpl match {
-                  case dtpl: DocTemplateEntity => new LinkToTpl(dtpl)
-                  case _ => new Tooltip(bTpl.qualifiedName)
+                  case dtpl: DocTemplateEntity => LinkToTpl(dtpl)
+                  case _ => Tooltip(bTpl.qualifiedName)
                 }
               case _ =>
                 val oTpl = findTemplateMaybe(owner)
@@ -104,7 +114,7 @@ trait ModelFactoryTypeSupport {
                 }
             }
 
-          // SI-4360 Showing prefixes when necessary
+          // scala/bug#4360 Showing prefixes when necessary
           // We check whether there's any directly accessible type with the same name in the current template OR if the
           // type is inherited from one template to another. There may be multiple symbols with the same name in scope,
           // but we won't show the prefix if our symbol is among them, only if *it's not* -- that's equal to showing
@@ -161,7 +171,7 @@ trait ModelFactoryTypeSupport {
           refBuffer += pos0 -> ((link, name.length))
           nameBuffer append name
 
-          if (!targs.isEmpty) {
+          if (targs.nonEmpty) {
             nameBuffer append '['
             appendTypes0(targs, ", ")
             nameBuffer append ']'
@@ -230,7 +240,7 @@ trait ModelFactoryTypeSupport {
                 nameBuffer append "val "
                 nameBuffer append tpnme.dropSingletonName(sym.name)
                 nameBuffer append ": "
-                appendType0(dropSingletonType(sym.info.bounds.hi))
+                appendType0(dropSingletonType(sym.info.upperBound))
               } else {
                 if (sym.flagString != "") nameBuffer append (sym.flagString + " ")
                 if (sym.keyString != "") nameBuffer append (sym.keyString + " ")
@@ -306,7 +316,7 @@ trait ModelFactoryTypeSupport {
       nameBuffer = null
     }
 
-    // SI-4360: Entity caching depends on both the type AND the template it's in, as the prefixes might change for the
+    // scala/bug#4360: Entity caching depends on both the type AND the template it's in, as the prefixes might change for the
     // same type based on the template the type is shown in.
     if (settings.docNoPrefixes)
       typeCache.getOrElseUpdate(aType, createTypeEntity)

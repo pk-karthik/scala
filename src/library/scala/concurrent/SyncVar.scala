@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala.concurrent
 
@@ -15,7 +19,6 @@ import java.util.concurrent.TimeUnit
  *
  *  @tparam A type of the contained value
  *  @author  Martin Odersky
- *  @version 1.0, 10/03/2003
  */
 class SyncVar[A] {
   private var isDefined: Boolean = false
@@ -40,7 +43,7 @@ class SyncVar[A] {
     wait(timeout)
     val elapsed = System.nanoTime() - start
     // nanoTime should be monotonic, but it's not possible to rely on that.
-    // See http://bugs.java.com/bugdatabase/view_bug.do?bug_id=6458294.
+    // See http://bugs.java.com/view_bug.do?bug_id=6458294
     if (elapsed < 0) 0 else TimeUnit.NANOSECONDS.toMillis(elapsed)
   }
 
@@ -91,8 +94,8 @@ class SyncVar[A] {
   // [Heather] the reason why: it doesn't take into consideration
   // whether or not the SyncVar is already defined. So, set has been
   // deprecated in order to eventually be able to make "setting" private
-  @deprecated("use `put` instead, as `set` is potentially error-prone", "2.10.0")
-  // NOTE: Used by SBT 0.13.0-M2 and below
+  @deprecated("use `put` to ensure a value cannot be overwritten without a corresponding `take`", "2.10.0")
+  // NOTE: Used by sbt 0.13.0-M2 and below
   def set(x: A): Unit = setVal(x)
 
   /** Place a value in the SyncVar. If the SyncVar already has a stored value,
@@ -111,8 +114,8 @@ class SyncVar[A] {
   // [Heather] the reason why: it doesn't take into consideration
   // whether or not the SyncVar is already defined. So, unset has been
   // deprecated in order to eventually be able to make "unsetting" private
-  @deprecated("use `take` instead, as `unset` is potentially error-prone", "2.10.0")
-  // NOTE: Used by SBT 0.13.0-M2 and below
+  @deprecated("use `take` to ensure a value is never discarded", "2.10.0")
+  // NOTE: Used by sbt 0.13.0-M2 and below
   def unset(): Unit = synchronized {
     isDefined = false
     value = null.asInstanceOf[A]

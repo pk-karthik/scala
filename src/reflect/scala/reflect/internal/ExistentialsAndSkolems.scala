@@ -1,6 +1,13 @@
-/* NSC -- new scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala
@@ -20,7 +27,7 @@ trait ExistentialsAndSkolems {
    *  !!!Adriaan: this does not work for hk types.
    *
    *  Skolems will be created at level 0, rather than the current value
-   *  of `skolemizationLevel`. (See SI-7782)
+   *  of `skolemizationLevel`. (See scala/bug#7782)
    */
   def deriveFreshSkolems(tparams: List[Symbol]): List[Symbol] = {
     class Deskolemizer extends LazyType {
@@ -49,9 +56,9 @@ trait ExistentialsAndSkolems {
    */
   private def existentialBoundsExcludingHidden(hidden: List[Symbol]): Map[Symbol, Type] = {
     def safeBound(t: Type): Type =
-      if (hidden contains t.typeSymbol) safeBound(t.typeSymbol.existentialBound.bounds.hi) else t
+      if (hidden contains t.typeSymbol) safeBound(t.typeSymbol.existentialBound.upperBound) else t
 
-    def hiBound(s: Symbol): Type = safeBound(s.existentialBound.bounds.hi) match {
+    def hiBound(s: Symbol): Type = safeBound(s.existentialBound.upperBound) match {
       case tp @ RefinedType(parents, decls) =>
         val parents1 = parents mapConserve safeBound
         if (parents eq parents1) tp
@@ -103,7 +110,8 @@ trait ExistentialsAndSkolems {
     val typeParamTypes = typeParams map (_.tpeHK)
     def doSubst(info: Type) = info.subst(rawSyms, typeParamTypes)
 
-    creator(typeParams map (_ modifyInfo doSubst), doSubst(tp))
+    typeParams foreach (_ modifyInfo doSubst)
+    creator(typeParams, doSubst(tp))
   }
 
   /**

@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala
@@ -21,10 +28,8 @@ class PickleBuffer(data: Array[Byte], from: Int, to: Int) {
   var writeIndex = to
 
   /** Double bytes array */
-  private def dble() {
-    val bytes1 = new Array[Byte](bytes.length * 2)
-    Array.copy(bytes, 0, bytes1, 0, writeIndex)
-    bytes = bytes1
+  private def dble(): Unit = {
+    bytes = java.util.Arrays.copyOf(bytes, bytes.length * 2)
   }
 
   def ensureCapacity(capacity: Int) =

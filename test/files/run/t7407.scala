@@ -1,4 +1,5 @@
-// SI-7407
+// scalac: -opt:l:none
+// scala/bug#7407
 object Test {
 
   def main(args: Array[String]) { println(foo) }

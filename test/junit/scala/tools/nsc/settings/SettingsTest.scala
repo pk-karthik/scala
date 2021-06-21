@@ -12,8 +12,8 @@ class SettingsTest {
   @Test def booleanSettingColon() {
     def check(args: String*): MutableSettings#BooleanSetting = {
       val s = new MutableSettings(msg => throw new IllegalArgumentException(msg))
-      val b1 = new s.BooleanSetting("-Ytest-setting", "")
-      s.allSettings += b1
+      val b1 = new s.BooleanSetting("-Ytest-setting", descr="", default=false)
+      s.allSettings(b1.name) = b1
       val (ok, residual) = s.processArguments(args.toList, processAll = true)
       assert(residual.isEmpty)
       b1
@@ -176,8 +176,76 @@ class SettingsTest {
     check(expected = "2.11.0", "-Xsource:2.11")
     check(expected = "2.10",   "-Xsource:2.10.0")
     check(expected = "2.12",   "-Xsource:2.12")
+    check(expected = "2.13",   "-Xsource:2.13")
     assertThrows[IllegalArgumentException](check(expected = "2.11", "-Xsource"), _ == "-Xsource requires an argument, the syntax is -Xsource:<version>")
     assertThrows[IllegalArgumentException](check(expected = "2.11", "-Xsource", "2.11"), _ == "-Xsource requires an argument, the syntax is -Xsource:<version>")
     assertThrows[IllegalArgumentException](check(expected = "2.11", "-Xsource:2.invalid"), _ contains "Bad version (2.invalid)")
+  }
+
+  // equal with stripped margins and normalized line endings
+  private def marginallyEquals(s1: String, s2: String): Boolean = {
+    def normally(s: String): String = s.stripMargin.linesIterator.mkString("\n")
+    normally(s1) == normally(s2)
+  }
+
+  @Test def helpHasDefault(): Unit = {
+    val s = new MutableSettings(msg => throw new IllegalArgumentException(msg))
+    object mChoices extends s.MultiChoiceEnumeration {
+      val a = Choice("a", "help a")
+      val b = Choice("b", "help b")
+      val c = Choice("c", "help c")
+    }
+    val m = s.MultiChoiceSetting("-m", "args", "magic sauce", mChoices, Some(List("b")))
+
+    def check(args: String*)(t: s.MultiChoiceSetting[mChoices.type] => Boolean): Boolean = {
+      m.clear()
+      val (ok, rest) = s.processArguments(args.toList, processAll = true)
+      assert(rest.isEmpty)
+      t(m)
+    }
+
+    import mChoices._
+
+    assertTrue(check("-m")(_.value == Set(b)))
+    assertTrue(check("-m") { _ =>
+      val expected =
+        """|magic sauce
+           |  a  help a
+           |  b  help b
+           |  c  help c
+           |Default: b
+           |"""
+      marginallyEquals(expected, m.help)
+    })
+  }
+  @Test def helpHasDefaultAll(): Unit = {
+    val s = new MutableSettings(msg => throw new IllegalArgumentException(msg))
+    object mChoices extends s.MultiChoiceEnumeration {
+      val a = Choice("a", "help a")
+      val b = Choice("b", "help b")
+      val c = Choice("c", "help c")
+    }
+    val m = s.MultiChoiceSetting("-m", "args", "magic sauce", mChoices, Some(List("_")))
+
+    def check(args: String*)(t: s.MultiChoiceSetting[mChoices.type] => Boolean): Boolean = {
+      m.clear()
+      val (ok, rest) = s.processArguments(args.toList, processAll = true)
+      assert(rest.isEmpty)
+      t(m)
+    }
+
+    import mChoices._
+
+    assertTrue(check("-m")(_.value == Set(a, b, c)))
+    assertTrue(check("-m") { _ =>
+      val expected =
+        """|magic sauce
+           |  a  help a
+           |  b  help b
+           |  c  help c
+           |Default: All choices are enabled by default.
+           |"""
+      marginallyEquals(expected, m.help)
+    })
   }
 }

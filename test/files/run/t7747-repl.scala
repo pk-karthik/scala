@@ -1,15 +1,12 @@
-import scala.tools.partest.ReplTest
+import scala.tools.partest._
 import scala.tools.nsc.Settings
 
-object Test extends ReplTest {
+object Test extends ReplTest with Lambdaless {
 
   override def transformSettings(s: Settings): Settings = {
     s.Yreplclassbased.value = true
     s
   }
-
-  // replace indylambda function names by <function0>
-  override def normalize(s: String) = """\$Lambda.*""".r.replaceAllIn(s, "<function0>")
 
   def code = """
     |var x = 10

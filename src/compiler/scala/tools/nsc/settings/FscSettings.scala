@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Paul Phillips
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools
@@ -10,7 +17,7 @@ package settings
 import util.ClassPath
 import io.{ Path, AbstractFile }
 
-class FscSettings(error: String => Unit) extends Settings(error) {
+class FscSettings(error: String => Unit, pathFactory: PathFactory = DefaultPathFactory) extends Settings(error, pathFactory) {
   outer =>
 
   locally {
@@ -54,7 +61,7 @@ class FscSettings(error: String => Unit) extends Settings(error) {
   /** All user set settings rewritten with absolute paths based on currentDir */
   def absolutize() {
     userSetSettings foreach {
-      case p: OutputSetting => p.outputDirs setSingleOutput AbstractFile.getDirectory(absolutizePath(p.value))
+      case p: OutputSetting => outputDirs.setSingleOutput(AbstractFile.getDirectory(absolutizePath(p.value)))
       case p: PathSetting   => p.value = ClassPath.map(p.value, absolutizePath)
       case p: StringSetting => if (holdsPath(p)) p.value = absolutizePath(p.value)
       case _                => ()

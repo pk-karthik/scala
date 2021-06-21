@@ -1,11 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2006-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
-
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -24,7 +27,6 @@ import scala.language.higherKinds
  *  @define factoryInfo
  *    This object provides a set of operations to create `$Coll` values.
  *    @author Martin Odersky
- *    @version 2.8
  *  @define canBuildFromInfo
  *    The standard `CanBuildFrom` instance for $Coll objects.
  *    @see CanBuildFrom
@@ -229,7 +231,7 @@ extends GenericCompanion[CC] {
   /** Produces a $coll containing repeated applications of a function to a start value.
    *
    *  @param start the start value of the $coll
-   *  @param len   the number of elements contained inthe $coll
+   *  @param len   the number of elements contained in the $coll
    *  @param f     the function that's repeatedly applied
    *  @return      a $coll with `len` values in the sequence `start, f(start), f(f(start)), ...`
    */

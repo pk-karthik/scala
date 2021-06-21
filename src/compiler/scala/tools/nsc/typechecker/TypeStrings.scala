@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Paul Phillips
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
@@ -50,7 +57,7 @@ trait StructuredTypeStrings extends DestructureTypes {
     else block(level, grouping)(name, nodes)
   }
   private def shortClass(x: Any) = {
-    if (settings.debug) {
+    if (settings.isDebug) {
       val name   = (x.getClass.getName split '.').last
       val str    = if (TypeStrings.isAnonClass(x.getClass)) name else (name split '$').last
 
@@ -127,10 +134,10 @@ trait StructuredTypeStrings extends DestructureTypes {
 
     def wrapEmpty                             = TypeEmpty
     def wrapSequence(nodes: List[TypeNode])   = new TypeList(nodes)
-    def wrapProduct(nodes: List[TypeNode])    = new TypeProduct(nodes)
+    def wrapProduct(nodes: List[TypeNode])    = TypeProduct(nodes)
     def wrapPoly(in: TypeNode, out: TypeNode) = new PolyFunction(in, out)
     def wrapMono(in: TypeNode, out: TypeNode) = if (in == wrapEmpty) new NullaryFunction(out) else new MonoFunction(in, out)
-    def wrapAtom[U](value: U)                 = new TypeAtom(value)
+    def wrapAtom[U](value: U)                 = TypeAtom(value)
   }
 
   def show(tp: Type): String = intoNodes(tp).show()

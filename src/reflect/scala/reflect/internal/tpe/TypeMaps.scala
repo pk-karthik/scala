@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala
 package reflect
 package internal
@@ -46,20 +58,12 @@ private[internal] trait TypeMaps {
   object abstractTypesToBounds extends TypeMap {
     def apply(tp: Type): Type = tp match {
       case TypeRef(_, sym, _) if sym.isAliasType    => apply(tp.dealias)
-      case TypeRef(_, sym, _) if sym.isAbstractType => apply(tp.bounds.hi)
+      case TypeRef(_, sym, _) if sym.isAbstractType => apply(tp.upperBound)
       case rtp @ RefinedType(parents, decls)        => copyRefinedType(rtp, parents mapConserve this, decls)
       case AnnotatedType(_, _)                      => mapOver(tp)
       case _                                        => tp             // no recursion - top level only
     }
   }
-
-  // Set to true for A* => Seq[A]
-  //   (And it will only rewrite A* in method result types.)
-  //   This is the pre-existing behavior.
-  // Or false for Seq[A] => Seq[A]
-  //   (It will rewrite A* everywhere but method parameters.)
-  //   This is the specified behavior.
-  protected def etaExpandKeepsStar = false
 
   /** Turn any T* types into Seq[T] except when
     *  in method parameter position.
@@ -74,7 +78,7 @@ private[internal] trait TypeMaps {
       case TypeRef(_, RepeatedParamClass, arg :: Nil) =>
         seqType(arg)
       case _ =>
-        if (etaExpandKeepsStar) tp else mapOver(tp)
+        mapOver(tp)
     }
   }
 
@@ -109,11 +113,16 @@ private[internal] trait TypeMaps {
       case tr @ TypeRef(pre, sym, args) =>
         val pre1 = this(pre)
         val args1 = (
-          if (trackVariance && args.nonEmpty && !variance.isInvariant && sym.typeParams.nonEmpty)
-            mapOverArgs(args, sym.typeParams)
-          else
+          if (trackVariance && args.nonEmpty && !variance.isInvariant) {
+            val tparams = sym.typeParams
+            if (tparams.isEmpty)
+              args mapConserve this
+            else
+              mapOverArgs(args, tparams)
+          } else {
             args mapConserve this
-          )
+          }
+        )
         if ((pre1 eq pre) && (args1 eq args)) tp
         else copyTypeRef(tp, pre1, tr.coevolveSym(pre1), args1)
       case ThisType(_) => tp
@@ -173,7 +182,12 @@ private[internal] trait TypeMaps {
         else AntiPolyType(pre1, args1)
       case tv@TypeVar(_, constr) =>
         if (constr.instValid) this(constr.inst)
-        else tv.applyArgs(mapOverArgs(tv.typeArgs, tv.params))  //@M !args.isEmpty implies !typeParams.isEmpty
+        else {
+          val args = tv.typeArgs
+          val args1 = mapOverArgs(args, tv.params) //@M !args.isEmpty implies !typeParams.isEmpty
+          if (args1 eq args) tv
+          else tv.applyArgs(args1)
+        }
       case AnnotatedType(annots, atp) =>
         val annots1 = mapOverAnnotations(annots)
         val atp1 = this(atp)
@@ -192,7 +206,7 @@ private[internal] trait TypeMaps {
       // throw new Error("mapOver inapplicable for " + tp);
     }
 
-    def withVariance[T](v: Variance)(body: => T): T = {
+    @inline final def withVariance[T](v: Variance)(body: => T): T = {
       val saved = variance
       variance = v
       try body finally variance = saved
@@ -202,7 +216,7 @@ private[internal] trait TypeMaps {
       try body
       finally if (trackVariance) variance = variance.flip
     }
-    protected def mapOverArgs(args: List[Type], tparams: List[Symbol]): List[Type] = (
+    protected final def mapOverArgs(args: List[Type], tparams: List[Symbol]): List[Type] = (
       if (trackVariance)
         map2Conserve(args, tparams)((arg, tparam) => withVariance(variance * tparam.variance)(this(arg)))
       else
@@ -211,22 +225,25 @@ private[internal] trait TypeMaps {
     /** Applies this map to the symbol's info, setting variance = Invariant
       *  if necessary when the symbol is an alias.
       */
-    private def applyToSymbolInfo(sym: Symbol): Type = {
+    private def applyToSymbolInfo(sym: Symbol, info: Type): Type = {
       if (trackVariance && !variance.isInvariant && sym.isAliasType)
-        withVariance(Invariant)(this(sym.info))
+        withVariance(Invariant)(this(info))
       else
-        this(sym.info)
+        this(info)
     }
 
-    /** Called by mapOver to determine whether the original symbols can
-      *  be returned, or whether they must be cloned.
+    /** The index of the first symbol in `origSyms` which would have its info
+      * transformed by this type map.
       */
-    protected def noChangeToSymbols(origSyms: List[Symbol]): Boolean = {
-      @tailrec def loop(syms: List[Symbol]): Boolean = syms match {
-        case Nil     => true
-        case x :: xs => (x.info eq applyToSymbolInfo(x)) && loop(xs)
+    private def firstChangedSymbol(origSyms: List[Symbol]): Int = {
+      @tailrec def loop(i: Int, syms: List[Symbol]): Int = syms match {
+        case x :: xs =>
+          val info = x.info
+          if (applyToSymbolInfo(x, info) eq info) loop(i+1, xs)
+          else i
+        case _ => -1
       }
-      loop(origSyms)
+      loop(0, origSyms)
     }
 
     /** Map this function over given scope */
@@ -239,10 +256,16 @@ private[internal] trait TypeMaps {
 
     /** Map this function over given list of symbols */
     def mapOver(origSyms: List[Symbol]): List[Symbol] = {
+      val firstChange = firstChangedSymbol(origSyms)
       // fast path in case nothing changes due to map
-      if (noChangeToSymbols(origSyms)) origSyms
-      // map is not the identity --> do cloning properly
-      else cloneSymbolsAndModify(origSyms, TypeMap.this)
+      if (firstChange < 0) origSyms
+      else {
+        // map is not the identity --> do cloning properly
+        val cloned = cloneSymbols(origSyms)
+        // but we don't need to run the map again on the unchanged symbols
+        cloned.drop(firstChange).foreach(_ modifyInfo this)
+        cloned
+      }
     }
 
     def mapOver(annot: AnnotationInfo): AnnotationInfo = {
@@ -307,10 +330,15 @@ private[internal] trait TypeMaps {
 
   abstract class TypeCollector[T](initial: T) extends TypeTraverser {
     var result: T = _
-    def collect(tp: Type) = {
-      result = initial
-      traverse(tp)
-      result
+    def collect(tp: Type): T = {
+      val saved = result
+      try {
+        result = initial
+        traverse(tp)
+        result
+      } finally {
+        result = saved // support reentrant use of a single instance of this collector.
+      }
     }
   }
 
@@ -320,7 +348,7 @@ private[internal] trait TypeMaps {
     *  the corresponding class file might still not be read, so we do not
     *  know what the type parameters of the type are. Therefore
     *  the conversion of raw types to existential types might not have taken place
-    *  in ClassFileparser.sigToType (where it is usually done).
+    *  in ClassFileParser.sigToType (where it is usually done).
     */
   def rawToExistential = new TypeMap {
     private var expanded = immutable.Set[Symbol]()
@@ -343,7 +371,7 @@ private[internal] trait TypeMaps {
     object rawToExistentialInJava extends TypeMap {
       def apply(tp: Type): Type = tp match {
         // any symbol that occurs in a java sig, not just java symbols
-        // see https://issues.scala-lang.org/browse/SI-2454?focusedCommentId=46618
+        // see https://github.com/scala/bug/issues/2454#issuecomment-292371833
         case TypeRef(pre, sym, List()) if !sym.typeParams.isEmpty =>
           val eparams = typeParamsToExistentials(sym, sym.typeParams)
           existentialAbstraction(eparams, TypeRef(pre, sym, eparams map (_.tpe)))
@@ -385,15 +413,13 @@ private[internal] trait TypeMaps {
       val tp1 = mapOver(tp)
       if (variance.isInvariant) tp1
       else tp1 match {
-        case TypeRef(pre, sym, args) if tparams contains sym =>
-          val repl = if (variance.isPositive) dropSingletonType(tp1.bounds.hi) else tp1.bounds.lo
-          val count = occurCount(sym)
-          val containsTypeParam = tparams exists (repl contains _)
+        case TypeRef(pre, sym, args) if tparams.contains(sym) && occurCount(sym) == 1 =>
+          val repl = if (variance.isPositive) dropSingletonType(tp1.upperBound) else tp1.lowerBound
           def msg = {
             val word = if (variance.isPositive) "upper" else "lower"
             s"Widened lone occurrence of $tp1 inside existential to $word bound"
           }
-          if (!repl.typeSymbol.isBottomClass && count == 1 && !containsTypeParam)
+          if (!repl.typeSymbol.isBottomClass && !tparams.exists(repl.contains))
             debuglogResult(msg)(repl)
           else
             tp1
@@ -412,7 +438,7 @@ private[internal] trait TypeMaps {
       case _ => super.mapOver(tp)
     }
 
-    // Do not discard the types of existential ident's. The
+    // Do not discard the types of existential idents. The
     // symbol of the Ident itself cannot be listed in the
     // existential's parameters, so the resulting existential
     // type would be ill-formed.
@@ -512,6 +538,8 @@ private[internal] trait TypeMaps {
         && isBaseClassOfEnclosingClass(sym.owner)
       )
 
+    private var capturedThisIds = 0
+    private def nextCapturedThisId() = { capturedThisIds += 1; capturedThisIds }
     /** Creates an existential representing a type parameter which appears
       *  in the prefix of a ThisType.
       */
@@ -519,7 +547,7 @@ private[internal] trait TypeMaps {
       capturedParams find (_.owner == clazz) match {
         case Some(p) => p.tpe
         case _       =>
-          val qvar = clazz freshExistential nme.SINGLETON_SUFFIX setInfo singletonBounds(pre)
+          val qvar = clazz.freshExistential(nme.SINGLETON_SUFFIX, nextCapturedThisId()) setInfo singletonBounds(pre)
           _capturedParams ::= qvar
           debuglog(s"Captured This(${clazz.fullNameString}) seen from $seenFromPrefix: ${qvar.defString}")
           qvar.tpe
@@ -549,10 +577,10 @@ private[internal] trait TypeMaps {
       // reasons which aren't yet fully clear, we can arrive here holding a type
       // parameter whose owner is rhsSym, and which shares the name of an actual
       // type parameter of rhsSym, but which is not among the type parameters of
-      // rhsSym. One can see examples of it at SI-4365.
+      // rhsSym. One can see examples of it at scala/bug#4365.
       val argIndex = rhsSym.typeParams indexWhere (lhsSym.name == _.name)
       // don't be too zealous with the exceptions, see #2641
-      if (argIndex < 0 && rhs.parents.exists(typeIsErroneous))
+      if (argIndex < 0 && rhs.parents.exists(_.isErroneous))
         ErrorType
       else {
         // It's easy to get here when working on hardcore type machinery (not to
@@ -571,9 +599,9 @@ private[internal] trait TypeMaps {
           // @M! don't just replace the whole thing, might be followed by type application
           val result = appliedType(targ, lhsArgs mapConserve this)
           def msg = s"Created $result, though could not find ${own_s(lhsSym)} among tparams of ${own_s(rhsSym)}"
-          if (!rhsSym.typeParams.contains(lhsSym))
-            devWarning(s"Inconsistent tparam/owner views: had to fall back on names\n$msg\n$explain")
-
+          devWarningIf(!rhsSym.typeParams.contains(lhsSym)) {
+            s"Inconsistent tparam/owner views: had to fall back on names\n$msg\n$explain"
+          }
           result
         }
       }
@@ -600,7 +628,7 @@ private[internal] trait TypeMaps {
         else if (!matchesPrefixAndClass(pre, clazz)(tparam.owner))
           loop(nextBase.prefix, clazz.owner)
         else nextBase match {
-          case NoType                         => loop(NoType, clazz.owner) // backstop for SI-2797, must remove `SingletonType#isHigherKinded` and run pos/t2797.scala to get here.
+          case NoType                         => loop(NoType, clazz.owner) // backstop for scala/bug#2797, must remove `SingletonType#isHigherKinded` and run pos/t2797.scala to get here.
           case applied @ TypeRef(_, _, _)     => correspondingTypeArgument(classParam, applied)
           case ExistentialType(eparams, qtpe) => captureSkolems(eparams) ; loop(qtpe, clazz)
           case t                              => abort(s"$tparam in ${tparam.owner} cannot be instantiated from ${seenFromPrefix.widen}")
@@ -610,11 +638,26 @@ private[internal] trait TypeMaps {
     }
 
     // Does the candidate symbol match the given prefix and class?
-    // Since pre may be something like ThisType(A) where trait A { self: B => },
-    // we have to test the typeSymbol of the widened type, not pre.typeSymbol, or
-    // B will not be considered.
-    private def matchesPrefixAndClass(pre: Type, clazz: Symbol)(candidate: Symbol) =
-      (clazz == candidate) && (pre.widen.typeSymbol isSubClass clazz)
+    private def matchesPrefixAndClass(pre: Type, clazz: Symbol)(candidate: Symbol) = (clazz == candidate) && {
+      val pre1 = pre match {
+        case tv: TypeVar =>
+          // Needed with existentials in prefixes, e.g. test/files/pos/typevar-in-prefix.scala
+          // Perhaps the base type sequence of a type var should include its bounds?
+          tv.origin
+        case _ => pre
+      }
+      // widen needed (at least) because of https://github.com/scala/scala-dev/issues/166
+      (
+        if (clazz.isRefinementClass)
+          // base type seqs of aliases over refinement types have copied refinement types based on beta reduction
+          // for reliable lookup we need to consult the base type of the type symbol. (example: pos/t8177b.scala)
+          pre1.widen.typeSymbol isSubClass clazz
+        else
+          // In the general case, we look at the base type sequence of the prefix itself,
+          // which can have more concrete base classes than `.typeSymbol.baseClasses` (example: t5294, t6161)
+          pre1.widen.baseTypeIndex(clazz) != -1
+      )
+    }
 
     // Whether the annotation tree currently being mapped over has had a This(_) node rewritten.
     private[this] var wroteAnnotation = false
@@ -689,18 +732,32 @@ private[internal] trait TypeMaps {
     // OPT this check was 2-3% of some profiles, demoted to -Xdev
     if (isDeveloper) assert(sameLength(from, to), "Unsound substitution from "+ from +" to "+ to)
 
+    private[this] var fromHasTermSymbol = false
+    private[this] var fromMin = Int.MaxValue
+    private[this] var fromMax = Int.MinValue
+    private[this] var fromSize = 0
+    from.foreach {
+      sym =>
+        fromMin = math.min(fromMin, sym.id)
+        fromMax = math.max(fromMax, sym.id)
+        fromSize += 1
+        if (sym.isTerm) fromHasTermSymbol = true
+    }
+
     /** Are `sym` and `sym1` the same? Can be tuned by subclasses. */
     protected def matches(sym: Symbol, sym1: Symbol): Boolean = sym eq sym1
 
     /** Map target to type, can be tuned by subclasses */
     protected def toType(fromtp: Type, tp: T): Type
 
+    // We don't need to recurse into the `restpe` below because we will encounter
+    // them in the next level of recursion, when the result of this method is passed to `mapOver`.
     protected def renameBoundSyms(tp: Type): Type = tp match {
-      case MethodType(ps, restp) =>
-        createFromClonedSymbols(ps, restp)((ps1, tp1) => copyMethodType(tp, ps1, renameBoundSyms(tp1)))
-      case PolyType(bs, restp) =>
-        createFromClonedSymbols(bs, restp)((ps1, tp1) => PolyType(ps1, renameBoundSyms(tp1)))
-      case ExistentialType(bs, restp) =>
+      case MethodType(ps, restp) if fromHasTermSymbol && fromContains(ps) =>
+        createFromClonedSymbols(ps, restp)((ps1, tp1) => copyMethodType(tp, ps1, tp1))
+      case PolyType(bs, restp) if fromContains(bs) =>
+        createFromClonedSymbols(bs, restp)((ps1, tp1) => PolyType(ps1, tp1))
+      case ExistentialType(bs, restp) if fromContains(bs) =>
         createFromClonedSymbols(bs, restp)(newExistentialType)
       case _ =>
         tp
@@ -713,10 +770,27 @@ private[internal] trait TypeMaps {
       else subst(tp, sym, from.tail, to.tail)
       )
 
+    private def fromContains(syms: List[Symbol]): Boolean = {
+      def fromContains(sym: Symbol): Boolean = {
+        // OPT Try cheap checks based on the range of symbol ids in from first.
+        //     Equivalent to `from.contains(sym)`
+        val symId = sym.id
+        val fromMightContainSym = symId >= fromMin && symId <= fromMax
+        fromMightContainSym && (
+          symId == fromMin || symId == fromMax || (fromSize > 2 && from.contains(sym))
+        )
+      }
+      var syms1 = syms
+      while (syms1 ne Nil) {
+        val sym = syms1.head
+        if (fromContains(sym)) return true
+        syms1 = syms1.tail
+      }
+      false
+    }
+
     def apply(tp0: Type): Type = if (from.isEmpty) tp0 else {
-      val boundSyms             = tp0.boundSyms
-      val tp1                   = if (boundSyms.nonEmpty && (boundSyms exists from.contains)) renameBoundSyms(tp0) else tp0
-      val tp                    = mapOver(tp1)
+      val tp                    = mapOver(renameBoundSyms(tp0))
       def substFor(sym: Symbol) = subst(tp, sym, from, to)
 
       tp match {
@@ -879,9 +953,29 @@ private[internal] trait TypeMaps {
   /** Note: This map is needed even for non-dependent method types, despite what the name might imply.
     */
   class InstantiateDependentMap(params: List[Symbol], actuals0: List[Type]) extends TypeMap with KeepOnlyTypeConstraints {
-    private val actuals      = actuals0.toIndexedSeq
-    private val existentials = new Array[Symbol](actuals.size)
-    def existentialsNeeded: List[Symbol] = existentials.iterator.filter(_ ne null).toList
+    private[this] var _actuals: Array[Type] = _
+    private[this] var _existentials: Array[Symbol] = _
+    private def actuals: Array[Type] = {
+      if (_actuals eq null) {
+        // OPT: hand rolled actuals0.toArray to avoid intermediate object creation.
+        val temp = new Array[Type](actuals0.size)
+        var i = 0
+        var l = actuals0
+        while (i < temp.length) {
+          temp(i) = l.head
+          l = l.tail // will not generated a NoSuchElementException because temp.size == actuals0.size
+          i += 1
+        }
+        _actuals = temp
+      }
+      _actuals
+    }
+    private def existentials: Array[Symbol] = {
+      if (_existentials eq null) _existentials = new Array[Symbol](actuals.length)
+      _existentials
+    }
+
+    def existentialsNeeded: List[Symbol] = if (_existentials eq null) Nil else existentials.iterator.filter(_ ne null).toList
 
     private object StableArgTp {
       // type of actual arg corresponding to param -- if the type is stable
@@ -937,7 +1031,7 @@ private[internal] trait TypeMaps {
      *
      * (1) If `T` is stable, we can just use that.
      *
-     * (2) SI-3873: it'd be unsound to instantiate `param.type` to an unstable `T`,
+     * (2) scala/bug#3873: it'd be unsound to instantiate `param.type` to an unstable `T`,
      * so we approximate to `X forSome {type X <: T with Singleton}` -- we can't soundly say more.
      */
     def apply(tp: Type): Type = tp match {
@@ -1012,6 +1106,9 @@ private[internal] trait TypeMaps {
           case _ =>
             tp.normalize match {
               case TypeRef(_, sym1, _) if (sym == sym1) => result = true
+              case refined: RefinedType =>
+                mapOver(tp.prefix)
+                mapOver(refined)
               case SingleType(_, sym1) if (sym == sym1) => result = true
               case _ => mapOver(tp)
             }
@@ -1183,6 +1280,11 @@ private[internal] trait TypeMaps {
         if (clazz.isPackageClass) tp
         else {
           val parents1 = parents mapConserve (this)
+          decls.foreach { decl =>
+            if (decl.hasAllFlags(METHOD | MODULE))
+              // HACK: undo flag Uncurry's flag mutation from prior run
+              decl.resetFlag(METHOD | STABLE)
+          }
           if (parents1 eq parents) tp
           else ClassInfoType(parents1, decls, clazz)
         }

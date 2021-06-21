@@ -3,3 +3,7 @@ None
 None
 Some(@LCAnnotation;() // invisible)
 Some(@LRAnnotation;())
+Some(@LArgs_0$Ann;(value="a") // invisible)
+Some(@LArgs_0$Ann;(value="ab") // invisible)
+Some(@LArgs_0$Ann;(value="konst") // invisible)
+Some(@LArgs_0$Ann;(value="nokst") // invisible)

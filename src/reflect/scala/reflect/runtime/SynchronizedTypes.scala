@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala
 package reflect
 package runtime
@@ -106,4 +118,7 @@ private[reflect] trait SynchronizedTypes extends internal.Types { self: SymbolTa
   override protected def defineBaseTypeSeqOfTypeRef(tpe: TypeRef) =
     gilSynchronized { super.defineBaseTypeSeqOfTypeRef(tpe) }
 
+  override protected def defineNormalized(tr: TypeRef): Unit = {
+    gilSynchronized { super.defineNormalized(tr) }
+  }
 }

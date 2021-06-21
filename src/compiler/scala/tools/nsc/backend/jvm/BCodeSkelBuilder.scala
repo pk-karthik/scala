@@ -1,16 +1,21 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2012 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
-
 
 package scala.tools.nsc
 package backend
 package jvm
 
-import scala.collection.{ mutable, immutable }
+import scala.collection.{immutable, mutable}
 import scala.tools.nsc.symtab._
-
 import scala.tools.asm
 import GenBCode._
 import BackendReporting._
@@ -25,6 +30,7 @@ abstract class BCodeSkelBuilder extends BCodeHelpers {
   import global._
   import bTypes._
   import coreBTypes._
+  import genBCode.postProcessor.backendUtils
 
   /*
    * There's a dedicated PlainClassBuilder for each CompilationUnit,
@@ -58,8 +64,9 @@ abstract class BCodeSkelBuilder extends BCodeHelpers {
     final val MaximumJvmParameters = 254
 
     // current class
-    var cnode: asm.tree.ClassNode  = null
-    var thisBType: ClassBType      = null
+    var cnode: asm.tree.ClassNode   = null
+    var thisBType: ClassBType       = null
+    var thisBTypeDescriptor: String = null
 
     var claszSymbol: Symbol        = null
     var isCZParcelable             = false
@@ -78,22 +85,19 @@ abstract class BCodeSkelBuilder extends BCodeHelpers {
 
     def tpeTK(tree: Tree): BType = typeToBType(tree.tpe)
 
-    def log(msg: => AnyRef) {
-      global synchronized { global.log(msg) }
-    }
-
     /* ---------------- helper utils for generating classes and fields ---------------- */
 
     def genPlainClass(cd: ClassDef) {
       assert(cnode == null, "GenBCode detected nested methods.")
 
-      claszSymbol       = cd.symbol
-      isCZParcelable    = isAndroidParcelableClass(claszSymbol)
-      isCZStaticModule  = isStaticModuleClass(claszSymbol)
-      isCZRemote        = isRemote(claszSymbol)
-      thisBType         = classBTypeFromSymbol(claszSymbol)
+      claszSymbol         = cd.symbol
+      isCZParcelable      = isAndroidParcelableClass(claszSymbol)
+      isCZStaticModule    = isStaticModuleClass(claszSymbol)
+      isCZRemote          = isRemote(claszSymbol)
+      thisBType           = classBTypeFromSymbol(claszSymbol)
+      thisBTypeDescriptor = thisBType.descriptor
 
-      cnode = new asm.tree.ClassNode()
+      cnode = new ClassNode1()
 
       initJClass(cnode)
 
@@ -111,14 +115,6 @@ abstract class BCodeSkelBuilder extends BCodeHelpers {
       addClassFields()
 
       gen(cd.impl)
-
-      val shouldAddLambdaDeserialize = (
-        settings.target.value == "jvm-1.8"
-          && settings.Ydelambdafy.value == "method"
-          && indyLambdaHosts.contains(cnode.name))
-
-      if (shouldAddLambdaDeserialize)
-        backendUtils.addLambdaDeserialize(cnode)
 
       cnode.visitAttribute(thisBType.inlineInfoAttribute.get)
 
@@ -140,7 +136,7 @@ abstract class BCodeSkelBuilder extends BCodeHelpers {
       val flags = javaFlags(claszSymbol)
 
       val thisSignature = getGenericSignature(claszSymbol, claszSymbol.owner)
-      cnode.visit(classfileVersion, flags,
+      cnode.visit(backendUtils.classfileVersion.get, flags,
                   thisBType.internalName, thisSignature,
                   superClass, interfaceNames.toArray)
 
@@ -189,10 +185,18 @@ abstract class BCodeSkelBuilder extends BCodeHelpers {
      * can-multi-thread
      */
     private def addModuleInstanceField() {
+      // TODO confirm whether we really don't want ACC_SYNTHETIC nor ACC_DEPRECATED
+      // scala/scala-dev#194:
+      //   This can't be FINAL on JVM 1.9+ because we assign it from within the
+      //   instance constructor, not from <clinit> directly. Assignment from <clinit>,
+      //   after the constructor has completely finished, seems like the principled
+      //   thing to do, but it would change behaviour when "benign" cyclic references
+      //   between modules exist.
+      val mods = GenBCode.PublicStatic
       val fv =
-        cnode.visitField(GenBCode.PublicStaticFinal, // TODO confirm whether we really don't want ACC_SYNTHETIC nor ACC_DEPRECATED
+        cnode.visitField(mods,
                          strMODULE_INSTANCE_FIELD,
-                         thisBType.descriptor,
+                         thisBTypeDescriptor,
                          null, // no java-generic-signature
                          null  // no initial value
         )
@@ -256,7 +260,6 @@ abstract class BCodeSkelBuilder extends BCodeHelpers {
     // used by genLoadTry() and genSynchronized()
     var earlyReturnVar: Symbol     = null
     var shouldEmitCleanup          = false
-    var insideCleanupBlock         = false
     // line numbers
     var lastEmittedLineNr          = -1
 
@@ -342,7 +345,7 @@ abstract class BCodeSkelBuilder extends BCodeHelpers {
      */
     object locals {
 
-      private val slots = mutable.Map.empty[Symbol, Local] // (local-or-param-sym -> Local(BType, name, idx, isSynth))
+      private val slots = mutable.AnyRefMap.empty[Symbol, Local] // (local-or-param-sym -> Local(BType, name, idx, isSynth))
 
       private var nxtIdx = -1 // next available index for local-var
 
@@ -374,10 +377,11 @@ abstract class BCodeSkelBuilder extends BCodeHelpers {
       }
 
       private def makeLocal(sym: Symbol, tk: BType): Local = {
-        assert(!slots.contains(sym), "attempt to create duplicate local var.")
         assert(nxtIdx != -1, "not a valid start index")
         val loc = Local(tk, sym.javaSimpleName.toString, nxtIdx, sym.isSynthetic)
-        slots += (sym -> loc)
+        val existing = slots.put(sym, loc)
+        if (existing.isDefined)
+          globalError(sym.pos, "attempt to create duplicate local var.")
         assert(tk.size > 0, "makeLocal called for a symbol whose type is Unit.")
         nxtIdx += tk.size
         loc
@@ -444,7 +448,7 @@ abstract class BCodeSkelBuilder extends BCodeHelpers {
       (lastInsn match { case labnode: asm.tree.LabelNode => (labnode.getLabel == lbl); case _ => false } )
     }
     def lineNumber(tree: Tree) {
-      if (!emitLines || !tree.pos.isDefined) return;
+      if (!emitLines || !tree.pos.isDefined) return
       val nr = tree.pos.finalPosition.line
       if (nr != lastEmittedLineNr) {
         lastEmittedLineNr = nr
@@ -463,10 +467,10 @@ abstract class BCodeSkelBuilder extends BCodeHelpers {
       locals.reset(isStaticMethod = methSymbol.isStaticMember)
       jumpDest = immutable.Map.empty[ /* LabelDef */ Symbol, asm.Label ]
       // populate labelDefsAtOrUnder
-      val ldf = new LabelDefsFinder
-      ldf.traverse(dd.rhs)
-      labelDefsAtOrUnder = ldf.result.withDefaultValue(Nil)
-      labelDef = labelDefsAtOrUnder(dd.rhs).map(ld => (ld.symbol -> ld)).toMap
+      val ldf = new LabelDefsFinder(dd.rhs)
+      ldf(dd.rhs)
+      labelDefsAtOrUnder = ldf.result
+      labelDef = ldf.directResult.map(ld => (ld.symbol -> ld)).toMap
       // check previous invocation of genDefDef exited as many varsInScope as it entered.
       assert(varsInScope == null, "Unbalanced entering/exiting of GenBCode's genBlock().")
       // check previous invocation of genDefDef unregistered as many cleanups as it registered.
@@ -488,7 +492,27 @@ abstract class BCodeSkelBuilder extends BCodeHelpers {
 
         case ValDef(mods, name, tpt, rhs) => () // fields are added in `genPlainClass()`, via `addClassFields()`
 
-        case dd : DefDef => genDefDef(dd)
+        case dd : DefDef =>
+          val sym = dd.symbol
+          if (needsStaticImplMethod(sym)) {
+            if (sym.isMixinConstructor) {
+              val statified = global.gen.mkStatic(dd, sym.name, _.cloneSymbol)
+              genDefDef(statified)
+            } else {
+              val forwarderDefDef = {
+                val dd1 = global.gen.mkStatic(deriveDefDef(dd)(_ => EmptyTree), newTermName(traitSuperAccessorName(sym)), _.cloneSymbol.withoutAnnotations)
+                dd1.symbol.setFlag(Flags.ARTIFACT).resetFlag(Flags.OVERRIDE)
+                val selfParam :: realParams = dd1.vparamss.head.map(_.symbol)
+                deriveDefDef(dd1)(_ =>
+                  atPos(dd1.pos)(
+                    Apply(Select(global.gen.mkAttributedIdent(selfParam).setType(sym.owner.typeConstructor), dd.symbol),
+                    realParams.map(global.gen.mkAttributedIdent)).updateAttachment(UseInvokeSpecial))
+                )
+              }
+              genDefDef(forwarderDefDef)
+              genDefDef(dd)
+            }
+          } else genDefDef(dd)
 
         case Template(_, _, body) => body foreach gen
 
@@ -529,6 +553,7 @@ abstract class BCodeSkelBuilder extends BCodeHelpers {
     def genDefDef(dd: DefDef) {
       // the only method whose implementation is not emitted: getClass()
       if (definitions.isGetClass(dd.symbol)) { return }
+      if (dd.symbol.hasAttachment[JustMethodReference]) { return }
       assert(mnode == null, "GenBCode detected nested method.")
 
       methSymbol  = dd.symbol
@@ -546,19 +571,19 @@ abstract class BCodeSkelBuilder extends BCodeHelpers {
       // debug assert((params.map(p => locals(p.symbol).tk)) == asmMethodType(methSymbol).getArgumentTypes.toList, "debug")
 
       if (params.size > MaximumJvmParameters) {
-        // SI-7324
+        // scala/bug#7324
         reporter.error(methSymbol.pos, s"Platform restriction: a parameter list's length cannot exceed $MaximumJvmParameters.")
         return
       }
 
       val isNative         = methSymbol.hasAnnotation(definitions.NativeAttr)
       val isAbstractMethod = rhs == EmptyTree
-      val flags = GenBCode.mkFlags(
-        javaFlags(methSymbol),
-        if (isAbstractMethod)        asm.Opcodes.ACC_ABSTRACT   else 0,
-        if (methSymbol.isStrictFP)   asm.Opcodes.ACC_STRICT     else 0,
-        if (isNative)                asm.Opcodes.ACC_NATIVE     else 0  // native methods of objects are generated in mirror classes
-      )
+      val flags =
+        javaFlags(methSymbol) |
+        (if (isAbstractMethod)        asm.Opcodes.ACC_ABSTRACT   else 0) |
+        (if (methSymbol.isStrictFP)   asm.Opcodes.ACC_STRICT     else 0) |
+        (if (isNative)                asm.Opcodes.ACC_NATIVE     else 0)  // native methods of objects are generated in mirror classes
+
 
       initJMethod(flags, params.map(_.symbol))
 
@@ -573,7 +598,7 @@ abstract class BCodeSkelBuilder extends BCodeHelpers {
        * but the same vars (given by the LabelDef's params) can be reused,
        * because no LabelDef ends up nested within itself after such duplication.
        */
-      for(ld <- labelDefsAtOrUnder(dd.rhs); ldp <- ld.params; if !locals.contains(ldp.symbol)) {
+      for(ld <- labelDefsAtOrUnder.getOrElse(dd.rhs, Nil); ldp <- ld.params; if !locals.contains(ldp.symbol)) {
         // the tail-calls xform results in symbols shared btw method-params and labelDef-params, thus the guard above.
         locals.makeLocal(ldp.symbol)
       }
@@ -588,7 +613,7 @@ abstract class BCodeSkelBuilder extends BCodeHelpers {
             case Return(_) | Block(_, Return(_)) | Throw(_) | Block(_, Throw(_)) => ()
             case EmptyTree =>
               globalError("Concrete method has no definition: " + dd + (
-                if (settings.debug) "(found: " + methSymbol.owner.info.decls.toList.mkString(", ") + ")"
+                if (settings.isDebug) "(found: " + methSymbol.owner.info.decls.toList.mkString(", ") + ")"
                 else ""))
             case _ =>
               bc emitRETURN returnType
@@ -600,7 +625,7 @@ abstract class BCodeSkelBuilder extends BCodeHelpers {
             if (!hasStaticBitSet) {
               mnode.visitLocalVariable(
                 "this",
-                thisBType.descriptor,
+                thisBTypeDescriptor,
                 null,
                 veryFirstProgramPoint,
                 onePastLastProgramPoint,

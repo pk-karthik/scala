@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala.reflect.reify
 package utils
 
@@ -77,7 +89,7 @@ trait SymbolTables {
         var name = name0.toString
         name = name.replace(".type", "$type")
         name = name.replace(" ", "$")
-        val fresh = typer.context.unit.fresh
+        val fresh = typer.fresh
         newTermName(fresh.newName(name))
       }
       val bindingAttachment = reification.attachments.get[ReifyBindingAttachment].get
@@ -155,7 +167,7 @@ trait SymbolTables {
         def fillInSymbol(sym: Symbol): Tree = {
           if (reifyDebug) println("Filling in: %s (%s)".format(sym, sym.accurateKindString))
           val isFreeTerm = FreeTermDef.unapply(currtab.symDef(sym)).isDefined
-          // SI-6204 don't reify signatures for incomplete symbols, because this might lead to cyclic reference errors
+          // scala/bug#6204 don't reify signatures for incomplete symbols, because this might lead to cyclic reference errors
           val signature =
             if (sym.isInitialized) {
               if (sym.isCapturedVariable) capturedVariableType(sym)

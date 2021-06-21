@@ -7,44 +7,44 @@ chapter: 6
 # Expressions
 
 ```ebnf
-Expr         ::=  (Bindings | id | `_') `=>' Expr
+Expr         ::=  (Bindings | id | ‘_’) ‘=>’ Expr
                |  Expr1
-Expr1        ::=  `if' `(' Expr `)' {nl} Expr [[semi] `else' Expr]
-               |  `while' `(' Expr `)' {nl} Expr
-               |  `try' (`{' Block `}' | Expr) [`catch' `{' CaseClauses `}'] [`finally' Expr]
-               |  `do' Expr [semi] `while' `(' Expr ')'
-               |  `for' (`(' Enumerators `)' | `{' Enumerators `}') {nl} [`yield'] Expr
-               |  `throw' Expr
-               |  `return' [Expr]
-               |  [SimpleExpr `.'] id `=' Expr
-               |  SimpleExpr1 ArgumentExprs `=' Expr
+Expr1        ::=  ‘if’ ‘(’ Expr ‘)’ {nl} Expr [[semi] ‘else’ Expr]
+               |  ‘while’ ‘(’ Expr ‘)’ {nl} Expr
+               |  ‘try’ (‘{’ Block ‘}’ | Expr) [‘catch’ ‘{’ CaseClauses ‘}’] [‘finally’ Expr]
+               |  ‘do’ Expr [semi] ‘while’ ‘(’ Expr ‘)’
+               |  ‘for’ (‘(’ Enumerators ‘)’ | ‘{’ Enumerators ‘}’) {nl} [‘yield’] Expr
+               |  ‘throw’ Expr
+               |  ‘return’ [Expr]
+               |  [SimpleExpr ‘.’] id ‘=’ Expr
+               |  SimpleExpr1 ArgumentExprs ‘=’ Expr
                |  PostfixExpr
                |  PostfixExpr Ascription
-               |  PostfixExpr `match' `{' CaseClauses `}'
+               |  PostfixExpr ‘match’ ‘{’ CaseClauses ‘}’
 PostfixExpr  ::=  InfixExpr [id [nl]]
 InfixExpr    ::=  PrefixExpr
                |  InfixExpr id [nl] InfixExpr
-PrefixExpr   ::=  [`-' | `+' | `~' | `!'] SimpleExpr
-SimpleExpr   ::=  `new' (ClassTemplate | TemplateBody)
+PrefixExpr   ::=  [‘-’ | ‘+’ | ‘~’ | ‘!’] SimpleExpr
+SimpleExpr   ::=  ‘new’ (ClassTemplate | TemplateBody)
                |  BlockExpr
-               |  SimpleExpr1 [`_']
+               |  SimpleExpr1 [‘_’]
 SimpleExpr1  ::=  Literal
                |  Path
-               |  `_'
-               |  `(' [Exprs] `)'
-               |  SimpleExpr `.' id s
+               |  ‘_’
+               |  ‘(’ [Exprs] ‘)’
+               |  SimpleExpr ‘.’ id s
                |  SimpleExpr TypeArgs
                |  SimpleExpr1 ArgumentExprs
                |  XmlExpr
-Exprs        ::=  Expr {`,' Expr}
+Exprs        ::=  Expr {‘,’ Expr}
 BlockExpr    ::=  ‘{’ CaseClauses ‘}’
                |  ‘{’ Block ‘}’
 Block        ::=  BlockStat {semi BlockStat} [ResultExpr]
 ResultExpr   ::=  Expr1
-               |  (Bindings | ([`implicit'] id | `_') `:' CompoundType) `=>' Block
-Ascription   ::=  `:' InfixType
-               |  `:' Annotation {Annotation}
-               |  `:' `_' `*'
+               |  (Bindings | ([‘implicit’] id | ‘_’) ‘:’ CompoundType) ‘=>’ Block
+Ascription   ::=  ‘:’ InfixType
+               |  ‘:’ Annotation {Annotation}
+               |  ‘:’ ‘_’ ‘*’
 ```
 
 Expressions are composed of operators and operands. Expression forms are
@@ -100,7 +100,7 @@ A reference to any other member of the "null" object causes a
 
 ```ebnf
 SimpleExpr  ::=  Path
-              |  SimpleExpr `.' id
+              |  SimpleExpr ‘.’ id
 ```
 
 A designator refers to a named term. It can be a _simple name_ or
@@ -151,8 +151,8 @@ by a definition overriding $m$.
 ## This and Super
 
 ```ebnf
-SimpleExpr  ::=  [id `.'] `this'
-              |  [id '.'] `super' [ClassQualifier] `.' id
+SimpleExpr  ::=  [id ‘.’] ‘this’
+              |  [id ‘.’] ‘super’ [ClassQualifier] ‘.’ id
 ```
 
 The expression `this` can appear in the statement part of a
@@ -175,7 +175,9 @@ in the least proper supertype of the innermost template containing the
 reference.  It evaluates to the member $m'$ in the actual supertype of
 that template which is equal to $m$ or which overrides $m$.  The
 statically referenced member $m$ must be a type or a
-method.  <!-- explanation: so that we need not create several fields for overriding vals -->
+method.
+
+<!-- explanation: so that we need not create several fields for overriding vals -->
 
 If it is
 a method, it must be concrete, or the template
@@ -220,29 +222,34 @@ the linearization of class `D` is `{D, B, A, Root}`.
 Then we have:
 
 ```scala
-(new A).superA == "Root",
-                          (new C).superB = "Root", (new C).superC = "B",
-(new D).superA == "Root", (new D).superB = "A",    (new D).superD = "B",
+(new A).superA == "Root"
+
+(new C).superB == "Root"
+(new C).superC == "B"
+
+(new D).superA == "Root"
+(new D).superB == "A"
+(new D).superD == "B"
 ```
 
-Note that the `superB` function returns different results
+Note that the `superB` method returns different results
 depending on whether `B` is mixed in with class `Root` or `A`.
 
 ## Function Applications
 
 ```ebnf
 SimpleExpr    ::=  SimpleExpr1 ArgumentExprs
-ArgumentExprs ::=  `(' [Exprs] `)'
-                |  `(' [Exprs `,'] PostfixExpr `:' `_' `*' ')'
+ArgumentExprs ::=  ‘(’ [Exprs] ‘)’
+                |  ‘(’ [Exprs ‘,’] PostfixExpr ‘:’ ‘_’ ‘*’ ‘)’
                 |  [nl] BlockExpr
-Exprs         ::=  Expr {`,' Expr}
+Exprs         ::=  Expr {‘,’ Expr}
 ```
 
 An application `$f(e_1 , \ldots , e_m)$` applies the function `$f$` to the argument expressions `$e_1, \ldots , e_m$`. For this expression to be well-typed, the function must be *applicable* to its arguments, which is defined next by case analysis on $f$'s type.
 
-If $f$ has a method type `($p_1$:$T_1 , \ldots , p_n$:$T_n$)$U$`, each argument expression $e_i$ is typed with the corresponding parameter type $T_i$ as expected type. Let $S_i$ be the type of argument $e_i$ $(i = 1 , \ldots , m)$. The function $f$ must be _applicable_ to its arguments $e_1, \ldots , e_n$ of types $S_1 , \ldots , S_n$. We say that an argument expression $e_i$ is a _named_ argument if it has the form `$x_i=e'_i$` and `$x_i$` is one of the parameter names `$p_1, \ldots, p_n$`.
+If $f$ has a method type `($p_1$:$T_1 , \ldots , p_n$:$T_n$)$U$`, each argument expression $e_i$ is typed with the corresponding parameter type $T_i$ as expected type. Let $S_i$ be the type of argument $e_i$ $(i = 1 , \ldots , m)$. The method $f$ must be _applicable_ to its arguments $e_1, \ldots , e_n$ of types $S_1 , \ldots , S_n$. We say that an argument expression $e_i$ is a _named_ argument if it has the form `$x_i=e'_i$` and `$x_i$` is one of the parameter names `$p_1, \ldots, p_n$`.
 
-Once the types $S_i$ have been determined, the function $f$ of the above method type is said to be applicable if all of the following conditions hold:
+Once the types $S_i$ have been determined, the method $f$ of the above method type is said to be applicable if all of the following conditions hold:
   - for every named argument $p_j=e_i'$ the type $S_i$ is [compatible](03-types.html#compatibility) with the parameter type $T_j$;
   - for every positional argument $e_i$ the type $S_i$ is [compatible](03-types.html#compatibility) with $T_i$;
   - if the expected type is defined, the result type $U$ is [compatible](03-types.html#compatibility) to it.
@@ -289,12 +296,12 @@ sequence $e$ with its elements. When the application uses named
 arguments, the vararg parameter has to be specified exactly once.
 
 A function application usually allocates a new frame on the program's
-run-time stack. However, if a local function or a final method calls
+run-time stack. However, if a local method or a final method calls
 itself as its last action, the call is executed using the stack-frame
 of the caller.
 
 ###### Example
-Assume the following function which computes the sum of a
+Assume the following method which computes the sum of a
 variable number of arguments:
 
 ```scala
@@ -318,23 +325,23 @@ would not typecheck.
 
 ### Named and Default Arguments
 
-If an application might uses named arguments $p = e$ or default
+If an application is to use named arguments $p = e$ or default
 arguments, the following conditions must hold.
 
 - For every named argument $p_i = e_i$ which appears left of a positional argument
   in the argument list $e_1 \ldots e_m$, the argument position $i$ coincides with
-  the position of parameter $p_i$ in the parameter list of the applied function.
+  the position of parameter $p_i$ in the parameter list of the applied method.
 - The names $x_i$ of all named arguments are pairwise distinct and no named
   argument defines a parameter which is already specified by a
   positional argument.
 - Every formal parameter $p_j:T_j$ which is not specified by either a positional
-  or a named argument has a default argument.
+  or named argument has a default argument.
 
 If the application uses named or default
 arguments the following transformation is applied to convert it into
 an application without named or default arguments.
 
-If the function $f$
+If the method $f$
 has the form `$p.m$[$\mathit{targs}$]` it is transformed into the
 block
 
@@ -344,7 +351,7 @@ block
 }
 ```
 
-If the function $f$ is itself an application expression the transformation
+If the method $f$ is itself an application expression the transformation
 is applied recursively on $f$. The result of transforming $f$ is a block of
 the form
 
@@ -391,20 +398,24 @@ The final result of the transformation is a block of the form
 ### Signature Polymorphic Methods
 
 For invocations of signature polymorphic methods of the target platform `$f$($e_1 , \ldots , e_m$)`,
-the invoked function has a different method type `($p_1$:$T_1 , \ldots , p_n$:$T_n$)$U$` at each call
+the invoked method has a different method type `($p_1$:$T_1 , \ldots , p_n$:$T_n$)$U$` at each call
 site. The parameter types `$T_ , \ldots , T_n$` are the types of the argument expressions
-`$e_1 , \ldots , e_m$` and `$U$` is the expected type at the call site. If the expected type is
+`$e_1 , \ldots , e_m$`. If the declared return type `$R$` of the signature polymorphic method is
+any type other than `scala.AnyRef`, then the return type `$U$` is `$R$`.
+Otherwise, `$U$` is the expected type at the call site. If the expected type is
 undefined then `$U$` is `scala.AnyRef`. The parameter names `$p_1 , \ldots , p_n$` are fresh.
 
 ###### Note
 
-On the Java platform version 7 and later, the methods `invoke` and `invokeExact` in class
-`java.lang.invoke.MethodHandle` are signature polymorphic.
+On the Java platform version 11 and later, signature polymorphic methods are native,
+members of `java.lang.invoke.MethodHandle` or `java.lang.invoke.VarHandle`, and have a single
+repeated parameter of type `java.lang.Object*`.
+
 
 ## Method Values
 
 ```ebnf
-SimpleExpr    ::=  SimpleExpr1 `_'
+SimpleExpr    ::=  SimpleExpr1 ‘_’
 ```
 
 The expression `$e$ _` is well-formed if $e$ is of method
@@ -436,7 +447,7 @@ because otherwise the underscore would be considered part of the name.
 SimpleExpr    ::=  SimpleExpr TypeArgs
 ```
 
-A type application `$e$[$T_1 , \ldots , T_n$]` instantiates
+A _type application_ `$e$[$T_1 , \ldots , T_n$]` instantiates
 a polymorphic value $e$ of type
 `[$a_1$ >: $L_1$ <: $U_1, \ldots , a_n$ >: $L_n$ <: $U_n$]$S$`
 with argument types
@@ -453,16 +464,16 @@ $e$.
 
 Type applications can be omitted if
 [local type inference](#local-type-inference) can infer best type parameters
-for a polymorphic functions from the types of the actual function arguments
+for a polymorphic method from the types of the actual method arguments
 and the expected result type.
 
 ## Tuples
 
 ```ebnf
-SimpleExpr   ::=  `(' [Exprs] `)'
+SimpleExpr   ::=  ‘(’ [Exprs] ‘)’
 ```
 
-A tuple expression `($e_1 , \ldots , e_n$)` is an alias
+A _tuple expression_ `($e_1 , \ldots , e_n$)` is an alias
 for the class instance creation
 `scala.Tuple$n$($e_1 , \ldots , e_n$)`, where $n \geq 2$.
 The empty tuple
@@ -471,10 +482,10 @@ The empty tuple
 ## Instance Creation Expressions
 
 ```ebnf
-SimpleExpr     ::=  `new' (ClassTemplate | TemplateBody)
+SimpleExpr     ::=  ‘new’ (ClassTemplate | TemplateBody)
 ```
 
-A simple instance creation expression is of the form
+A _simple instance creation expression_ is of the form
 `new $c$`
 where $c$ is a [constructor invocation](05-classes-and-objects.html#constructor-invocations). Let $T$ be
 the type of $c$. Then $T$ must
@@ -497,7 +508,7 @@ The expression is evaluated by creating a fresh
 object of type $T$ which is initialized by evaluating $c$. The
 type of the expression is $T$.
 
-A general instance creation expression is of the form
+A _general instance creation expression_ is of the form
 `new $t$` for some [class template](05-classes-and-objects.html#templates) $t$.
 Such an expression is equivalent to the block
 
@@ -542,7 +553,7 @@ BlockExpr  ::=  ‘{’ CaseClauses ‘}’
 Block      ::=  BlockStat {semi BlockStat} [ResultExpr]
 ```
 
-A block expression `{$s_1$; $\ldots$; $s_n$; $e\,$}` is
+A _block expression_ `{$s_1$; $\ldots$; $s_n$; $e\,$}` is
 constructed from a sequence of block statements $s_1 , \ldots , s_n$
 and a final expression $e$.  The statement sequence may not contain
 two definitions or declarations that bind the same name in the same
@@ -603,7 +614,7 @@ the existentially quantified type
 PostfixExpr     ::=  InfixExpr [id [nl]]
 InfixExpr       ::=  PrefixExpr
                   |  InfixExpr id [nl] InfixExpr
-PrefixExpr      ::=  [`-' | `+' | `!' | `~'] SimpleExpr
+PrefixExpr      ::=  [‘-’ | ‘+’ | ‘!’ | ‘~’] SimpleExpr
 ```
 
 Expressions can be constructed from operands and operators.
@@ -618,10 +629,10 @@ equivalent to the postfix method application
 
 <!-- TODO: Generalize to arbitrary operators -->
 
-Prefix operators are different from normal function applications in
+Prefix operators are different from normal method applications in
 that their operand expression need not be atomic. For instance, the
 input sequence `-sin(x)` is read as `-(sin(x))`, whereas the
-function application `negate sin(x)` would be parsed as the
+method application `negate sin(x)` would be parsed as the
 application of the infix operator `sin` to the operands
 `negate` and `(x)`.
 
@@ -653,7 +664,7 @@ precedence, with characters on the same line having the same precedence.
 ```
 
 That is, operators starting with a letter have lowest precedence,
-followed by operators starting with ``|`', etc.
+followed by operators starting with ‘`|`’, etc.
 
 There's one exception to this rule, which concerns
 [_assignment operators_](#assignment-operators).
@@ -662,7 +673,7 @@ of simple assignment `(=)`. That is, it is lower than the
 precedence of any other operator.
 
 The _associativity_ of an operator is determined by the operator's
-last character.  Operators ending in a colon ``:`' are
+last character.  Operators ending in a colon ‘`:`’ are
 right-associative. All other operators are left-associative.
 
 Precedence and associativity of operators determine the grouping of
@@ -697,7 +708,7 @@ name.
 
 ### Assignment Operators
 
-An assignment operator is an operator symbol (syntax category
+An _assignment operator_ is an operator symbol (syntax category
 `op` in [Identifiers](01-lexical-syntax.html#identifiers)) that ends in an equals character
 “`=`”, with the exception of operators for which one of
 the following conditions holds:
@@ -733,10 +744,10 @@ The re-interpretation occurs if the following two conditions are fulfilled.
 ## Typed Expressions
 
 ```ebnf
-Expr1              ::=  PostfixExpr `:' CompoundType
+Expr1              ::=  PostfixExpr ‘:’ CompoundType
 ```
 
-The typed expression $e: T$ has type $T$. The type of
+The _typed expression_ $e: T$ has type $T$. The type of
 expression $e$ is expected to conform to $T$. The result of
 the expression is the value of $e$ converted to type $T$.
 
@@ -752,18 +763,18 @@ Here are examples of well-typed and ill-typed expressions.
 ## Annotated Expressions
 
 ```ebnf
-Expr1              ::=  PostfixExpr `:' Annotation {Annotation}
+Expr1              ::=  PostfixExpr ‘:’ Annotation {Annotation}
 ```
 
-An annotated expression `$e$: @$a_1$ $\ldots$ @$a_n$`
+An _annotated expression_ `$e$: @$a_1$ $\ldots$ @$a_n$`
 attaches [annotations](11-annotations.html#user-defined-annotations) $a_1 , \ldots , a_n$ to the
 expression $e$.
 
 ## Assignments
 
 ```ebnf
-Expr1        ::=  [SimpleExpr `.'] id `=' Expr
-               |  SimpleExpr1 ArgumentExprs `=' Expr
+Expr1        ::=  [SimpleExpr ‘.’] id ‘=’ Expr
+               |  SimpleExpr1 ArgumentExprs ‘=’ Expr
 ```
 
 The interpretation of an assignment to a simple variable `$x$ = $e$`
@@ -771,17 +782,17 @@ depends on the definition of $x$. If $x$ denotes a mutable
 variable, then the assignment changes the current value of $x$ to be
 the result of evaluating the expression $e$. The type of $e$ is
 expected to conform to the type of $x$. If $x$ is a parameterless
-function defined in some template, and the same template contains a
-setter function `$x$_=` as member, then the assignment
+method defined in some template, and the same template contains a
+setter method `$x$_=` as member, then the assignment
 `$x$ = $e$` is interpreted as the invocation
-`$x$_=($e\,$)` of that setter function.  Analogously, an
-assignment `$f.x$ = $e$` to a parameterless function $x$
+`$x$_=($e\,$)` of that setter method.  Analogously, an
+assignment `$f.x$ = $e$` to a parameterless method $x$
 is interpreted as the invocation `$f.x$_=($e\,$)`.
 
-An assignment `$f$($\mathit{args}\,$) = $e$` with a function application to the
+An assignment `$f$($\mathit{args}\,$) = $e$` with a method application to the
 left of the ‘`=`’ operator is interpreted as
 `$f.$update($\mathit{args}$, $e\,$)`, i.e.
-the invocation of an `update` function defined by $f$.
+the invocation of an `update` method defined by $f$.
 
 ###### Example
 Here are some assignment expressions and their equivalent expansions.
@@ -847,10 +858,10 @@ def matmul(xss: Array[Array[Double]], yss: Array[Array[Double]]) = {
 ## Conditional Expressions
 
 ```ebnf
-Expr1          ::=  `if' `(' Expr `)' {nl} Expr [[semi] `else' Expr]
+Expr1          ::=  ‘if’ ‘(’ Expr ‘)’ {nl} Expr [[semi] ‘else’ Expr]
 ```
 
-The conditional expression `if ($e_1$) $e_2$ else $e_3$` chooses
+The _conditional expression_ `if ($e_1$) $e_2$ else $e_3$` chooses
 one of the values of $e_2$ and $e_3$, depending on the
 value of $e_1$. The condition $e_1$ is expected to
 conform to type `Boolean`.  The then-part $e_2$ and the
@@ -873,12 +884,12 @@ evaluated as if it was `if ($e_1$) $e_2$ else ()`.
 ## While Loop Expressions
 
 ```ebnf
-Expr1          ::=  `while' `(' Expr ')' {nl} Expr
+Expr1          ::=  ‘while’ ‘(’ Expr ‘)’ {nl} Expr
 ```
 
-The while loop expression `while ($e_1$) $e_2$` is typed and
+The _while loop expression_ `while ($e_1$) $e_2$` is typed and
 evaluated as if it was an application of `whileLoop ($e_1$) ($e_2$)` where
-the hypothetical function `whileLoop` is defined as follows.
+the hypothetical method `whileLoop` is defined as follows.
 
 ```scala
 def whileLoop(cond: => Boolean)(body: => Unit): Unit  =
@@ -888,26 +899,26 @@ def whileLoop(cond: => Boolean)(body: => Unit): Unit  =
 ## Do Loop Expressions
 
 ```ebnf
-Expr1          ::=  `do' Expr [semi] `while' `(' Expr ')'
+Expr1          ::=  ‘do’ Expr [semi] ‘while’ ‘(’ Expr ‘)’
 ```
 
-The do loop expression `do $e_1$ while ($e_2$)` is typed and
+The _do loop expression_ `do $e_1$ while ($e_2$)` is typed and
 evaluated as if it was the expression `($e_1$ ; while ($e_2$) $e_1$)`.
 A semicolon preceding the `while` symbol of a do loop expression is ignored.
 
 ## For Comprehensions and For Loops
 
 ```ebnf
-Expr1          ::=  `for' (`(' Enumerators `)' | `{' Enumerators `}')
-                       {nl} [`yield'] Expr
+Expr1          ::=  ‘for’ (‘(’ Enumerators ‘)’ | ‘{’ Enumerators ‘}’)
+                       {nl} [‘yield’] Expr
 Enumerators    ::=  Generator {semi Generator}
-Generator      ::=  Pattern1 `<-' Expr {[semi] Guard | semi Pattern1 `=' Expr}
-Guard          ::=  `if' PostfixExpr
+Generator      ::=  Pattern1 ‘<-’ Expr {[semi] Guard | semi Pattern1 ‘=’ Expr}
+Guard          ::=  ‘if’ PostfixExpr
 ```
 
-A for loop `for ($\mathit{enums}\,$) $e$` executes expression $e$
-for each binding generated by the enumerators $\mathit{enums}$.  A for
-comprehension `for ($\mathit{enums}\,$) yield $e$` evaluates
+A _for loop_ `for ($\mathit{enums}\,$) $e$` executes expression $e$
+for each binding generated by the enumerators $\mathit{enums}$. 
+A _for comprehension_ `for ($\mathit{enums}\,$) yield $e$` evaluates
 expression $e$ for each binding generated by the enumerators $\mathit{enums}$
 and collects the results. An enumerator sequence always starts with a
 generator; this can be followed by further generators, value
@@ -943,7 +954,7 @@ comprehensions have been eliminated.
     `$e$.foreach { case $p$ => $e'$ }`.
   - A for comprehension
 
-    ```
+    ```scala
     for ($p$ <- $e$; $p'$ <- $e'; \ldots$) yield $e''$
     ```
 
@@ -951,13 +962,13 @@ comprehensions have been eliminated.
     sequence of generators, definitions, or guards,
     is translated to
 
-    ```
+    ```scala
     $e$.flatMap { case $p$ => for ($p'$ <- $e'; \ldots$) yield $e''$ }
     ```
 
   - A for loop
 
-    ```
+    ```scala
     for ($p$ <- $e$; $p'$ <- $e'; \ldots$) $e''$
     ```
 
@@ -965,7 +976,7 @@ comprehensions have been eliminated.
     sequence of generators, definitions, or guards,
     is translated to
 
-    ```
+    ```scala
     $e$.foreach { case $p$ => for ($p'$ <- $e'; \ldots$) $e''$ }
     ```
 
@@ -978,7 +989,7 @@ comprehensions have been eliminated.
     `$p'$ = $e'$` is translated to the following generator of pairs of values, where
     $x$ and $x'$ are fresh names:
 
-    ```
+    ```scala
     ($p$, $p'$) <- for ($x @ p$ <- $e$) yield { val $x' @ p'$ = $e'$; ($x$, $x'$) }
     ```
 
@@ -1006,7 +1017,7 @@ The for comprehension is translated to:
 ###### Example
 For comprehensions can be used to express vector
 and matrix algorithms concisely.
-For instance, here is a function to compute the transpose of a given matrix:
+For instance, here is a method to compute the transpose of a given matrix:
 
 <!-- see test/files/run/t0421.scala -->
 
@@ -1017,7 +1028,7 @@ def transpose[A](xss: Array[Array[A]]) = {
 }
 ```
 
-Here is a function to compute the scalar product of two vectors:
+Here is a method to compute the scalar product of two vectors:
 
 ```scala
 def scalprod(xs: Array[Double], ys: Array[Double]) = {
@@ -1027,7 +1038,7 @@ def scalprod(xs: Array[Double], ys: Array[Double]) = {
 }
 ```
 
-Finally, here is a function to compute the product of two matrices.
+Finally, here is a method to compute the product of two matrices.
 Compare with the [imperative version](#example-imperative-matrix-multiplication).
 
 ```scala
@@ -1046,47 +1057,43 @@ The code above makes use of the fact that `map`, `flatMap`,
 ## Return Expressions
 
 ```ebnf
-Expr1      ::=  `return' [Expr]
+Expr1      ::=  ‘return’ [Expr]
 ```
 
-A return expression `return $e$` must occur inside the body of some
-enclosing named method or function. The innermost enclosing named
-method or function in a source program, $f$, must have an explicitly declared result type,
-and the type of $e$ must conform to it.
-The return expression
-evaluates the expression $e$ and returns its value as the result of
-$f$. The evaluation of any statements or
+A _return expression_ `return $e$` must occur inside the body of some
+enclosing user defined method. The innermost enclosing method in a
+source program, $m$, must have an explicitly declared result type, and
+the type of $e$ must conform to it.
+
+The return expression evaluates the expression $e$ and returns its
+value as the result of $m$. The evaluation of any statements or
 expressions following the return expression is omitted. The type of
 a return expression is `scala.Nothing`.
 
-The expression $e$ may be omitted.  The return expression
-`return` is type-checked and evaluated as if it was `return ()`.
+The expression $e$ may be omitted. The return expression
+`return` is type-checked and evaluated as if it were `return ()`.
 
-An `apply` method which is generated by the compiler as an
-expansion of an anonymous function does not count as a named function
-in the source program, and therefore is never the target of a return
-expression.
-
-Returning from a nested anonymous function is implemented by throwing
-and catching a `scala.runtime.NonLocalReturnException`.  Any
-exception catches between the point of return and the enclosing
-methods might see the exception.  A key comparison makes sure that
-these exceptions are only caught by the method instance which is
-terminated by the return.
+Returning from the method from within a nested function may be
+implemented by throwing and catching a
+`scala.runtime.NonLocalReturnException`. Any exception catches
+between the point of return and the enclosing methods might see
+and catch that exception. A key comparison makes sure that this
+exception is only caught by the method instance which is terminated
+by the return.
 
 If the return expression is itself part of an anonymous function, it
-is possible that the enclosing instance of $f$ has already returned
+is possible that the enclosing method $m$ has already returned
 before the return expression is executed. In that case, the thrown
-`scala.runtime.NonLocalReturnException` will not be caught,
-and will propagate up the call stack.
+`scala.runtime.NonLocalReturnException` will not be caught, and will
+propagate up the call stack.
 
 ## Throw Expressions
 
 ```ebnf
-Expr1      ::=  `throw' Expr
+Expr1      ::=  ‘throw’ Expr
 ```
 
-A throw expression `throw $e$` evaluates the expression
+A _throw expression_ `throw $e$` evaluates the expression
 $e$. The type of this expression must conform to
 `Throwable`.  If $e$ evaluates to an exception
 reference, evaluation is aborted with the thrown exception. If $e$
@@ -1100,11 +1107,11 @@ is `scala.Nothing`.
 ## Try Expressions
 
 ```ebnf
-Expr1 ::=  `try' (`{' Block `}' | Expr) [`catch' `{' CaseClauses `}']
-           [`finally' Expr]
+Expr1 ::=  ‘try’ (‘{’ Block ‘}’ | Expr) [‘catch’ ‘{’ CaseClauses ‘}’]
+           [‘finally’ Expr]
 ```
 
-A try expression is of the form `try { $b$ } catch $h$`
+A _try expression_ is of the form `try { $b$ } catch $h$`
 where the handler $h$ is a
 [pattern matching anonymous function](08-pattern-matching.html#pattern-matching-anonymous-functions)
 
@@ -1152,10 +1159,10 @@ for  `try { try { $b$ } catch $e_1$ } finally $e_2$`.
 ## Anonymous Functions
 
 ```ebnf
-Expr            ::=  (Bindings | [`implicit'] id | `_') `=>' Expr
-ResultExpr      ::=  (Bindings | ([`implicit'] id | `_') `:' CompoundType) `=>' Block
-Bindings        ::=  `(' Binding {`,' Binding} `)'
-Binding         ::=  (id | `_') [`:' Type]
+Expr            ::=  (Bindings | [‘implicit’] id | ‘_’) ‘=>’ Expr
+ResultExpr      ::=  (Bindings | ([‘implicit’] id | ‘_’) ‘:’ CompoundType) ‘=>’ Block
+Bindings        ::=  ‘(’ Binding {‘,’ Binding} ‘)’
+Binding         ::=  (id | ‘_’) [‘:’ Type]
 ```
 
 The anonymous function of arity $n$, `($x_1$: $T_1 , \ldots , x_n$: $T_n$) => e` maps parameters $x_i$ of types $T_i$ to a result given by expression $e$. The scope of each formal parameter $x_i$ is $e$. Formal parameters must have pairwise distinct names.
@@ -1213,7 +1220,7 @@ _ => 5                             // The function that ignores its argument
 ### Placeholder Syntax for Anonymous Functions
 
 ```ebnf
-SimpleExpr1  ::=  `_'
+SimpleExpr1  ::=  ‘_’
 ```
 
 An expression (of syntactic category `Expr`)
@@ -1278,7 +1285,7 @@ TemplateStat ::=  Import
                |
 ```
 
-Statements occur as parts of blocks and templates.  A statement can be
+Statements occur as parts of blocks and templates.  A _statement_ can be
 an import, a definition or an expression, or it can be empty.
 Statements used in the template of a class definition can also be
 declarations.  An expression that is used as a statement can have an
@@ -1359,6 +1366,7 @@ Note that a function literal that targets a SAM is not necessarily compiled to t
 
 It follows that:
   - if class `C` defines a constructor, it must be accessible and must define exactly one, empty, argument list;
+  - class `C` cannot be `final` or `sealed` (for simplicity we ignore the possibility of SAM conversion in the same compilation unit as the sealed class);
   - `m` cannot be polymorphic;
   - it must be possible to derive a fully-defined type `U` from `S` by inferring any unknown type parameters of `C`.
 
@@ -1426,9 +1434,14 @@ Let $\mathscr{B}$ be the set of alternatives in $\mathscr{A}$ that are [_applica
 to expressions $(e_1 , \ldots , e_n)$ of types $(\mathit{shape}(e_1) , \ldots , \mathit{shape}(e_n))$.
 If there is precisely one alternative in $\mathscr{B}$, that alternative is chosen.
 
-Otherwise, let $S_1 , \ldots , S_m$ be the vector of types obtained by
-typing each argument with an undefined expected type.  For every
-member $m$ in $\mathscr{B}$ one determines whether it is applicable
+Otherwise, let $S_1 , \ldots , S_m$ be the list of types obtained by typing each argument as follows.
+An argument `$e_i$` of the shape `($p_1$: $T_1 , \ldots , p_n$: $T_n$) => $b$` where one of the `$T_i$` is missing,
+i.e., a function literal with a missing parameter type, is typed with an expected function type that
+propagates the least upper bound of the fully defined types of the corresponding parameters of
+the ([SAM-converted](#sam-conversion)) function types specified by the `$i$`th argument type found in each alternative.
+All other arguments are typed with an undefined expected type.
+
+For every member $m$ in $\mathscr{B}$ one determines whether it is applicable
 to expressions ($e_1 , \ldots , e_m$) of types $S_1, \ldots , S_m$.
 
 It is an error if none of the members in $\mathscr{B}$ is applicable. If there is one
@@ -1733,27 +1746,20 @@ a sub-expression of parameterless method type, is not evaluated in the expanded 
 
 ### Dynamic Member Selection
 
-The standard Scala library defines a trait `scala.Dynamic` which defines a member
-`applyDynamic` as follows:
+The standard Scala library defines a marker trait `scala.Dynamic`. Subclasses of this trait are able to intercept selections and applications on their instances by defining methods of the names `applyDynamic`, `applyDynamicNamed`, `selectDynamic`, and `updateDynamic`.
 
-```scala
-package scala
-trait Dynamic {
-  def applyDynamic (name: String, args: Any*): Any
-  ...
-}
-```
+The following rewrites are performed, assuming $e$'s type conforms to `scala.Dynamic`, and the original expression does not type check under the normal rules, as specified fully in the relevant subsection of [implicit conversion](#dynamic-member-selection):
 
-Assume a selection of the form $e.x$ where the type of $e$ conforms to `scala.Dynamic`.
-Further assuming the selection is not followed by any function arguments, such an expression can be rewritten under the conditions given [here](#implicit-conversions) to:
+ *  `e.m[Ti](xi)` becomes `e.applyDynamic[Ti]("m")(xi)`
+ *  `e.m[Ti]`     becomes `e.selectDynamic[Ti]("m")`
+ *  `e.m = x`     becomes `e.updateDynamic("m")(x)`
 
-```scala
-$e$.applyDynamic("$x$")
-```
+If any arguments are named in the application (one of the `xi` is of the shape `arg = x`), their name is preserved as the first component of the pair passed to `applyDynamicNamed` (for missing names, `""` is used):
 
-If the selection is followed by some arguments, e.g. $e.x(\mathit{args})$, then that expression
-is rewritten to
+ *  `e.m[Ti](argi = xi)` becomes `e.applyDynamicNamed[Ti]("m")(("argi", xi))`
 
-```scala
-$e$.applyDynamic("$x$", $\mathit{args}$)
-```
+Finally:
+
+ *  `e.m(x) = y` becomes `e.selectDynamic("m").update(x, y)`
+
+None of these methods are actually defined in the `scala.Dynamic`, so that users are free to define them with or without type parameters, or implicit arguments.

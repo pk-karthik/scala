@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala
 package reflect
 package internal
@@ -6,7 +18,7 @@ import scala.collection.mutable.WeakHashMap
 import scala.ref.WeakReference
 import scala.reflect.internal.Flags._
 
-// SI-6241: move importers to a mirror
+// scala/bug#6241: move importers to a mirror
 trait Importers { to: SymbolTable =>
 
   override def mkImporter(from0: api.Universe): Importer { val from: from0.type } = (

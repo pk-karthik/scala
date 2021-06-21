@@ -1,15 +1,22 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author Paul Phillips
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools
 
+import scala.language.implicitConversions
 import scala.reflect.api.JavaUniverse
 import scala.reflect.internal.util.Position
-import scala.language.implicitConversions
-import scala.tools.nsc.reporters._
 import scala.tools.nsc.Settings
+import scala.tools.nsc.reporters.{ConsoleReporter, FilteringReporter}
 
 package object reflect {
   // [todo: can we generalize this?
@@ -26,8 +33,7 @@ package object reflect {
   /** Creates a UI-less reporter that simply accumulates all the messages
    */
   def mkSilentFrontEnd(): FrontEnd = new FrontEnd {
-    def display(info: Info) {}
-    def interactive() {}
+    def display(info: Info): Unit = ()
   }
 
   /** Creates a reporter that prints messages to the console according to the settings.
@@ -43,7 +49,7 @@ package object reflect {
     reporterToFrontEnd(new ConsoleReporter(settings))
   }
 
-  private[reflect] def reporterToFrontEnd(reporter: Reporter): FrontEnd = new FrontEnd {
+  private[reflect] def reporterToFrontEnd(reporter: FilteringReporter): FrontEnd = new FrontEnd {
     val API_INFO = INFO
     val API_WARNING = WARNING
     val API_ERROR = ERROR
@@ -52,14 +58,9 @@ package object reflect {
     override def hasWarnings = reporter.hasWarnings
 
     def display(info: Info): Unit = info.severity match {
-      case API_INFO => reporter.info(info.pos, info.msg, force = false)
+      case API_INFO    => reporter.echo(info.pos, info.msg)
       case API_WARNING => reporter.warning(info.pos, info.msg)
-      case API_ERROR => reporter.error(info.pos, info.msg)
-    }
-
-    def interactive(): Unit = reporter match {
-      case reporter: AbstractReporter => reporter.displayPrompt()
-      case _ => // do nothing
+      case API_ERROR   => reporter.error(info.pos, info.msg)
     }
 
     override def flush(): Unit = {
@@ -73,7 +74,7 @@ package object reflect {
     }
   }
 
-  private[reflect] def frontEndToReporter(frontEnd: FrontEnd, settings0: Settings): Reporter = new AbstractReporter {
+  private[reflect] def frontEndToReporter(frontEnd: FrontEnd, settings0: Settings): FilteringReporter = new FilteringReporter {
     val settings = settings0
 
     val API_INFO = frontEnd.INFO
@@ -85,15 +86,12 @@ package object reflect {
     val NSC_WARNING = WARNING
     val NSC_ERROR = ERROR
 
-    def display(pos: Position, msg: String, nscSeverity: NscSeverity): Unit =
+    def doReport(pos: Position, msg: String, nscSeverity: NscSeverity): Unit =
       frontEnd.log(pos, msg, nscSeverity match {
         case NSC_INFO => API_INFO
         case NSC_WARNING => API_WARNING
         case NSC_ERROR => API_ERROR
       })
-
-    def displayPrompt(): Unit =
-      frontEnd.interactive()
 
     override def flush(): Unit = {
       super.flush()

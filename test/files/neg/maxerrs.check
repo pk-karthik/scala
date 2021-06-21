@@ -1,0 +1,16 @@
+maxerrs.scala:23: error: type mismatch;
+ found   : String("")
+ required: Int
+  def F = f("")
+            ^
+maxerrs.scala:25: error: type mismatch;
+ found   : String("")
+ required: Int
+  def g = f("")
+            ^
+maxerrs.scala:27: error: type mismatch;
+ found   : String("")
+ required: Int
+  def h = f("")
+            ^
+5 errors found

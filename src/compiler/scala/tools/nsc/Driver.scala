@@ -1,9 +1,21 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala
 package tools.nsc
 
-import scala.tools.nsc.reporters.{ ConsoleReporter, Reporter }
 import Properties.{ versionMsg, residentPromptString }
 import scala.reflect.internal.util.FakePos
+import scala.tools.nsc.reporters.Reporter
 
 abstract class Driver {
 
@@ -39,7 +51,7 @@ abstract class Driver {
 
   def process(args: Array[String]): Boolean = {
     val ss   = new Settings(scalacError)
-    reporter = new ConsoleReporter(ss)    // for reporting early config errors, before compiler is constructed
+    reporter = Reporter(ss)    // for reporting early config errors, before compiler is constructed
     command  = new CompilerCommand(args.toList, ss)
     settings = command.settings
 

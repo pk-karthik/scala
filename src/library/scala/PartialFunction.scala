@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2002-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 
@@ -50,7 +54,7 @@ package scala
  *
  *
  *  @author  Martin Odersky, Pavel Pavlov, Adriaan Moors
- *  @version 1.0, 16/07/2003
+ *  @since   1.0
  */
 trait PartialFunction[-A, +B] extends (A => B) { self =>
   import PartialFunction._
@@ -245,6 +249,7 @@ object PartialFunction {
   /** Converts ordinary function to partial one
    *  @since   2.10
    */
+  @deprecated("""For converting an ordinary function f to a partial function pf, use `val pf: PartialFunction[A, B] = { case x => f(x) }`. For creating a new PartialFunction, use an explicit type annotation instead, like in `val pf: PartialFunction[Int, String] = { case 1 => "one" }`.""", "2.12.5")
   def apply[A, B](f: A => B): PartialFunction[A, B] = { case x => f(x) }
 
   private[this] val constFalse: Any => Boolean = { _ => false}

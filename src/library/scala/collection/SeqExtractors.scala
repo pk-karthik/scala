@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala
 package collection
 
@@ -11,8 +23,8 @@ object +: {
 
 /** An extractor used to init/last deconstruct sequences. */
 object :+ {
-  /** Splits a sequence into init :+ tail.
-   * @return Some((init, tail)) if sequence is non-empty. None otherwise.
+  /** Splits a sequence into init :+ last.
+   * @return Some((init, last)) if sequence is non-empty. None otherwise.
    */
   def unapply[T,Coll <: SeqLike[T, Coll]](
       t: Coll with SeqLike[T, Coll]): Option[(Coll, T)] =

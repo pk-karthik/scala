@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author Stepan Koltsov
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
@@ -46,6 +53,10 @@ object InteractiveReader {
     }
 
   def apply(): InteractiveReader = SimpleReader()
+
+  // a non-interactive InteractiveReader that returns the given text
+  def apply(text: String): InteractiveReader = SimpleReader(text)
+
   @deprecated("Use `apply` instead.", "2.9.0")
   def createDefault(): InteractiveReader = apply() // used by sbt
 }
@@ -107,6 +118,7 @@ class SplashLoop(reader: InteractiveReader, prompt: String) extends Runnable {
   def start(): Unit = result.synchronized {
     require(thread == null, "Already started")
     thread = new Thread(this)
+    thread.setDaemon(true)
     running = true
     thread.start()
   }
@@ -117,8 +129,8 @@ class SplashLoop(reader: InteractiveReader, prompt: String) extends Runnable {
     thread = null
   }
 
-  /** Block for the result line, or null on ctl-D. */
-  def line: String = result.take getOrElse null
+  /** Block for the result line, or null on ctrl-D. */
+  def line: String = result.take.orNull
 }
 object SplashLoop {
   def apply(reader: SplashReader, prompt: String): SplashLoop = new SplashLoop(reader, prompt)

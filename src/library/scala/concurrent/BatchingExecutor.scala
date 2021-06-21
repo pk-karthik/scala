@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala.concurrent
 
@@ -103,7 +107,7 @@ private[concurrent] trait BatchingExecutor extends Executor {
   override def execute(runnable: Runnable): Unit = {
     if (batchable(runnable)) { // If we can batch the runnable
       _tasksLocal.get match {
-        case null => unbatchedExecute(new Batch(List(runnable))) // If we aren't in batching mode yet, enqueue batch
+        case null => unbatchedExecute(new Batch(runnable :: Nil)) // If we aren't in batching mode yet, enqueue batch
         case some => _tasksLocal.set(runnable :: some) // If we are already in batching mode, add to batch
       }
     } else unbatchedExecute(runnable) // If not batchable, just delegate to underlying

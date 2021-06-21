@@ -1,11 +1,11 @@
 // that would be:
-// SI-5079 "Scaladoc can't link to an object (only a class or trait)"
-// SI-4497 "Links in Scaladoc - Spec and implementation unsufficient"
-// SI-4224 "Wiki-links should support method targets"
-// SI-3695 "support non-fully-qualified type links in scaladoc comments"
-// SI-6487 "Scaladoc can't link to inner classes"
-// SI-6495 "Scaladoc won't pick up group name, priority and description from owner chain"
-// SI-6501 "Scaladoc won't link to a @template type T as a template but as a member"
+// scala/bug#5079 "Scaladoc can't link to an object (only a class or trait)"
+// scala/bug#4497 "Links in Scaladoc - Spec and implementation unsufficient"
+// scala/bug#4224 "Wiki-links should support method targets"
+// scala/bug#3695 "support non-fully-qualified type links in scaladoc comments"
+// scala/bug#6487 "Scaladoc can't link to inner classes"
+// scala/bug#6495 "Scaladoc won't pick up group name, priority and description from owner chain"
+// scala/bug#6501 "Scaladoc won't link to a @template type T as a template but as a member"
 package scala.test.scaladoc.links {
   import language.higherKinds
   class C
@@ -22,6 +22,8 @@ package scala.test.scaladoc.links {
     def baz(c: scala.test.scaladoc.links.C) = 7
   }
 
+  object ExtendsTarget extends Target 
+  
   object Target {
     type T = Int => Int
     type S = Int
@@ -50,6 +52,7 @@ package scala.test.scaladoc.links {
    *  - [[Target$.::                                       object Target -> type ::]]
    *  - [[Target$.foo(z:Str*                               object Target -> def foo]]
    *  - [[Target$.bar                                      object Target -> def bar]]
+   *  - [[ExtendsTarget.foo(i:Int)*                        object ExtendsTarget -> def bar (disambiguating between inherited members)]]
    *  - [[[[Target$.foo[A[_[_]]]*                          trait Target -> def foo with 3 nested tparams]]]] (should exercise nested parens)
    *  - [[Target.onlyInObject                              object Target -> onlyInObject]]
    *  - [[Target$.C                                        object Target -> class C]] (should link directly to C, not as a member)

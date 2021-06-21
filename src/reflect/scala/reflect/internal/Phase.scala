@@ -1,13 +1,20 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala
 package reflect
 package internal
 
-abstract class Phase(val prev: Phase) {
+abstract class Phase(val prev: Phase) extends Ordered[Phase] {
   if ((prev ne null) && (prev ne NoPhase))
     prev.nx = this
 
@@ -41,12 +48,17 @@ abstract class Phase(val prev: Phase) {
   def checkable: Boolean = true
 
   // NOTE: sbt injects its own phases which extend this class, and not GlobalPhase, so we must implement this logic here
-  private val _erasedTypes = ((prev ne null) && (prev ne NoPhase)) && (prev.name == "erasure" || prev.erasedTypes)
-  def erasedTypes: Boolean = _erasedTypes // overridden in back-end
+  private var _erasedTypes = ((prev ne null) && (prev ne NoPhase)) && (prev.name == "erasure" || prev.erasedTypes)
+  protected def erasedTypes_=(value: Boolean): Unit = {_erasedTypes = value}
+  final def erasedTypes: Boolean = _erasedTypes // overridden in back-end
   final val flatClasses: Boolean   = ((prev ne null) && (prev ne NoPhase)) && (prev.name == "flatten"    || prev.flatClasses)
   final val specialized: Boolean   = ((prev ne null) && (prev ne NoPhase)) && (prev.name == "specialize" || prev.specialized)
   final val refChecked: Boolean    = ((prev ne null) && (prev ne NoPhase)) && (prev.name == "refchecks"  || prev.refChecked)
 
+  // are we past the fields phase, so that:
+  //   - we should allow writing to vals (as part of type checking trait setters)
+  //   - modules have module accessors
+  final val assignsFields: Boolean = ((prev ne null) && (prev ne NoPhase)) && (prev.name == "fields"     || prev.assignsFields)
 
   /** This is used only in unsafeTypeParams, and at this writing is
    *  overridden to false in parser, namer, typer, and erasure. (And NoPhase.)
@@ -60,6 +72,7 @@ abstract class Phase(val prev: Phase) {
     case x: Phase   => id == x.id && name == x.name
     case _          => false
   }
+  override def compare(that: Phase): Id = this.id compare that.id
 }
 
 object NoPhase extends Phase(null) {

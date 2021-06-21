@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2006-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package math
@@ -14,7 +18,6 @@ import scala.language.implicitConversions
 
 /**
  *  @author  Martin Odersky
- *  @version 1.0, 15/07/2003
  *  @since 2.1
  */
 object BigInt {
@@ -107,7 +110,6 @@ object BigInt {
 
 /**
  *  @author  Martin Odersky
- *  @version 1.0, 15/07/2003
  */
 final class BigInt(val bigInteger: BigInteger)
   extends ScalaNumber
@@ -160,8 +162,8 @@ final class BigInt(val bigInteger: BigInteger)
       }
     ) && !bitLengthOverflow
   }
-  /** Some implementations of java.math.BigInteger allow huge values with bit length greater than Int.MaxValue .
-   * The BigInteger.bitLength method returns truncated bit length in this case .
+  /** Some implementations of java.math.BigInteger allow huge values with bit length greater than Int.MaxValue.
+   * The BigInteger.bitLength method returns truncated bit length in this case.
    * This method tests if result of bitLength is valid.
    * This method will become unnecessary if BigInt constructors reject huge BigIntegers.
    */

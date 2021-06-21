@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala
 package collection
 package mutable
@@ -24,6 +36,7 @@ import generic.CanBuildFrom
  *  rapidly as 2^30 is approached.
  *
  */
+@SerialVersionUID(3311432836435989440L)
 final class LongMap[V] private[collection] (defaultEntry: Long => V, initialBufferSize: Int, initBlank: Boolean)
 extends AbstractMap[Long, V]
    with Map[Long, V]
@@ -514,9 +527,10 @@ object LongMap {
   private val exceptionDefault: Long => Nothing = (k: Long) => throw new NoSuchElementException(k.toString)
 
   implicit def canBuildFrom[V, U]: CanBuildFrom[LongMap[V], (Long, U), LongMap[U]] =
-    new CanBuildFrom[LongMap[V], (Long, U), LongMap[U]] {
-      def apply(from: LongMap[V]): LongMapBuilder[U] = apply()
-      def apply(): LongMapBuilder[U] = new LongMapBuilder[U]
+    ReusableCBF.asInstanceOf[CanBuildFrom[LongMap[V], (Long, U), LongMap[U]]]
+  private[this] val ReusableCBF = new CanBuildFrom[LongMap[Any], (Long, Any), LongMap[Any]] {
+      def apply(from: LongMap[Any]): LongMapBuilder[Any] = apply()
+      def apply(): LongMapBuilder[Any] = new LongMapBuilder[Any]
     }
 
   /** A builder for instances of `LongMap`.

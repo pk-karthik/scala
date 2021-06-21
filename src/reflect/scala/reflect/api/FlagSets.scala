@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala
 package reflect
 package api
@@ -233,7 +245,7 @@ trait FlagSets { self: Universe =>
 
     /** Flag used to distinguish platform-specific implementation details.
      *  Trees and symbols which are currently marked ARTIFACT by scalac:
-     *    * $outer fields and accessors
+     *    * \$outer fields and accessors
      *    * super accessors
      *    * protected accessors
      *    * lazy local accessors

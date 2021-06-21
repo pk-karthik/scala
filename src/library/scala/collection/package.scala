@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 
@@ -90,10 +94,15 @@ package object collection {
    */
   def breakOut[From, T, To](implicit b: CanBuildFrom[Nothing, T, To]): CanBuildFrom[From, T, To] =
     // can't just return b because the argument to apply could be cast to From in b
-    new CanBuildFrom[From, T, To] {
-      def apply(from: From) = b.apply()
-      def apply()           = b.apply()
-    }
+    new WrappedCanBuildFrom[From, T, To](b)
+
+  private[collection] final class WrappedCanBuildFrom[From, T, To](
+        val wrapped: CanBuildFrom[Nothing, T, To])
+    extends CanBuildFrom[From, T, To] {
+    def apply(from: From) = wrapped.apply()
+
+    def apply() = wrapped.apply()
+  }
 }
 
 package collection {

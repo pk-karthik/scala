@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala
 package reflect
 package internal
@@ -16,7 +28,7 @@ private[internal] trait TypeToStrings {
   def toStringRecursions = _toStringRecursions
   def toStringRecursions_=(value: Int) = _toStringRecursions = value
 
-  private var _toStringSubjects = HashSet[Type]()
+  private val _toStringSubjects = HashSet[Type]()
   def toStringSubjects = _toStringSubjects
 
   protected def typeToString(tpe: Type): String =
@@ -27,7 +39,7 @@ private[internal] trait TypeToStrings {
     // else
     if (toStringRecursions >= maxToStringRecursions) {
       devWarning("Exceeded recursion depth attempting to print " + util.shortClassOfInstance(tpe))
-      if (settings.debug)
+      if (settings.isDebug)
         (new Throwable).printStackTrace
 
       "..."

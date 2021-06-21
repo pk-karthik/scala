@@ -1,18 +1,25 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2016 LAMP/EPFL
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
+
 package scala
 package tools.nsc
 package interpreter
 
-import scala.language.dynamics
 
 import scala.beans.BeanProperty
 import scala.collection.JavaConverters._
-import scala.reflect.classTag
 import scala.reflect.internal.util.Position
 import scala.tools.nsc.util.stringFromReader
-import javax.script._, ScriptContext.{ ENGINE_SCOPE, GLOBAL_SCOPE }
+import javax.script._
 import java.io.{ Closeable, Reader }
 
 /* A REPL adaptor for the javax.script API. */
@@ -31,14 +38,14 @@ class Scripted(@BeanProperty val factory: ScriptEngineFactory, settings: Setting
     /* Modify the template to snag definitions from dynamic context.
      * So object $iw { x + 42 } becomes object $iw { def x = $ctx.x ; x + 42 }
      */
-    override protected def importsCode(wanted: Set[Name], wrapper: Request#Wrapper, definesClass: Boolean, generousImports: Boolean) = {
+    override protected def importsCode(wanted: Set[Name], wrapper: Request#Wrapper, generousImports: Boolean) = {
 
       // cull references that can be satisfied from the current dynamic context
       val contextual = wanted & contextNames
 
       if (contextual.nonEmpty) {
         val neededContext = (wanted &~ contextual) + TermName(ctx)
-        val ComputedImports(header, preamble, trailer, path) = super.importsCode(neededContext, wrapper, definesClass, generousImports)
+        val ComputedImports(header, preamble, trailer, path) = super.importsCode(neededContext, wrapper, generousImports)
         val adjusted = contextual.map { n =>
             val valname = n.decodedName
             s"""def `$valname` = $ctx.`$valname`
@@ -46,7 +53,7 @@ class Scripted(@BeanProperty val factory: ScriptEngineFactory, settings: Setting
           }.mkString(preamble, "\n", "\n")
         ComputedImports(header, adjusted, trailer, path)
       }
-      else super.importsCode(wanted, wrapper, definesClass, generousImports)
+      else super.importsCode(wanted, wrapper, generousImports)
     }
 
     // names available in current dynamic context
@@ -331,7 +338,7 @@ class WriterOutputStream(writer: Writer) extends OutputStream {
     byteBuffer.flip()
     val result = decoder.decode(byteBuffer, charBuffer, /*eoi=*/ false)
     if (byteBuffer.remaining == 0) byteBuffer.clear()
-    if (charBuffer.position > 0) {
+    if (charBuffer.position() > 0) {
       charBuffer.flip()
       writer write charBuffer.toString
       charBuffer.clear()

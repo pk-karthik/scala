@@ -1,12 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
-
-
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -15,7 +17,6 @@ package collection
  *  that inspects the next element without discarding it.
  *
  *  @author  Martin Odersky
- *  @version 2.8
  *  @since   2.8
  */
 trait BufferedIterator[+A] extends Iterator[A] {
@@ -23,6 +24,12 @@ trait BufferedIterator[+A] extends Iterator[A] {
   /** Returns next element of iterator without advancing beyond it.
    */
   def head: A
+
+  /** Returns an option of the next element of an iterator without advancing beyond it.
+    * @return  the next element of this iterator if it has a next element
+    *           `None` if it does not
+    */
+  def headOption : Option[A] = if (hasNext) Some(head) else None
 
   override def buffered: this.type = this
 }

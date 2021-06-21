@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2006-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://www.scala-lang.org/           **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -13,7 +17,7 @@ package convert
 import java.{ lang => jl, util => ju }, java.util.{ concurrent => juc }
 import scala.language.implicitConversions
 
-@deprecated("Use JavaConverters or consider ToScalaImplicits", since="2.12")
+@deprecated("use JavaConverters or consider ToScalaImplicits", since="2.12.0")
 trait WrapAsScala extends LowPriorityWrapAsScala {
   // provide higher-priority implicits with names that don't exist in JavaConverters for the case
   // when importing both JavaConverters._ and JavaConversions._. otherwise implicit conversions
@@ -225,5 +229,5 @@ private[convert] trait LowPriorityWrapAsScala {
   }
 }
 
-@deprecated("Use JavaConverters or consider ImplicitConversionsToScala", since="2.12")
+@deprecated("use JavaConverters or consider ImplicitConversionsToScala", since="2.12.0")
 object WrapAsScala extends WrapAsScala

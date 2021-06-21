@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
@@ -24,7 +31,7 @@ trait Unapplies extends ast.TreeDSL {
   private def unapplyParamName = nme.x_0
   private def caseMods         = Modifiers(SYNTHETIC | CASE)
 
-  // In the typeCompleter (templateSig) of a case class (resp it's module),
+  // In the typeCompleter (templateSig) of a case class (resp its module),
   // synthetic `copy` (reps `apply`, `unapply`) methods are added. To compute
   // their signatures, the corresponding ClassDef is needed. During naming (in
   // `enterClassDef`), the case class ClassDef is added as an attachment to the
@@ -47,19 +54,21 @@ trait Unapplies extends ast.TreeDSL {
   private def toIdent(x: DefTree) = Ident(x.name) setPos x.pos.focus
 
   private def classType(cdef: ClassDef, tparams: List[TypeDef]): Tree = {
-    // SI-7033 Unattributed to avoid forcing `cdef.symbol.info`.
+    // scala/bug#7033 Unattributed to avoid forcing `cdef.symbol.info`.
     val tycon = Ident(cdef.symbol)
     if (tparams.isEmpty) tycon else AppliedTypeTree(tycon, tparams map toIdent)
   }
 
   private def constrParamss(cdef: ClassDef): List[List[ValDef]] = {
-    val ClassDef(_, _, _, Template(_, _, body)) = resetAttrs(cdef.duplicate)
-    val DefDef(_, _, _, vparamss, _, _) = treeInfo firstConstructor body
+    val prunedClassDef = deriveClassDef(cdef)(tmpl => deriveTemplate(tmpl)(stats => treeInfo.firstConstructor(stats).duplicate :: Nil))
+    val ClassDef(_, _, _, Template(_, _, firstConstructor :: Nil)) = resetAttrs(prunedClassDef)
+    val DefDef(_, _, _, vparamss, _, _) = firstConstructor
     vparamss
   }
 
   private def constrTparamsInvariant(cdef: ClassDef): List[TypeDef] = {
-    val ClassDef(_, _, tparams, _) = resetAttrs(cdef.duplicate)
+    val prunedClassDef = deriveClassDef(cdef)(tmpl => Template(Nil, noSelfType, Nil))
+    val ClassDef(_, _, tparams, _) = resetAttrs(prunedClassDef.duplicate)
     val tparamsInvariant = tparams.map(tparam => copyTypeDef(tparam)(mods = tparam.mods &~ (COVARIANT | CONTRAVARIANT)))
     tparamsInvariant
   }
@@ -85,7 +94,7 @@ trait Unapplies extends ast.TreeDSL {
       localAccessor.fold(selectByName)(Ident(param) DOT _.symbol)
     }
 
-    // Working with trees, rather than symbols, to avoid cycles like SI-5082
+    // Working with trees, rather than symbols, to avoid cycles like scala/bug#5082
     constrParamss(caseclazz).take(1).flatten match {
       case Nil => TRUE
       case xs  => SOME(xs map caseFieldAccessorValue: _*)
@@ -128,6 +137,7 @@ trait Unapplies extends ast.TreeDSL {
    */
   def factoryMeth(mods: Modifiers, name: TermName, cdef: ClassDef): DefDef = {
     val tparams   = constrTparamsInvariant(cdef)
+
     val cparamss  = constrParamss(cdef)
     def classtpe = classType(cdef, tparams)
     atPos(cdef.pos.focus)(
@@ -149,7 +159,7 @@ trait Unapplies extends ast.TreeDSL {
       case _                                                          => nme.unapply
     }
     val cparams    = List(ValDef(Modifiers(PARAM | SYNTHETIC), unapplyParamName, classType(cdef, tparams), EmptyTree))
-    val resultType = if (!settings.isScala212) TypeTree() else { // fix for SI-6541 under -Xsource:2.12
+    val resultType = if (!currentRun.isScala212) TypeTree() else { // fix for scala/bug#6541 under -Xsource:2.12
     def repeatedToSeq(tp: Tree) = tp match {
         case AppliedTypeTree(Select(_, tpnme.REPEATED_PARAM_CLASS_NAME), tps) => AppliedTypeTree(gen.rootScalaDot(tpnme.Seq), tps)
         case _                                                                => tp
@@ -172,7 +182,7 @@ trait Unapplies extends ast.TreeDSL {
 
   /**
    * Generates copy methods for case classes. Copy only has defaults on the first
-   * parameter list, as of SI-5009.
+   * parameter list, as of scala/bug#5009.
    *
    * The parameter types of the copy method need to be exactly the same as the parameter
    * types of the primary constructor. Just copying the TypeTree is not enough: a type `C`

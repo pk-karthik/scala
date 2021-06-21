@@ -1,12 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
-
-
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -19,9 +21,8 @@ import scala.collection.parallel.mutable.ParHashSet
  *
  *  @author  Matthias Zenger
  *  @author  Martin Odersky
- *  @version 2.0, 31/12/2006
  *  @since   1
- *  @see [[http://docs.scala-lang.org/overviews/collections/concrete-mutable-collection-classes.html#hash_tables "Scala's Collection Library overview"]]
+ *  @see [[http://docs.scala-lang.org/overviews/collections/concrete-mutable-collection-classes.html#hash-tables "Scala's Collection Library overview"]]
  *  section on `Hash Tables` for more information.
  *
  *  @define Coll `mutable.HashSet`
@@ -103,7 +104,9 @@ extends AbstractSet[A]
  *  @define coll mutable hash set
  */
 object HashSet extends MutableSetFactory[HashSet] {
-  implicit def canBuildFrom[A]: CanBuildFrom[Coll, A, HashSet[A]] = setCanBuildFrom[A]
+  implicit def canBuildFrom[A]: CanBuildFrom[Coll, A, HashSet[A]] =
+    ReusableCBF.asInstanceOf[CanBuildFrom[Coll, A, HashSet[A]]]
+  private[this] val ReusableCBF = setCanBuildFrom[Any]
   override def empty[A]: HashSet[A] = new HashSet[A]
 }
 

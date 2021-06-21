@@ -1,17 +1,21 @@
-/** NSC -- new Scala compiler
-  *
-  * Copyright 2005-2015 LAMP/EPFL
-  * @author Stepan Koltsov
-  * @author Adriaan Moors
-  */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala.tools.nsc.interpreter.jline
 
 import java.util.{Collection => JCollection, List => JList}
 
 import _root_.jline.{console => jconsole}
-import jline.console.ConsoleReader
-import jline.console.completer.{CandidateListCompletionHandler, Completer, CompletionHandler}
+import jline.console.completer.{CandidateListCompletionHandler, Completer}
 import jconsole.history.{History => JHistory}
 
 import scala.tools.nsc.interpreter
@@ -32,10 +36,13 @@ class InteractiveReader(completer: () => Completion) extends interpreter.Interac
   private val consoleReader = {
     val reader = new JLineConsoleReader()
 
-    reader setPaginationEnabled interpreter.`package`.isPaged
+    reader setPaginationEnabled interpreter.isPaged
 
-    // ASAP
+    // turn off magic !
     reader setExpandEvents false
+
+    // enable detecting pasted tab char (when next char is immediately available) which is taken raw, not completion
+    reader setCopyPasteDetection true
 
     reader setHistory history.asInstanceOf[JHistory]
 

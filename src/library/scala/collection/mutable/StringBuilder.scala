@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2006-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -20,11 +24,10 @@ import immutable.StringLike
  *
  *  @author Stephane Micheloud
  *  @author Martin Odersky
- *  @version 2.8
  *  @since   2.7
  *  @define Coll `mutable.IndexedSeq`
  *  @define coll string builder
- *  @see [[http://docs.scala-lang.org/overviews/collections/concrete-mutable-collection-classes.html# "Scala's Collection Library overview"]]
+ *  @see [[http://docs.scala-lang.org/overviews/collections/concrete-mutable-collection-classes.html#stringbuilders "Scala's Collection Library overview"]]
  *  section on `StringBuilders` for more information.
  */
 @SerialVersionUID(0 - 8525408645367278351L)
@@ -444,6 +447,15 @@ final class StringBuilder(private val underlying: JavaStringBuilder)
    *  @return  the string assembled by this StringBuilder
    */
   def result(): String = toString
+
+
+  /** Tests whether this builder is empty.
+   *
+   *  This method is required for JDK15+ compatibility
+   *
+   *  @return  `true` if this builder contains nothing, `false` otherwise.
+   */
+  override def isEmpty: Boolean = underlying.length() == 0
 }
 
 object StringBuilder {

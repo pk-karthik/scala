@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
@@ -18,8 +25,6 @@ abstract class OverridingPairs extends SymbolPairs {
   import global._
 
   class Cursor(base: Symbol) extends super.Cursor(base) {
-    lazy val relatively = new RelativeTo(base.thisType)
-
     /** Symbols to exclude: Here these are constructors and private/artifact symbols,
      *  including bridges. But it may be refined in subclasses.
      */
@@ -33,11 +38,11 @@ abstract class OverridingPairs extends SymbolPairs {
     /** Types always match. Term symbols match if their member types
      *  relative to `self` match.
      */
-    override protected def matches(lo: Symbol, high: Symbol) = lo.isType || (
-         (lo.owner != high.owner)     // don't try to form pairs from overloaded members
-      && !high.isPrivate              // private or private[this] members never are overridden
-      && !exclude(lo)                 // this admits private, as one can't have a private member that matches a less-private member.
-      && relatively.matches(lo, high)
+    override protected def matches(high: Symbol) = low.isType || (
+         (low.owner != high.owner)     // don't try to form pairs from overloaded members
+      && !high.isPrivate               // private or private[this] members never are overridden
+      && !exclude(low)                 // this admits private, as one can't have a private member that matches a less-private member.
+      && (lowMemberType matches (self memberType high))
     ) // TODO we don't call exclude(high), should we?
   }
 }

@@ -1,53 +1,69 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala
 package reflect.internal.util
 
 import scala.collection.mutable
+import scala.reflect.internal.SymbolTable
+import scala.reflect.internal.settings.MutableSettings
+import java.util.concurrent.atomic.{AtomicInteger, AtomicLong}
 
-object Statistics {
+import scala.runtime.LongRef
 
+abstract class Statistics(val symbolTable: SymbolTable, settings: MutableSettings) {
   type TimerSnapshot = (Long, Long)
 
   /** If enabled, increment counter by one */
-  @inline final def incCounter(c: Counter) {
-    if (_enabled && c != null) c.value += 1
+  @inline final def incCounter(c: Counter): Unit = {
+    if (enabled && c != null) c.value += 1
   }
 
   /** If enabled, increment counter by given delta */
-  @inline final def incCounter(c: Counter, delta: Int) {
-    if (_enabled && c != null) c.value += delta
+  @inline final def incCounter(c: Counter, delta: Int): Unit = {
+    if (enabled && c != null) c.value += delta
   }
 
   /** If enabled, increment counter in map `ctrs` at index `key` by one */
   @inline final def incCounter[K](ctrs: QuantMap[K, Counter], key: K) =
-    if (_enabled && ctrs != null) ctrs(key).value += 1
+    if (enabled && ctrs != null) ctrs(key).value += 1
 
   /** If enabled, start subcounter. While active it will track all increments of
    *  its base counter.
    */
   @inline final def startCounter(sc: SubCounter): (Int, Int) =
-    if (_enabled && sc != null) sc.start() else null
+    if (enabled && sc != null) sc.start() else null
 
   /** If enabled, stop subcounter from tracking its base counter. */
-  @inline final def stopCounter(sc: SubCounter, start: (Int, Int)) {
-    if (_enabled && sc != null) sc.stop(start)
+  @inline final def stopCounter(sc: SubCounter, start: (Int, Int)): Unit = {
+    if (enabled && sc != null) sc.stop(start)
   }
 
   /** If enabled, start timer */
   @inline final def startTimer(tm: Timer): TimerSnapshot =
-    if (_enabled && tm != null) tm.start() else null
+    if (enabled && tm != null) tm.start() else null
 
   /** If enabled, stop timer */
-  @inline final def stopTimer(tm: Timer, start: TimerSnapshot) {
-    if (_enabled && tm != null) tm.stop(start)
+  @inline final def stopTimer(tm: Timer, start: TimerSnapshot): Unit = {
+    if (enabled && tm != null) tm.stop(start)
   }
 
   /** If enabled, push and start a new timer in timer stack */
   @inline final def pushTimer(timers: TimerStack, timer: => StackableTimer): TimerSnapshot =
-    if (_enabled && timers != null) timers.push(timer) else null
+    if (enabled && timers != null) timers.push(timer) else null
 
   /** If enabled, stop and pop timer from timer stack */
-  @inline final def popTimer(timers: TimerStack, prev: TimerSnapshot) {
-    if (_enabled && timers != null) timers.pop(prev)
+  @inline final def popTimer(timers: TimerStack, prev: TimerSnapshot): Unit = {
+    if (enabled && timers != null) timers.pop(prev)
   }
 
   /** Create a new counter that shows as `prefix` and is active in given phases */
@@ -78,7 +94,7 @@ object Statistics {
 
   /** Create a new stackable that shows as `prefix` and is active
    *  in the same phases as its base timer. Stackable timers are subtimers
-   *  that can be stacked ina timerstack, and that print aggregate, as well as specific
+   *  that can be stacked in a timerstack, and that print aggregate, as well as specific
    *  durations.
    */
   def newStackableTimer(prefix: String, timer: Timer): StackableTimer = new StackableTimer(prefix, timer)
@@ -110,7 +126,7 @@ quant)
    *  Quantities with non-empty prefix are printed in the statistics info.
    */
   trait Quantity {
-    if (enabled && prefix.nonEmpty) {
+    if (prefix.nonEmpty) {
       val key = s"${if (underlying != this) underlying.prefix else ""}/$prefix"
       qs(key) = this
     }
@@ -166,22 +182,37 @@ quant)
   }
 
   class Timer(val prefix: String, val phases: Seq[String]) extends Quantity {
-    var nanos: Long = 0
-    var timings = 0
-    def start() = {
-      (nanos, System.nanoTime())
+    private val totalThreads = new AtomicInteger()
+    private val threadNanos = new ThreadLocal[LongRef] {
+      override def initialValue() = {
+        totalThreads.incrementAndGet()
+        new LongRef(0)
+      }
+    }
+    private[util] val totalNanos = new AtomicLong
+    private[util] val timings = new AtomicInteger
+    def nanos = totalNanos.get
+    def start(): TimerSnapshot = {
+      (threadNanos.get.elem, System.nanoTime())
     }
     def stop(prev: TimerSnapshot) {
       val (nanos0, start) = prev
-      nanos = nanos0 + System.nanoTime() - start
-      timings += 1
+      val newThreadNanos = nanos0 + System.nanoTime() - start
+      val threadNanosCount = threadNanos.get
+      val diff = newThreadNanos - threadNanosCount.elem
+      threadNanosCount.elem = newThreadNanos
+      totalNanos.addAndGet(diff)
+      timings.incrementAndGet()
     }
-    protected def show(ns: Long) = s"${ns/1000000}ms"
-    override def toString = s"$timings spans, ${show(nanos)}"
+    protected def show(ns: Long) = s"${ns/1000/1000.0}ms"
+    override def toString = {
+      val threads = totalThreads.get
+      s"$timings spans, ${if (threads > 1) s"$threads threads, "}${show(totalNanos.get)}"
+    }
   }
 
   class SubTimer(prefix: String, override val underlying: Timer) extends Timer(prefix, underlying.phases) with SubQuantity {
-    override protected def show(ns: Long) = super.show(ns) + showPercent(ns, underlying.nanos)
+    override protected def show(ns: Long) = super.show(ns) + showPercent(ns, underlying.totalNanos.get)
   }
 
   class StackableTimer(prefix: String, underlying: Timer) extends SubTimer(prefix, underlying) with Ordered[StackableTimer] {
@@ -221,6 +252,8 @@ quant)
   /** A stack of timers, all active, where a timer's specific "clock"
    *  is stopped as long as it is buried by some other timer in the stack, but
    *  its aggregate clock keeps on ticking.
+   *
+   *  Note: Not threadsafe
    */
   class TimerStack {
     private var elems: List[(StackableTimer, Long)] = Nil
@@ -235,9 +268,9 @@ quant)
       val (nanos0, start) = prev
       val duration = System.nanoTime() - start
       val (topTimer, nestedNanos) :: rest = elems
-      topTimer.nanos = nanos0 + duration
+      topTimer.totalNanos.addAndGet(nanos0 + duration)
       topTimer.specificNanos += duration - nestedNanos
-      topTimer.timings += 1
+      topTimer.timings.incrementAndGet()
       elems = rest match {
         case (outerTimer, outerNested) :: elems1 =>
           (outerTimer, outerNested + duration) :: elems1
@@ -247,29 +280,13 @@ quant)
     }
   }
 
-  private var _enabled = false
-  private val qs = new mutable.HashMap[String, Quantity]
+  private[this] val qs = new mutable.HashMap[String, Quantity]
 
-  /** replace with
-   *
-   *    final val canEnable = false
-   *
-   *  to remove all Statistics code from build
-   */
-  final val canEnable = _enabled
+  @inline final def enabled: Boolean = settings.areStatisticsEnabled
 
-  /** replace with
-   *
-   *   final def hotEnabled = _enabled
-   *
-   * and rebuild, to also count tiny but super-hot methods
-   * such as phase, flags, owner, name.
-   */
-  final val hotEnabled = false
-
-  def enabled = _enabled
-  def enabled_=(cond: Boolean) = {
-    if (cond && !_enabled) {
+  import scala.reflect.internal.Reporter
+  /** Reports the overhead of measuring statistics via the nanoseconds variation. */
+  final def reportStatisticsOverhead(reporter: Reporter): Unit = {
       val start = System.nanoTime()
       var total = 0L
       for (i <- 1 to 10000) {
@@ -277,9 +294,13 @@ quant)
         total += System.nanoTime() - time
       }
       val total2 = System.nanoTime() - start
-      println("Enabling statistics, measuring overhead = "+
-              total/10000.0+"ns to "+total2/10000.0+"ns per timer")
-      _enabled = true
-    }
+      val variation = s"${total/10000.0}ns to ${total2/10000.0}ns"
+      reporter.echo(NoPosition, s"Enabling statistics, measuring overhead = $variation per timer")
+  }
+
+  /** Helper for measuring the overhead of a concrete thunk `body`. */
+  @inline final def timed[T](timer: Timer)(body: => T): T = {
+    val start = startTimer(timer)
+    try body finally stopTimer(timer, start)
   }
 }

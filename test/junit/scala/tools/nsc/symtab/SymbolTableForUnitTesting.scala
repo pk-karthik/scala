@@ -2,10 +2,12 @@ package scala.tools.nsc
 package symtab
 
 import scala.reflect.ClassTag
-import scala.reflect.internal.{NoPhase, Phase, SomePhase}
+import scala.reflect.internal.{NoPhase, Phase, Reporter, SomePhase}
+import scala.reflect.internal.util.Statistics
 import scala.tools.util.PathResolver
 import util.ClassPath
 import io.AbstractFile
+import scala.tools.nsc.Reporting.WarningCategory
 
 /**
  * A complete SymbolTable implementation designed to be used in JUnit tests.
@@ -35,7 +37,7 @@ class SymbolTableForUnitTesting extends SymbolTable {
 
     def platformPhases: List[SubComponent] = Nil
 
-    private[nsc] lazy val classPath: ClassPath = new PathResolver(settings).result
+    private[nsc] lazy val classPath: ClassPath = new PathResolver(settings, new CloseableRegistry).result
 
     def isMaybeBoxed(sym: Symbol): Boolean = ???
     def needCompile(bin: AbstractFile, src: AbstractFile): Boolean = ???
@@ -50,6 +52,8 @@ class SymbolTableForUnitTesting extends SymbolTable {
       sym.info.member(name)
     protected override def compileLate(srcfile: AbstractFile): Unit =
       sys.error(s"We do not expect compileLate to be called in SymbolTableTest. The srcfile passed in is $srcfile")
+    def warning(pos: Position, msg: String, category: WarningCategory, site: String): Unit =
+      reporter.warning(pos, msg)
   }
 
   class GlobalMirror extends Roots(NoSymbol) {
@@ -73,19 +77,21 @@ class SymbolTableForUnitTesting extends SymbolTable {
     s
   }
 
+  override lazy val statistics = new Statistics(this, settings) with ReflectStats
+
    // Members declared in scala.reflect.internal.Required
   def picklerPhase: scala.reflect.internal.Phase = SomePhase
   def erasurePhase: scala.reflect.internal.Phase = SomePhase
 
   // Members declared in scala.reflect.internal.Reporting
-  def reporter = new scala.reflect.internal.ReporterImpl {
+  def reporter: Reporter = new scala.reflect.internal.Reporter {
     protected def info0(pos: Position, msg: String, severity: Severity, force: Boolean): Unit = println(msg)
   }
 
   // minimal Run to get Reporting wired
   def currentRun = new RunReporting {}
   class PerRunReporting extends PerRunReportingBase {
-    def deprecationWarning(pos: Position, msg: String, since: String): Unit = reporter.warning(pos, msg)
+    def deprecationWarning(pos: Position, msg: String, since: String, site: String, origin: String): Unit = reporter.warning(pos, msg)
   }
   protected def PerRunReporting = new PerRunReporting
 
@@ -94,14 +100,10 @@ class SymbolTableForUnitTesting extends SymbolTable {
   def log(msg: => AnyRef): Unit = println(msg)
   def mirrorThatLoaded(sym: Symbol): Mirror = rootMirror
   val phases: Seq[Phase] = List(NoPhase, SomePhase)
-  val phaseWithId: Array[Phase] = {
-    val maxId = phases.map(_.id).max
-    val phasesArray = Array.ofDim[Phase](maxId+1)
-    phases foreach { phase =>
-      phasesArray(phase.id) = phase
-    }
-    phasesArray
+  phases foreach { phase =>
+    phaseWithId(phase.id) = phase
   }
+
   lazy val treeInfo = new scala.reflect.internal.TreeInfo {
     val global: SymbolTableForUnitTesting.this.type = SymbolTableForUnitTesting.this
   }

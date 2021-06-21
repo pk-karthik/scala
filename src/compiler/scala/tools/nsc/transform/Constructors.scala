@@ -1,6 +1,13 @@
-/*  NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
@@ -8,12 +15,13 @@ package transform
 
 import scala.collection.mutable
 import scala.reflect.internal.util.ListOfNil
+import scala.tools.nsc.Reporting.WarningCategory
 import symtab.Flags._
 
 /** This phase converts classes with parameters into Java-like classes with
  *  fields, which are assigned to from constructors.
  */
-abstract class Constructors extends Statics with Transform with ast.TreeDSL {
+abstract class Constructors extends Statics with Transform with TypingTransformers with ast.TreeDSL {
   import global._
   import definitions._
 
@@ -26,7 +34,7 @@ abstract class Constructors extends Statics with Transform with ast.TreeDSL {
   private val guardedCtorStats: mutable.Map[Symbol, List[Tree]] = perRunCaches.newMap[Symbol, List[Tree]]()
   private val ctorParams: mutable.Map[Symbol, List[Symbol]] = perRunCaches.newMap[Symbol, List[Symbol]]()
 
-  class ConstructorTransformer(unit: CompilationUnit) extends Transformer {
+  class ConstructorTransformer(unit: CompilationUnit) extends TypingTransformer(unit) {
     /*
      * Inspect for obvious out-of-order initialization; concrete, eager vals or vars, declared in this class,
      * for which a reference to the member precedes its definition.
@@ -53,7 +61,7 @@ abstract class Constructors extends Statics with Transform with ast.TreeDSL {
         def check(tree: Tree) = {
           for (t <- tree) t match {
             case t: RefTree if uninitializedVals(t.symbol.accessedOrSelf) && t.qualifier.symbol == clazz =>
-              reporter.warning(t.pos, s"Reference to uninitialized ${t.symbol.accessedOrSelf}")
+              runReporting.warning(t.pos, s"Reference to uninitialized ${t.symbol.accessedOrSelf}", WarningCategory.Other, t.symbol)
             case _ =>
           }
         }
@@ -80,7 +88,10 @@ abstract class Constructors extends Statics with Transform with ast.TreeDSL {
           else {
             checkUninitializedReads(cd)
             val tplTransformer = new TemplateTransformer(unit, impl0)
-            treeCopy.ClassDef(cd, mods0, name0, tparams0, tplTransformer.transformed)
+            tplTransformer.localTyper = this.localTyper
+            tplTransformer.atOwner(impl0, cd.symbol) {
+              treeCopy.ClassDef(cd, mods0, name0, tparams0, tplTransformer.transformed)
+            }
           }
         case _ =>
           super.transform(tree)
@@ -147,7 +158,7 @@ abstract class Constructors extends Statics with Transform with ast.TreeDSL {
    *
    */
   private trait OmittablesHelper {
-    def computeOmittableAccessors(clazz: Symbol, defs: List[Tree], auxConstructors: List[Tree]): Set[Symbol] = {
+    def computeOmittableAccessors(clazz: Symbol, defs: List[Tree], auxConstructors: List[Tree], constructor: List[Tree]): Set[Symbol] = {
       val decls = clazz.info.decls.toSet
       val isEffectivelyFinal = clazz.isEffectivelyFinal
 
@@ -161,7 +172,7 @@ abstract class Constructors extends Statics with Transform with ast.TreeDSL {
       //   class Outer { def test = {class LocalParent; class LocalChild extends LocalParent } }
       //
       // See run/t9408.scala for related test cases.
-      def omittableParamAcc(sym: Symbol) = sym.isParamAccessor && sym.isPrivateLocal
+      def omittableParamAcc(sym: Symbol) = sym.isParamAccessor && sym.isPrivateLocal && !sym.isVariable
       def omittableOuterAcc(sym: Symbol) = isEffectivelyFinal && sym.isOuterAccessor && !sym.isOverridingSymbol
       val omittables = mutable.Set.empty[Symbol] ++ (decls filter (sym => omittableParamAcc(sym) || omittableOuterAcc(sym))) // the closure only captures isEffectivelyFinal
 
@@ -247,7 +258,7 @@ abstract class Constructors extends Statics with Transform with ast.TreeDSL {
       methodSym setInfoAndEnter MethodType(Nil, UnitTpe)
 
       // changeOwner needed because the `stats` contained in the DefDef were owned by the template, not long ago.
-      val blk       = Block(stats, gen.mkZero(UnitTpe)).changeOwner(impl.symbol -> methodSym)
+      val blk       = Block(stats, gen.mkZero(UnitTpe)).changeOwner(impl.symbol, methodSym)
       val delayedDD = localTyper typed { DefDef(methodSym, Nil, blk) }
 
       delayedDD.asInstanceOf[DefDef]
@@ -442,13 +453,16 @@ abstract class Constructors extends Statics with Transform with ast.TreeDSL {
   } // GuardianOfCtorStmts
 
   private class TemplateTransformer(val unit: CompilationUnit, val impl: Template)
-    extends StaticsTransformer
+    extends TypingTransformer(unit)
+    with    StaticsTransformer
     with    DelayedInitHelper
     with    OmittablesHelper
-    with    GuardianOfCtorStmts {
+    with    GuardianOfCtorStmts
+    with    fields.CheckedAccessorTreeSynthesis
+  {
+    protected def typedPos(pos: Position)(tree: Tree): Tree = localTyper.typedPos(pos)(tree)
 
     val clazz         = impl.symbol.owner  // the transformed class
-    val localTyper    = typer.atOwner(impl, clazz)
 
     val isDelayedInitSubclass = clazz isSubClass DelayedInitClass
 
@@ -456,7 +470,7 @@ abstract class Constructors extends Statics with Transform with ast.TreeDSL {
 
     // find and dissect primary constructor
     private val (primaryConstr, _primaryConstrParams, primaryConstrBody) = stats collectFirst {
-      case dd@DefDef(_, _, _, vps :: Nil, _, rhs: Block) if dd.symbol.isPrimaryConstructor || dd.symbol.isMixinConstructor => (dd, vps map (_.symbol), rhs)
+      case dd@DefDef(_, _, _, vps :: Nil, _, rhs: Block) if dd.symbol.isPrimaryConstructor => (dd, vps map (_.symbol), rhs)
     } getOrElse {
       abort("no constructor in template: impl = " + impl)
     }
@@ -466,18 +480,21 @@ abstract class Constructors extends Statics with Transform with ast.TreeDSL {
     def usesSpecializedField = intoConstructor.usesSpecializedField
 
     // The constructor parameter corresponding to an accessor
-    def parameter(acc: Symbol): Symbol = parameterNamed(acc.unexpandedName.getterName)
-
-    // The constructor parameter with given name. This means the parameter
-    // has given name, or starts with given name, and continues with a `$` afterwards.
-    def parameterNamed(name: Name): Symbol = {
-      def matchesName(param: Symbol) = param.name == name || param.name.startsWith(name + nme.NAME_JOIN_STRING)
-
-      primaryConstrParams filter matchesName match {
-        case Nil    => abort(name + " not in " + primaryConstrParams)
-        case p :: _ => p
-      }
+    def parameter(acc: Symbol): Symbol = {
+      //works around the edge case where unexpandedName over-unexpands shenanigans like literal $$ or `$#`
+      def unexpanded = parameterNamed(acc.unexpandedName.getterName)
+      def expanded = parameterNamed(acc.getterName)
+      (if (unexpanded.isRight) unexpanded else expanded).swap.map(abort).merge
     }
+
+    // The constructor parameter with given getter name. This means the parameter name
+    // decodes to the same name that the getter decodes to
+    def parameterNamed(name: Name): Either[String, Symbol] =  
+      primaryConstrParams.filter(_.name.decodedName == name.decodedName) match {
+        case List(p) => Right(p)
+        case Nil     => Left(s"No constructor parameter named $name (decoded to ${name.decodedName}) found in list of constructor parameters $primaryConstrParams (decoded to ${primaryConstrParams.map(_.decodedName)})")
+        case ps      => Left(s"$name matches multiple constructor parameters $ps")
+      }
 
     // A transformer for expressions that go into the constructor
     object intoConstructor extends Transformer {
@@ -498,11 +515,13 @@ abstract class Constructors extends Statics with Transform with ast.TreeDSL {
       private def isStationaryParamRef(sym: Symbol) = (
         isParamRef(sym) &&
         !(sym.isGetter && sym.accessed.isVariable) &&
-        !sym.isSetter
+        !sym.isSetter &&
+        !sym.isVariable
       )
 
       /*
-       * whether `sym` denotes a param-accessor (ie a field) that fulfills all of:
+       * whether `sym` denotes a param-accessor (ie in a class a PARAMACCESSOR field, or in a trait a method with same flag)
+       * that fulfills all of:
        *   (a) has stationary value, ie the same value provided via the corresponding ctor-arg; and
        *   (b) isn't subject to specialization. We might be processing statements for:
        *         (b.1) the constructor in the generic   (super-)class; or
@@ -515,12 +534,13 @@ abstract class Constructors extends Statics with Transform with ast.TreeDSL {
         case Apply(Select(This(_), _), List()) =>
           // references to parameter accessor methods of own class become references to parameters
           // outer accessors become references to $outer parameter
-          if (clazz.isTrait)
+          // println(s"to param ref in $clazz for ${tree.symbol} ${tree.symbol.debugFlagString} / ${tree.symbol.outerSource} / ${canBeSupplanted(tree.symbol)}")
+          if (clazz.isTrait && !(tree.symbol hasAllFlags (ACCESSOR | PARAMACCESSOR)))
             super.transform(tree)
           else if (canBeSupplanted(tree.symbol))
-            gen.mkAttributedIdent(parameter(tree.symbol.accessed)) setPos tree.pos
-          else if (tree.symbol.outerSource == clazz)
-            gen.mkAttributedIdent(parameterNamed(nme.OUTER)) setPos tree.pos
+            gen.mkAttributedIdent(parameter(tree.symbol)) setPos tree.pos
+          else if (tree.symbol.outerSource == clazz && !isDelayedInitSubclass)
+            gen.mkAttributedIdent(parameterNamed(nme.OUTER).fold(abort, identity)).setPos(tree.pos)
           else
             super.transform(tree)
 
@@ -541,14 +561,17 @@ abstract class Constructors extends Statics with Transform with ast.TreeDSL {
       // Move tree into constructor, take care of changing owner from `oldOwner` to `newOwner` (the primary constructor symbol)
       def apply(oldOwner: Symbol, newOwner: Symbol)(tree: Tree) =
         if (tree eq EmptyTree) tree
-        else transform(tree.changeOwner(oldOwner -> newOwner))
+        else transform(tree.changeOwner(oldOwner, newOwner))
     }
 
-    // Create an assignment to class field `to` with rhs `from`
-    def mkAssign(to: Symbol, from: Tree): Tree =
-      localTyper.typedPos(to.pos) {
-        Assign(Select(This(clazz), to), from)
+    // Assign `rhs` to class field / trait setter `assignSym`
+    def mkAssign(assignSym: Symbol, rhs: Tree): Tree =
+      localTyper.typedPos(assignSym.pos) {
+        val qual = Select(This(clazz), assignSym)
+        if (assignSym.isSetter) Apply(qual, List(rhs))
+        else Assign(qual, rhs)
       }
+
 
     // Create code to copy parameter to parameter accessor field.
     // If parameter is $outer, check that it is not null so that we NPE
@@ -565,9 +588,6 @@ abstract class Constructors extends Statics with Transform with ast.TreeDSL {
       }
     }
 
-    // Constant typed vals are not memoized.
-    def memoizeValue(sym: Symbol) = !sym.info.resultType.isInstanceOf[ConstantType]
-
     /** Triage definitions and statements in this template into the following categories.
       * The primary constructor is treated separately, as it is assembled in part from these pieces.
       *
@@ -577,89 +597,118 @@ abstract class Constructors extends Statics with Transform with ast.TreeDSL {
       * - `constrStats`:    statements that go into the constructor after and including the superclass constructor call
       * - `classInitStats`: statements that go into the class initializer
       */
-    def triageStats = {
-      val defBuf, auxConstructorBuf, constrPrefixBuf, constrStatBuf, classInitStatBuf = new mutable.ListBuffer[Tree]
+    class Triage {
+      private val defBuf, auxConstructorBuf, constrPrefixBuf, constrStatBuf, classInitStatBuf = new mutable.ListBuffer[Tree]
 
-      // The early initialized field definitions of the class (these are the class members)
-      val presupers = treeInfo.preSuperFields(stats)
+      triage()
 
-      // generate code to copy pre-initialized fields
-      for (stat <- primaryConstrBody.stats) {
-        constrStatBuf += stat
-        stat match {
-          case ValDef(mods, name, _, _) if mods.hasFlag(PRESUPER) =>
-            // stat is the constructor-local definition of the field value
-            val fields = presupers filter (_.getterName == name)
-            assert(fields.length == 1, s"expected exactly one field by name $name in $presupers of $clazz's early initializers")
-            val to = fields.head.symbol
+      val defs              = defBuf.toList
+      val auxConstructors   = auxConstructorBuf.toList
+      val constructorPrefix = constrPrefixBuf.toList
+      val constructorStats  = constrStatBuf.toList
+      val classInitStats    = classInitStatBuf.toList
 
-            if (memoizeValue(to)) constrStatBuf += mkAssign(to, Ident(stat.symbol))
-          case _ =>
-        }
-      }
+      private def triage() = {
+        // Constant typed vals are not memoized.
+        def memoizeValue(sym: Symbol) = !sym.info.resultType.isInstanceOf[ConstantType]
 
-      for (stat <- stats) {
-        val statSym = stat.symbol
+        // The early initialized field definitions of the class (these are the class members)
+        val presupers = treeInfo.preSuperFields(stats)
 
-        // Move the RHS of a ValDef to the appropriate part of the ctor.
-        // If the val is an early initialized or a parameter accessor,
-        // it goes before the superclass constructor call, otherwise it goes after.
-        // A lazy val's effect is not moved to the constructor, as it is delayed.
-        // Returns `true` when a `ValDef` is needed.
-        def moveEffectToCtor(mods: Modifiers, rhs: Tree, assignSym: Symbol): Unit = {
-          val initializingRhs =
-            if ((assignSym eq NoSymbol) || statSym.isLazy) EmptyTree // not memoized, or effect delayed (for lazy val)
-            else if (!mods.hasStaticFlag) intoConstructor(statSym, primaryConstr.symbol)(rhs)
-            else rhs
+        // generate code to copy pre-initialized fields
+        for (stat <- primaryConstrBody.stats) {
+          constrStatBuf += stat
+          stat match {
+            case ValDef(mods, name, _, _) if mods.hasFlag(PRESUPER) => // TODO trait presupers
+              // stat is the constructor-local definition of the field value
+              val fields = presupers filter (_.getterName == name)
+              assert(fields.length == 1, s"expected exactly one field by name $name in $presupers of $clazz's early initializers")
+              val to = fields.head.symbol
 
-          if (initializingRhs ne EmptyTree) {
-            val initPhase =
-              if (mods hasFlag STATIC) classInitStatBuf
-              else if (mods hasFlag PRESUPER | PARAMACCESSOR) constrPrefixBuf
-              else constrStatBuf
-
-            initPhase += mkAssign(assignSym, initializingRhs)
+              if (memoizeValue(to)) constrStatBuf += mkAssign(to, Ident(stat.symbol))
+            case _ =>
           }
         }
 
-        stat match {
-          // recurse on class definition, store in defBuf
-          case _: ClassDef if !stat.symbol.isInterface => defBuf += new ConstructorTransformer(unit).transform(stat)
+        val primaryConstrSym = primaryConstr.symbol
 
-          // Triage methods -- they all end up in the template --
-          // regular ones go to `defBuf`, secondary contructors go to `auxConstructorBuf`.
-          // The primary constructor is dealt with separately (we're massaging it here).
-          case _: DefDef if statSym.isPrimaryConstructor || statSym.isMixinConstructor => ()
-          case _: DefDef if statSym.isConstructor => auxConstructorBuf += stat
-          case _: DefDef => defBuf += stat
+        for (stat <- stats) {
+          val statSym = stat.symbol
 
-          // If a val needs a field, an empty valdef goes into the template.
-          // Except for lazy and ConstantTyped vals, the field is initialized by an assignment in:
-          //   - the class initializer (static),
-          //   - the constructor, before the super call (early initialized or a parameter accessor),
-          //   - the constructor, after the super call (regular val).
-          case ValDef(mods, _, _, rhs) =>
-            if (rhs ne EmptyTree) {
-              val emitField = memoizeValue(statSym)
-              moveEffectToCtor(mods, rhs, if (emitField) statSym else NoSymbol)
-              if (emitField) defBuf += deriveValDef(stat)(_ => EmptyTree)
-            } else defBuf += stat
+          // Move the RHS of a ValDef to the appropriate part of the ctor.
+          // If the val is an early initialized or a parameter accessor,
+          // it goes before the superclass constructor call, otherwise it goes after.
+          // A lazy val's effect is not moved to the constructor, as it is delayed.
+          // Returns `true` when a `ValDef` is needed.
+          def moveEffectToCtor(mods: Modifiers, rhs: Tree, assignSym: Symbol): Unit = {
+            val initializingRhs =
+              if ((assignSym eq NoSymbol) || statSym.isLazy) EmptyTree // not memoized, or effect delayed (for lazy val)
+              else if (!mods.hasStaticFlag) intoConstructor(statSym, primaryConstrSym)(rhs)
+              else rhs
 
-          // all other statements go into the constructor
-          case _ => constrStatBuf += intoConstructor(impl.symbol, primaryConstr.symbol)(stat)
+            if (initializingRhs ne EmptyTree) {
+              val initPhase =
+                if (mods hasFlag STATIC) classInitStatBuf
+                else if (mods hasFlag PRESUPER | PARAMACCESSOR) constrPrefixBuf
+                else constrStatBuf
+
+              initPhase += mkAssign(assignSym, initializingRhs)
+            }
+          }
+
+          stat match {
+            // recurse on class definition, store in defBuf
+            case _: ClassDef =>
+              if (statSym.isInterface) defBuf += stat
+              else defBuf += new ConstructorTransformer(unit).transform(stat)
+
+            // primary constructor is already tracked as `primaryConstr`
+            // non-primary constructors go to auxConstructorBuf
+            case _: DefDef if statSym.isConstructor =>
+              if (statSym ne primaryConstrSym) auxConstructorBuf += stat
+
+            // If a val needs a field, an empty valdef goes into the template.
+            // Except for lazy and ConstantTyped vals, the field is initialized by an assignment in:
+            //   - the class initializer (static),
+            //   - the constructor, before the super call (early initialized or a parameter accessor),
+            //   - the constructor, after the super call (regular val).
+            case vd: ValDef =>
+              if (vd.rhs eq EmptyTree) { defBuf += vd }
+              else {
+                val emitField = memoizeValue(statSym)
+
+                if (emitField) {
+                  moveEffectToCtor(vd.mods, vd.rhs, statSym)
+                  defBuf += deriveValDef(stat)(_ => EmptyTree)
+                }
+              }
+
+            case dd: DefDef =>
+              // either move the RHS to ctor (for getter of stored field) or just drop it (for corresponding setter)
+              def shouldMoveRHS =
+                clazz.isTrait && statSym.isAccessor && !statSym.isLazy && !statSym.isSpecialized && (statSym.isSetter || memoizeValue(statSym))
+
+              if ((dd.rhs eq EmptyTree) || !shouldMoveRHS) { defBuf += dd }
+              else {
+                if (statSym.isGetter) moveEffectToCtor(dd.mods, dd.rhs, statSym.asTerm.referenced orElse statSym.setterIn(clazz))
+                defBuf += deriveDefDef(stat)(_ => EmptyTree)
+              }
+
+            // all other statements go into the constructor
+            case _ =>
+              constrStatBuf += intoConstructor(impl.symbol, primaryConstrSym)(stat)
+          }
         }
       }
-
-      (defBuf.toList, auxConstructorBuf.toList, constrPrefixBuf.toList, constrStatBuf.toList, classInitStatBuf.toList)
     }
 
     def transformed = {
-      val (defs, auxConstructors, constructorPrefix, constructorStats, classInitStats) = triageStats
+      val triage = new Triage; import triage._
 
       // omit unused outers
       val omittableAccessor: Set[Symbol] =
         if (isDelayedInitSubclass) Set.empty
-        else computeOmittableAccessors(clazz, defs, auxConstructors)
+        else computeOmittableAccessors(clazz, defs, auxConstructors, constructorStats)
 
       // TODO: this should omit fields for non-memoized (constant-typed, unit-typed vals need no storage --
       // all the action is in the getter)
@@ -667,25 +716,37 @@ abstract class Constructors extends Statics with Transform with ast.TreeDSL {
       def omittableStat(stat: Tree) = omittableSym(stat.symbol)
 
       // The parameter accessor fields which are members of the class
-      val paramAccessors = clazz.constrParamAccessors
+      val paramAccessors =
+        if (clazz.isTrait) clazz.info.decls.toList.filter(sym => sym.hasAllFlags(STABLE | PARAMACCESSOR)) // since a trait does not have constructor parameters (yet), these can only come from lambdalift -- right?
+        else clazz.constrParamAccessors
 
       // Initialize all parameters fields that must be kept.
       val paramInits = paramAccessors filterNot omittableSym map { acc =>
-        // Check for conflicting symbol amongst parents: see bug #1960.
-        // It would be better to mangle the constructor parameter name since
-        // it can only be used internally, but I think we need more robust name
-        // mangling before we introduce more of it.
-        val conflict = clazz.info.nonPrivateMember(acc.name) filter (s => s.isGetter && !s.isOuterField && s.enclClass.isTrait)
-        if (conflict ne NoSymbol)
-          reporter.error(acc.pos, "parameter '%s' requires field but conflicts with %s".format(acc.name, conflict.fullLocationString))
+        // Check for conflicting field mixed in for a val/var defined in a parent trait (neg/t1960.scala).
+        // Since the fields phase has already mixed in fields, we can just look for
+        // an existing decl with the local variant of our paramaccessor's name.
+        //
+        // TODO: mangle the constructor parameter name (it can only be used internally), though we probably first need more robust name mangling
 
-        copyParam(acc, parameter(acc))
+        // sometimes acc is a field with a local name (when it's a val/var constructor param) --> exclude the `acc` itself when looking for conflicting decl
+        // sometimes it's not (just a constructor param) --> any conflicting decl is a problem
+        val conflict = clazz.info.decl(acc.name.localName).filter(sym => sym ne acc)
+        if (conflict ne NoSymbol) {
+          val orig = exitingTyper(clazz.info.nonPrivateMember(acc.name).filter(_ hasFlag ACCESSOR))
+          reporter.error(acc.pos, s"parameter '${acc.name}' requires field but conflicts with ${(orig orElse conflict).fullLocationString}")
+        }
+
+        val accSetter =
+          if (clazz.isTrait) acc.setterIn(clazz, hasExpandedName = true)
+          else acc
+
+        copyParam(accSetter, parameter(acc))
       }
 
       // Return a pair consisting of (all statements up to and including superclass and trait constr calls, rest)
       def splitAtSuper(stats: List[Tree]) = {
         def isConstr(tree: Tree): Boolean = tree match {
-          case Block(_, expr) => isConstr(expr) // SI-6481 account for named argument blocks
+          case Block(_, expr) => isConstr(expr) // scala/bug#6481 account for named argument blocks
           case _              => (tree.symbol ne null) && tree.symbol.isConstructor
         }
         val (pre, rest0)       = stats span (!isConstr(_))
@@ -704,8 +765,14 @@ abstract class Constructors extends Statics with Transform with ast.TreeDSL {
       * particulars.
       */
       val (delayedHookDefs, remainingConstrStatsDelayedInit) =
-        if (isDelayedInitSubclass && remainingConstrStats.nonEmpty) delayedInitDefsAndConstrStats(defs, remainingConstrStats)
-        else (Nil, remainingConstrStats)
+        if (isDelayedInitSubclass && remainingConstrStats.nonEmpty) {
+          remainingConstrStats foreach {
+            case Assign(lhs, _ ) => lhs.symbol.setFlag(MUTABLE) // delayed init fields cannot be final, scala/bug#11412
+            case _ =>
+          }
+          delayedInitDefsAndConstrStats(defs, remainingConstrStats)
+        } else
+          (Nil, remainingConstrStats)
 
       // Assemble final constructor
       val primaryConstructor = deriveDefDef(primaryConstr)(_ => {
@@ -715,7 +782,7 @@ abstract class Constructors extends Statics with Transform with ast.TreeDSL {
           primaryConstrBody.expr)
       })
 
-      if (omittableAccessor.exists(_.isOuterField) && !constructorStats.exists(_.exists { case i: Ident if i.symbol.isOuterParam => true; case _ => false}))
+      if ((exitingPickler(clazz.isAnonymousClass) || clazz.originalOwner.isTerm) && omittableAccessor.exists(_.isOuterField) && !constructorStats.exists(_.exists { case i: Ident if i.symbol.isOuterParam => true; case _ => false}))
         primaryConstructor.symbol.updateAttachment(OuterArgCanBeElided)
 
       val constructors = primaryConstructor :: auxConstructors
@@ -729,11 +796,20 @@ abstract class Constructors extends Statics with Transform with ast.TreeDSL {
       // We never eliminate delayed hooks or the constructors, so, only filter `defs`.
       val prunedStats = (defs filterNot omittableStat) ::: delayedHookDefs ::: constructors
 
+      val statsWithInitChecks =
+        if (settings.checkInit) {
+          val addChecks = new SynthInitCheckedAccessorsIn(currentOwner)
+          prunedStats mapConserve {
+            case dd: DefDef if addChecks.needsWrapping(dd) => deriveDefDef(dd)(addChecks.wrapRhsWithInitChecks(dd.symbol))
+            case stat                                      => stat
+          }
+        } else prunedStats
+
       //  Add the static initializers
-      if (classInitStats.isEmpty) deriveTemplate(impl)(_ => prunedStats)
+      if (classInitStats.isEmpty) deriveTemplate(impl)(_ => statsWithInitChecks)
       else {
-        val staticCtor = staticConstructor(prunedStats, localTyper, impl.pos)(classInitStats)
-        deriveTemplate(impl)(_ => staticCtor :: prunedStats)
+        val staticCtor = staticConstructor(statsWithInitChecks, localTyper, impl.pos)(classInitStats)
+        deriveTemplate(impl)(_ => staticCtor :: statsWithInitChecks)
       }
     }
   } // TemplateTransformer

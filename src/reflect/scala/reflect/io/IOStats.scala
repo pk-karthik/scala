@@ -1,7 +1,18 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala
 package reflect.io
 
-import scala.reflect.internal.util.Statistics
 
 // Due to limitations in the Statistics machinery, these are only
 // reported if this patch is applied.
@@ -25,8 +36,11 @@ import scala.reflect.internal.util.Statistics
 // +  final val canEnable = true // _enabled
 //
 // We can commit this change as the first diff reverts a fix for an IDE memory leak.
-private[io] object IOStats {
-  val fileExistsCount      = Statistics.newCounter("# File.exists calls")
-  val fileIsDirectoryCount = Statistics.newCounter("# File.isDirectory calls")
-  val fileIsFileCount      = Statistics.newCounter("# File.isFile calls")
-}
+
+// The following has been commented out because IOStats cannot be used in the
+// call-sites since they are disconnected from the statistics infrastructure.
+//private[io] object IOStats {
+//  val fileExistsCount      = Statistics.newCounter("# File.exists calls")
+//  val fileIsDirectoryCount = Statistics.newCounter("# File.isDirectory calls")
+//  val fileIsFileCount      = Statistics.newCounter("# File.isFile calls")
+//}

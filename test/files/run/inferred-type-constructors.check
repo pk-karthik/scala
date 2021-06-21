@@ -1,4 +1,4 @@
-warning: there were two feature warnings; re-run with -feature for details
+warning: two feature warnings; re-run with -feature for details
                 p.Iterable[Int]
                 p.Set[Int]
                 p.Seq[Int]
@@ -51,6 +51,6 @@ warning: there were two feature warnings; re-run with -feature for details
                 Seq[Int]
                 Array[Int]
                 scala.collection.AbstractSet[Int]
-                Comparable[java.lang.String]
+                Comparable[String]
                 scala.collection.immutable.LinearSeq[Int]
                 Iterable[Int]

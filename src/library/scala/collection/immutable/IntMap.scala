@@ -1,17 +1,21 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
 package immutable
 
-import scala.collection.generic.{ CanBuildFrom, BitOperations }
-import scala.collection.mutable.{ Builder, MapBuilder }
+import scala.collection.generic.{BitOperations, CanBuildFrom}
+import scala.collection.mutable.{Builder, MapBuilder}
 import scala.annotation.tailrec
 
 /** Utility class for integer maps.
@@ -46,9 +50,11 @@ import IntMapUtils._
  */
 object IntMap {
   /** $mapCanBuildFromInfo */
-  implicit def canBuildFrom[A, B] = new CanBuildFrom[IntMap[A], (Int, B), IntMap[B]] {
-    def apply(from: IntMap[A]): Builder[(Int, B), IntMap[B]] = apply()
-    def apply(): Builder[(Int, B), IntMap[B]] = new MapBuilder[Int, B, IntMap[B]](empty[B])
+  implicit def canBuildFrom[A, B]: CanBuildFrom[IntMap[A], (Int, B), IntMap[B]] =
+    ReusableCBF.asInstanceOf[CanBuildFrom[IntMap[A], (Int, B), IntMap[B]]]
+  private val ReusableCBF = new CanBuildFrom[IntMap[Any], (Int, Any), IntMap[Any]] {
+    def apply(from: IntMap[Any]): Builder[(Int, Any), IntMap[Any]] = apply()
+    def apply(): Builder[(Int, Any), IntMap[Any]] = new MapBuilder[Int, Any, IntMap[Any]](empty[Any])
   }
 
   def empty[T] : IntMap[T]  = IntMap.Nil
@@ -58,6 +64,7 @@ object IntMap {
   def apply[T](elems: (Int, T)*): IntMap[T] =
     elems.foldLeft(empty[T])((x, y) => x.updated(y._1, y._2))
 
+  @SerialVersionUID(-9137650114085457282L)
   private[immutable] case object Nil extends IntMap[Nothing] {
     // Important! Without this equals method in place, an infinite
     // loop from Map.equals => size => pattern-match-on-Nil => equals
@@ -70,11 +77,13 @@ object IntMap {
     }
   }
 
+  @SerialVersionUID(3302720273753906158L)
   private[immutable] case class Tip[+T](key: Int, value: T) extends IntMap[T]{
     def withValue[S](s: S) =
       if (s.asInstanceOf[AnyRef] eq value.asInstanceOf[AnyRef]) this.asInstanceOf[IntMap.Tip[S]]
       else IntMap.Tip(key, s)
   }
+  @SerialVersionUID(-523093388545197183L)
   private[immutable] case class Bin[+T](prefix: Int, mask: Int, left: IntMap[T], right: IntMap[T]) extends IntMap[T] {
     def bin[S](left: IntMap[S], right: IntMap[S]): IntMap[S] = {
       if ((this.left eq left) && (this.right eq right)) this.asInstanceOf[IntMap.Bin[S]]
@@ -361,17 +370,17 @@ sealed abstract class IntMap[+T] extends AbstractMap[Int, T]
   def unionWith[S >: T](that: IntMap[S], f: (Int, S, S) => S): IntMap[S] = (this, that) match{
     case (IntMap.Bin(p1, m1, l1, r1), that@(IntMap.Bin(p2, m2, l2, r2))) =>
       if (shorter(m1, m2)) {
-        if (!hasMatch(p2, p1, m1)) join[S](p1, this, p2, that) // TODO: remove [S] when SI-5548 is fixed
+        if (!hasMatch(p2, p1, m1)) join[S](p1, this, p2, that) // TODO: remove [S] when scala/bug#5548 is fixed
         else if (zero(p2, m1)) IntMap.Bin(p1, m1, l1.unionWith(that, f), r1)
         else IntMap.Bin(p1, m1, l1, r1.unionWith(that, f))
       } else if (shorter(m2, m1)){
-        if (!hasMatch(p1, p2, m2)) join[S](p1, this, p2, that) // TODO: remove [S] when SI-5548 is fixed
+        if (!hasMatch(p1, p2, m2)) join[S](p1, this, p2, that) // TODO: remove [S] when scala/bug#5548 is fixed
         else if (zero(p1, m2)) IntMap.Bin(p2, m2, this.unionWith(l2, f), r2)
         else IntMap.Bin(p2, m2, l2, this.unionWith(r2, f))
       }
       else {
         if (p1 == p2) IntMap.Bin(p1, m1, l1.unionWith(l2,f), r1.unionWith(r2, f))
-        else join[S](p1, this, p2, that) // TODO: remove [S] when SI-5548 is fixed
+        else join[S](p1, this, p2, that) // TODO: remove [S] when scala/bug#5548 is fixed
       }
     case (IntMap.Tip(key, value), x) => x.updateWith[S](key, value, (x, y) => f(key, y, x))
     case (x, IntMap.Tip(key, value)) => x.updateWith[S](key, value, (x, y) => f(key, x, y))

@@ -1,8 +1,21 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala.tools.nsc
 package doc
 package base
 
 import comment._
+import scala.tools.nsc.Reporting.WarningCategory
 
 /** This trait extracts all required information for documentation from compilation units.
  *  The base trait has been extracted to allow getting light-weight documentation
@@ -15,7 +28,7 @@ trait MemberLookupBase {
   def internalLink(sym: Symbol, site: Symbol): Option[LinkTo]
   def chooseLink(links: List[LinkTo]): LinkTo
   def toString(link: LinkTo): String
-  def findExternalLink(sym: Symbol, name: String): Option[LinkToExternal]
+  def findExternalLink(sym: Symbol, name: String): Option[LinkTo]
   def warnNoLink: Boolean
 
   import global._
@@ -54,7 +67,7 @@ trait MemberLookupBase {
     // (2) Or recursively go into each containing template.
     val fromParents = Stream.iterate(site)(_.owner) takeWhile (!isRoot(_)) map (lookupInTemplate(pos, members, _))
 
-    val syms = (fromRoot +: fromParents) find (!_.isEmpty) getOrElse Nil
+    val syms = (fromRoot +: fromParents) find (_.nonEmpty) getOrElse Nil
 
     val links = syms flatMap { case (sym, site) => internalLink(sym, site) } match {
       case Nil =>
@@ -69,9 +82,9 @@ trait MemberLookupBase {
           }
 
           if (sym.isClass || sym.isModule || sym.isTrait || sym.hasPackageFlag)
-            findExternalLink(sym, linkName(sym))
+            findExternalLink(sym, "")
           else if (owner.isClass || owner.isModule || owner.isTrait || owner.hasPackageFlag)
-            findExternalLink(sym, linkName(owner) + "@" + externalSignature(sym))
+            findExternalLink(owner, externalSignature(sym))
           else
             None
         }
@@ -80,7 +93,7 @@ trait MemberLookupBase {
     links match {
       case Nil =>
         if (warnNoLink)
-          reporter.warning(pos, "Could not find any member to link for \"" + query + "\".")
+          runReporting.warning(pos, "Could not find any member to link for \"" + query + "\".", WarningCategory.Scaladoc, site)
         // (4) if we still haven't found anything, create a tooltip
         Tooltip(query)
       case List(l) => l
@@ -93,10 +106,12 @@ trait MemberLookupBase {
         }
         if (warnNoLink) {
           val allLinks = links.map(linkToString).mkString
-          reporter.warning(pos,
+          runReporting.warning(pos,
             s"""The link target \"$query\" is ambiguous. Several members fit the target:
             |$allLinks
-            |$explanation""".stripMargin)
+            |$explanation""".stripMargin,
+            WarningCategory.Scaladoc,
+            site)
         }
         chosen
     }
@@ -156,9 +171,14 @@ trait MemberLookupBase {
       termSyms
     else if (member.endsWith("!"))
       typeSyms
-    else if (member.endsWith("*"))
-      cleanupBogusClasses(container.info.nonPrivateDecls) filter signatureMatch
-    else
+    else if (member.endsWith("*")) {
+      val declOnlyResults = cleanupBogusClasses(container.info.nonPrivateDecls) filter signatureMatch
+      if (declOnlyResults.nonEmpty) {
+        declOnlyResults
+      } else {
+        cleanupBogusClasses(container.info.nonPrivateMembers.toList) filter signatureMatch
+      }
+    } else
       strategy match {
         case BothTypeAndTerm => termSyms ::: typeSyms
         case OnlyType => typeSyms
@@ -183,8 +203,8 @@ trait MemberLookupBase {
 
         val member = query.substring(last_index, index).replaceAll("\\\\([#\\.])", "$1")
         // we want to allow javadoc-style links [[#member]] -- which requires us to remove empty members from the first
-        // elemnt in the list
-        if ((member != "") || (!members.isEmpty))
+        // element in the list
+        if ((member != "") || members.nonEmpty)
           members ::= member
         last_index = index + 1
       }

@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
@@ -38,7 +45,7 @@ trait AnalyzerPlugins { self: Analyzer =>
      * Let analyzer plugins modify the type that has been computed for a tree.
      *
      * @param tpe   The type inferred by the type checker, initially (for first plugin) `tree.tpe`
-     * @param typer The yper that type checked `tree`
+     * @param typer The typer that type checked `tree`
      * @param tree  The type-checked tree
      * @param mode  Mode that was used for typing `tree`
      * @param pt    Expected type that was used for typing `tree`
@@ -153,6 +160,26 @@ trait AnalyzerPlugins { self: Analyzer =>
      * @param pt    The return type of the enclosing method
      */
     def pluginsTypedReturn(tpe: Type, typer: Typer, tree: Return, pt: Type): Type = tpe
+
+    /**
+     * Access the search instance that will be used for the implicit search.
+     *
+     * The motivation of this method is to allow analyzer plugins to control when/where
+     * implicit search are triggered, and access their environment for data capturing purposes.
+     *
+     * @param search The instance that holds all the information about a given implicit search.
+     */
+    def pluginsNotifyImplicitSearch(search: ImplicitSearch): Unit = ()
+
+    /**
+     * Access the implicit search result from Scalac's typechecker.
+     *
+     * The motivation of this method is to allow analyzer plugins to control when/where
+     * implicit search results are returned, and inspec them for data capturing purposes.
+     *
+     * @param result The result to a given implicit search.
+     */
+    def pluginsNotifyImplicitSearchResult(result: SearchResult): Unit = ()
   }
 
   /**
@@ -299,23 +326,26 @@ trait AnalyzerPlugins { self: Analyzer =>
   }
 
   /** @see AnalyzerPlugin.pluginsPt */
-  def pluginsPt(pt: Type, typer: Typer, tree: Tree, mode: Mode): Type =
-    // performance opt
-    if (analyzerPlugins.isEmpty) pt
-    else invoke(new CumulativeOp[Type] {
-      def default = pt
-      def accumulate = (pt, p) => p.pluginsPt(pt, typer, tree, mode)
-    })
+  def pluginsPt(pt: Type, typer: Typer, tree: Tree, mode: Mode): Type = {
+    var result = pt
+    var plugins = analyzerPlugins
+    while (!plugins.isEmpty) { // OPT use loop rather than the invoke combinator to reduce allocations
+      result = plugins.head.pluginsPt(result, typer, tree, mode)
+      plugins = plugins.tail
+    }
+    result
+  }
 
   /** @see AnalyzerPlugin.pluginsTyped */
-  def pluginsTyped(tpe: Type, typer: Typer, tree: Tree, mode: Mode, pt: Type): Type =
-    // performance opt
-    if (analyzerPlugins.isEmpty) addAnnotations(tree, tpe)
-    else invoke(new CumulativeOp[Type] {
-      // support deprecated methods in annotation checkers
-      def default = addAnnotations(tree, tpe)
-      def accumulate = (tpe, p) => p.pluginsTyped(tpe, typer, tree, mode, pt)
-    })
+  def pluginsTyped(tpe: Type, typer: Typer, tree: Tree, mode: Mode, pt: Type): Type = {
+    var result = addAnnotations(tree, tpe)
+    var plugins = analyzerPlugins
+    while (!plugins.isEmpty) { // OPT use loop rather than the invoke combinator to reduce allocations
+      result = plugins.head.pluginsTyped(result, typer, tree, mode, pt)
+      plugins = plugins.tail
+    }
+    result
+  }
 
   /** @see AnalyzerPlugin.pluginsTypeSig */
   def pluginsTypeSig(tpe: Type, typer: Typer, defTree: Tree, pt: Type): Type = invoke(new CumulativeOp[Type] {
@@ -349,6 +379,18 @@ trait AnalyzerPlugins { self: Analyzer =>
     def accumulate = (tpe, p) => p.pluginsTypedReturn(tpe, typer, tree, pt)
   })
 
+  /** @see AnalyzerPlugin.pluginsImplicitSearch */
+  def pluginsNotifyImplicitSearch(search: ImplicitSearch): Unit = invoke(new CumulativeOp[Unit] {
+    def default = ()
+    def accumulate = (_, p) => p.pluginsNotifyImplicitSearch(search)
+  })
+
+  /** @see AnalyzerPlugin.pluginsImplicitSearchResult */
+  def pluginsNotifyImplicitSearchResult(result: SearchResult): Unit = invoke(new CumulativeOp[Unit] {
+    def default = ()
+    def accumulate = (_, p) => p.pluginsNotifyImplicitSearchResult(result)
+  })
+
   /** A list of registered macro plugins */
   private var macroPlugins: List[MacroPlugin] = Nil
 
@@ -368,12 +410,27 @@ trait AnalyzerPlugins { self: Analyzer =>
   private def invoke[T](op: NonCumulativeOp[T]): T = {
     if (macroPlugins.isEmpty) op.default
     else {
-      val results = macroPlugins.filter(_.isActive()).map(plugin => (plugin, op.custom(plugin)))
-      results.flatMap { case (p, Some(result)) => Some((p, result)); case _ => None } match {
-        case (p1, _) :: (p2, _) :: _ => typer.context.error(op.position, s"both $p1 and $p2 want to ${op.description}"); op.default
-        case (_, custom) :: Nil => custom
-        case Nil => op.default
+      var result: Option[T] = None
+      var resultPlugin: MacroPlugin = null
+      var plugins = macroPlugins
+      while (!plugins.isEmpty) {
+        val plugin = plugins.head
+        if (plugin.isActive()) {
+          op.custom(plugin) match {
+            case None =>
+            case s @ Some(custom) =>
+              if (result.isDefined) {
+                typer.context.error(op.position, s"both $resultPlugin and $plugin want to ${op.description}")
+                op.default
+              } else {
+                result = s
+                resultPlugin = plugin
+              }
+          }
+        }
+        plugins = plugins.tail
       }
+      result.getOrElse(op.default)
     }
   }
 

@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala
 package reflect
 package internal
@@ -121,9 +133,6 @@ trait HasFlags {
   def isSynthetic           = hasFlag(SYNTHETIC)
   def isTrait               = hasFlag(TRAIT) && !hasFlag(PARAM)
   def isTraitOrInterface    = isTrait || isInterface
-
-  def isDeferredOrJavaDefault  = hasFlag(DEFERRED | JAVA_DEFAULTMETHOD)
-  def isDeferredNotJavaDefault = isDeferred && !hasFlag(JAVA_DEFAULTMETHOD)
 
   def flagBitsToString(bits: Long): String = {
     // Fast path for common case

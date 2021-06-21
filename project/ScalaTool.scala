@@ -1,11 +1,11 @@
+package scala.build
+
 import sbt._
 import org.apache.commons.lang3.SystemUtils
 import org.apache.commons.lang3.StringUtils.replaceEach
 
 /**
  * A class that generates a shell or batch script to execute a Scala program.
- *
- * This is a simplified copy of Ant task (see scala.tools.ant.ScalaTool).
  */
 case class ScalaTool(mainClass: String,
                      classpath: List[String],
@@ -27,12 +27,12 @@ case class ScalaTool(mainClass: String,
       } else classpath.mkString(":").replace('\\', '/').replaceAll(varRegex, """\${$1}""")
 
     val variables = Map(
-      ("@@"           -> "@"), // for backwards compatibility
-      ("@class@"      -> mainClass),
-      ("@properties@" -> (properties map { case (k, v) => s"""-D$k="$v""""} mkString " ")),
-      ("@javaflags@"  -> javaOpts),
-      ("@toolflags@"  -> toolFlags),
-      ("@classpath@"  -> platformClasspath)
+      "@@"           -> "@", // for backwards compatibility
+      "@class@"      -> mainClass,
+      "@properties@" -> (properties map { case (k, v) => s"""-D$k="$v""""} mkString " "),
+      "@javaflags@"  -> javaOpts,
+      "@toolflags@"  -> toolFlags,
+      "@classpath@"  -> platformClasspath
     )
 
     val (from, to) = variables.unzip

@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author Paul Phillips
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
@@ -19,7 +26,7 @@ abstract class Pasted(prompt: String) {
   def interpret(line: String): IR.Result
   def echo(message: String): Unit
 
-  val PromptString    = prompt.lines.toList.last
+  val PromptString    = prompt.linesIterator.toList.last
   val AltPromptString = "scala> "
   val ContinuePrompt  = replProps.continuePrompt
   val ContinueString  = replProps.continueText     // "     | "
@@ -38,10 +45,9 @@ abstract class Pasted(prompt: String) {
   def matchesContinue(line: String) = matchesString(line, ContinueString)
   def running = isRunning
 
-  private def matchesString(line: String, target: String): Boolean = (
-    (line startsWith target) ||
-    (line.nonEmpty && spacey(line.head) && matchesString(line.tail, target))
-  )
+  private def matchesString(line: String, target: String): Boolean =
+    line.startsWith(target) || (line.nonEmpty && spacey(line.head) && matchesString(line.tail, target))
+
   private def stripString(line: String, target: String) = line indexOf target match {
     case -1   => line
     case idx  => line drop (idx + target.length)

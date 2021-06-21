@@ -1,7 +1,15 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
+
 package scala.tools.nsc
 package ast.parser
 
@@ -9,11 +17,39 @@ import scala.tools.nsc.util.{ CharArrayReader, CharArrayReaderData }
 import scala.reflect.internal.util._
 import scala.reflect.internal.Chars._
 import Tokens._
-import scala.annotation.{ switch, tailrec }
+import scala.annotation.{switch, tailrec}
 import scala.collection.mutable
-import mutable.{ ListBuffer, ArrayBuffer }
+import mutable.{ArrayBuffer, ListBuffer}
 import scala.tools.nsc.ast.parser.xml.Utility.isNameStart
-import scala.language.postfixOps
+import java.lang.StringBuilder
+
+import scala.tools.nsc.Reporting.WarningCategory
+
+object Cbuf {
+  final val TargetCapacity = 256
+
+  def create(): StringBuilder = new StringBuilder(TargetCapacity)
+
+  implicit class StringBuilderOps(val sb: StringBuilder) extends AnyVal {
+    def clear(): Unit = {
+      if (sb.capacity() > TargetCapacity) {
+        sb.setLength(TargetCapacity)
+        sb.trimToSize()
+      }
+      sb.setLength(0)
+    }
+    def toCharArray: Array[Char] = {
+      val n = sb.length()
+      val res = new Array[Char](n)
+      sb.getChars(0, n, res, 0)
+      res
+    }
+    def isEmpty = sb.length() == 0
+    def last = sb.charAt(sb.length() - 1)
+  }
+}
+
+import Cbuf.StringBuilderOps
 
 /** See Parsers.scala / ParsersCommon for some explanation of ScannersCommon.
  */
@@ -32,10 +68,35 @@ trait ScannersCommon {
   }
 
   trait ScannerCommon extends CommonTokenData {
+    /** Consume and discard the next token. */
+    def nextToken(): Unit
+
     // things to fill in, in addition to buf, decodeUni which come from CharArrayReader
     def error(off: Offset, msg: String): Unit
     def incompleteInputError(off: Offset, msg: String): Unit
+    def warning(off: Offset, msg: String, category: WarningCategory): Unit
     def deprecationWarning(off: Offset, msg: String, since: String): Unit
+  }
+
+  // Hooks for ScaladocUnitScanner and ScaladocJavaUnitScanner
+  trait DocScanner {
+    protected def beginDocComment(prefix: String): Unit = {}
+    protected def processCommentChar(): Unit = {}
+    protected def finishDocComment(): Unit = {}
+
+    private var lastDoc: DocComment = null
+    // get last doc comment
+    def flushDoc(): DocComment = try lastDoc finally lastDoc = null
+    def registerDocComment(raw: String, pos: Position) = {
+      lastDoc = DocComment(raw, pos)
+      signalParsedDocComment(raw, pos)
+    }
+
+    /** To prevent doc comments attached to expressions from leaking out of scope
+      *  onto the next documentable entity, they are discarded upon passing a right
+      *  brace, bracket, or parenthesis.
+      */
+    def discardDocBuffer(): Unit = {}
   }
 
   def createKeywordArray(keywords: Seq[(Name, Token)], defaultToken: Token): (Token, Array[Token]) = {
@@ -103,11 +164,11 @@ trait Scanners extends ScannersCommon {
     }
   }
 
-  abstract class Scanner extends CharArrayReader with TokenData with ScannerData with ScannerCommon {
+  abstract class Scanner extends CharArrayReader with TokenData with ScannerData with ScannerCommon with DocScanner {
     private def isDigit(c: Char) = java.lang.Character isDigit c
 
     private var openComments = 0
-    protected def putCommentChar(): Unit = nextChar()
+    final protected def putCommentChar(): Unit = { processCommentChar(); nextChar() }
 
     @tailrec private def skipLineComment(): Unit = ch match {
       case SU | CR | LF =>
@@ -134,8 +195,6 @@ trait Scanners extends ScannersCommon {
       case SU  => incompleteInputError("unclosed comment")
       case _   => putCommentChar() ; skipNestedComments()
     }
-    def skipDocComment(): Unit = skipNestedComments()
-    def skipBlockComment(): Unit = skipNestedComments()
 
     private def skipToCommentEnd(isLineComment: Boolean): Unit = {
       nextChar()
@@ -147,27 +206,23 @@ trait Scanners extends ScannersCommon {
           // Check for the amazing corner case of /**/
           if (ch == '/')
             nextChar()
-          else
-            skipDocComment()
+          else {
+            beginDocComment("/**")
+            skipNestedComments()
+          }
         }
-        else skipBlockComment()
+        else skipNestedComments()
       }
     }
 
     /** @pre ch == '/'
      *  Returns true if a comment was skipped.
      */
-    def skipComment(): Boolean = ch match {
-      case '/' | '*' => skipToCommentEnd(isLineComment = ch == '/') ; true
+    final def skipComment(): Boolean = ch match {
+      case '/' | '*' => skipToCommentEnd(isLineComment = ch == '/') ; finishDocComment(); true
       case _         => false
     }
-    def flushDoc(): DocComment = null
 
-    /** To prevent doc comments attached to expressions from leaking out of scope
-     *  onto the next documentable entity, they are discarded upon passing a right
-     *  brace, bracket, or parenthesis.
-     */
-    def discardDocBuffer(): Unit = ()
 
     def isAtEnd = charOffset >= buf.length
 
@@ -246,6 +301,14 @@ trait Scanners extends ScannersCommon {
     private def inMultiLineInterpolation =
       inStringInterpolation && sepRegions.tail.nonEmpty && sepRegions.tail.head == STRINGPART
 
+    /** Are we in a `${ }` block? such that RBRACE exits back into multiline string. */
+    private def inMultiLineInterpolatedExpression = {
+      sepRegions match {
+        case RBRACE :: STRINGLIT :: STRINGPART :: rest => true
+        case _ => false
+      }
+    }
+
     /** read next token and return last offset
      */
     def skipToken(): Offset = {
@@ -266,6 +329,16 @@ trait Scanners extends ScannersCommon {
       } finally {
         allowIdent = prev
       }
+    }
+
+    /** Advance beyond a case token without marking the CASE in sepRegions.
+     *  This method should be called to skip beyond CASE tokens that are
+     *  not part of matches, i.e. no ARROW is expected after them.
+     */
+    def skipCASE(): Unit = {
+      assert(token == CASE, s"Internal error: skipCASE() called on non-case token $token")
+      nextToken()
+      sepRegions = sepRegions.tail
     }
 
     /** Produce next token, filling TokenData fields of Scanner.
@@ -312,7 +385,7 @@ trait Scanners extends ScannersCommon {
           lastOffset -= 1
         }
         if (inStringInterpolation) fetchStringPart() else fetchToken()
-        if(token == ERROR) {
+        if (token == ERROR) {
           if (inMultiLineInterpolation)
             sepRegions = sepRegions.tail.tail
           else if (inStringInterpolation)
@@ -363,6 +436,17 @@ trait Scanners extends ScannersCommon {
           next copyFrom this
           this copyFrom prev
         }
+      } else if (token == COMMA) {
+        // SIP-27 Trailing Comma (multi-line only) support
+        // If a comma is followed by a new line & then a closing paren, bracket or brace
+        // then it is a trailing comma and is ignored
+        val saved = new ScannerData {} copyFrom this
+        fetchToken()
+        if (afterLineEnd() && (token == RPAREN || token == RBRACKET || token == RBRACE)) {
+          /* skip the trailing comma */
+        } else if (token == EOF) { // e.g. when the REPL is parsing "val List(x, y, _*,"
+          /* skip the trailing comma */
+        } else this copyFrom saved
       }
 
 //      print("["+this+"]")
@@ -509,6 +593,23 @@ trait Scanners extends ScannersCommon {
           }
           fetchDoubleQuote()
         case '\'' =>
+          def unclosedCharLit() = {
+            val unclosed = "unclosed character literal"
+            // advise if previous token was Symbol contiguous with the orphan single quote at offset
+            val msg = {
+              val maybeMistakenQuote =
+                this match {
+                  case sfs: SourceFileScanner =>
+                    val wholeLine = sfs.source.lineToString(sfs.source.offsetToLine(offset))
+                    wholeLine.count(_ == '\'') > 1
+                  case _ => false
+                }
+              if (token == SYMBOLLIT && offset == lastOffset) s"""$unclosed (or use " for string literal "$strVal")"""
+              else if (maybeMistakenQuote) s"""$unclosed (or use " not ' for string literal)"""
+              else unclosed
+            }
+            syntaxError(msg)
+          }
           def fetchSingleQuote() = {
             nextChar()
             if (isIdentifierStart(ch))
@@ -516,17 +617,25 @@ trait Scanners extends ScannersCommon {
             else if (isOperatorPart(ch) && (ch != '\\'))
               charLitOr(getOperatorRest)
             else if (!isAtEnd && (ch != SU && ch != CR && ch != LF || isUnicodeEscape)) {
+              val isEmptyCharLit = (ch == '\'')
               getLitChar()
               if (ch == '\'') {
-                nextChar()
-                token = CHARLIT
-                setStrVal()
+                if (isEmptyCharLit && currentRun.isScala213)
+                  syntaxError("empty character literal (use '\\'' for single quote)")
+                else {
+                  if (isEmptyCharLit)
+                    deprecationWarning("deprecated syntax for character literal (use '\\'' for single quote)", "2.12.2")
+                  nextChar()
+                  token = CHARLIT
+                  setStrVal()
+                }
+              } else if (isEmptyCharLit) {
+                syntaxError("empty character literal")
               } else {
-                syntaxError("unclosed character literal")
+                unclosedCharLit()
               }
             }
-            else
-              syntaxError("unclosed character literal")
+            else unclosedCharLit()
           }
           fetchSingleQuote()
         case '.' =>
@@ -547,7 +656,8 @@ trait Scanners extends ScannersCommon {
         case ')' =>
           nextChar(); token = RPAREN
         case '}' =>
-          nextChar(); token = RBRACE
+          if (inMultiLineInterpolatedExpression) nextRawChar() else nextChar()
+          token = RBRACE
         case '[' =>
           nextChar(); token = LBRACKET
         case ']' =>
@@ -757,7 +867,7 @@ trait Scanners extends ScannersCommon {
             next.token = kwArray(idx)
           }
         } else {
-          syntaxError("invalid string interpolation: `$$', `$'ident or `$'BlockExpr expected")
+          syntaxError(s"invalid string interpolation $$$ch, expected: $$$$, $$identifier or $${expression}")
         }
       } else {
         val isUnclosedLiteral = !isUnicodeEscape && (ch == SU || (!multiLine && (ch == CR || ch == LF)))
@@ -948,23 +1058,45 @@ trait Scanners extends ScannersCommon {
 
     def intVal: Long = intVal(negated = false)
 
-    /** Convert current strVal, base to double value
+    private val zeroFloat = raw"[0.]+(?:[eE][+-]?[0-9]+)?[fFdD]?".r
+
+    /** Convert current strVal, base to float value.
      */
-    def floatVal(negated: Boolean): Double = {
-      val limit: Double = if (token == DOUBLELIT) Double.MaxValue else Float.MaxValue
+    def floatVal(negated: Boolean): Float = {
       try {
-        val value: Double = java.lang.Double.valueOf(strVal).doubleValue()
-        if (value > limit)
+        val value: Float = java.lang.Float.parseFloat(strVal)
+        if (value > Float.MaxValue)
           syntaxError("floating point number too large")
+        if (value == 0.0f && !zeroFloat.pattern.matcher(strVal).matches)
+          syntaxError("floating point number too small")
         if (negated) -value else value
       } catch {
         case _: NumberFormatException =>
           syntaxError("malformed floating point number")
+          0.0f
+      }
+    }
+
+    def floatVal: Float = floatVal(negated = false)
+
+    /** Convert current strVal, base to double value.
+     */
+    def doubleVal(negated: Boolean): Double = {
+      try {
+        val value: Double = java.lang.Double.parseDouble(strVal)
+        if (value > Double.MaxValue)
+          syntaxError("double precision floating point number too large")
+        if (value == 0.0d && !zeroFloat.pattern.matcher(strVal).matches)
+          syntaxError("double precision floating point number too small")
+        if (negated) -value else value
+      } catch {
+        case _: NumberFormatException =>
+          syntaxError("malformed double precision floating point number")
           0.0
       }
     }
 
-    def floatVal: Double = floatVal(negated = false)
+    def doubleVal: Double = doubleVal(negated = false)
 
     def checkNoLetter(): Unit = {
       if (isIdentifierPart(ch) && ch >= ' ')
@@ -1160,6 +1292,8 @@ trait Scanners extends ScannersCommon {
 
   final val token2name = (allKeywords map (_.swap)).toMap
 
+  final val softModifierNames = Set(nme.open, nme.infix)
+
 // Token representation ----------------------------------------------------
 
   /** Returns the string representation of given token. */
@@ -1197,13 +1331,14 @@ trait Scanners extends ScannersCommon {
   class MalformedInput(val offset: Offset, val msg: String) extends Exception
 
   /** A scanner for a given source file not necessarily attached to a compilation unit.
-   *  Useful for looking inside source files that aren not currently compiled to see what's there
+   *  Useful for looking inside source files that are not currently compiled to see what's there
    */
   class SourceFileScanner(val source: SourceFile) extends Scanner {
     val buf = source.content
     override val decodeUni: Boolean = !settings.nouescape
 
     // suppress warnings, throw exception on errors
+    def warning(off: Offset, msg: String, category: WarningCategory): Unit = ()
     def deprecationWarning(off: Offset, msg: String, since: String): Unit = ()
     def error(off: Offset, msg: String): Unit = throw new MalformedInput(off, msg)
     def incompleteInputError(off: Offset, msg: String): Unit = throw new MalformedInput(off, msg)
@@ -1214,9 +1349,10 @@ trait Scanners extends ScannersCommon {
   class UnitScanner(val unit: CompilationUnit, patches: List[BracePatch]) extends SourceFileScanner(unit.source) {
     def this(unit: CompilationUnit) = this(unit, List())
 
-    override def deprecationWarning(off: Offset, msg: String, since: String) = currentRun.reporting.deprecationWarning(unit.position(off), msg, since)
-    override def error(off: Offset, msg: String)                             = reporter.error(unit.position(off), msg)
-    override def incompleteInputError(off: Offset, msg: String)              = currentRun.parsing.incompleteInputError(unit.position(off), msg)
+    override def warning(off: Offset, msg: String, category: WarningCategory): Unit   = runReporting.warning(unit.position(off), msg, category, site = "")
+    override def deprecationWarning(off: Offset, msg: String, since: String)          = runReporting.deprecationWarning(unit.position(off), msg, since, site = "", origin = "")
+    override def error(off: Offset, msg: String)                                      = reporter.error(unit.position(off), msg)
+    override def incompleteInputError(off: Offset, msg: String)                       = currentRun.parsing.incompleteInputError(unit.position(off), msg)
 
     private var bracePatches: List[BracePatch] = patches
 
@@ -1267,7 +1403,7 @@ trait Scanners extends ScannersCommon {
     /** The source code with braces and line starts annotated with [NN] showing the index */
     private def markedSource = {
       val code   = unit.source.content
-      val braces = code.indices filter (idx => "{}\n" contains code(idx)) toSet;
+      val braces = code.indices filter (idx => "{}\n" contains code(idx)) toSet
       val mapped = code.indices map (idx => if (braces(idx)) s"${code(idx)}[$idx]" else "" + code(idx))
       mapped.mkString("")
     }

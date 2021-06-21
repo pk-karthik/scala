@@ -1,7 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2007-2013 LAMP/EPFL
- * @author Manohar Jonnalagedda
- * @author Gilles Dubochet
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
@@ -256,11 +262,11 @@ trait DocTemplateEntity extends MemberTemplateEntity {
     * only if the `docsourceurl` setting has been set. */
   def sourceUrl: Option[java.net.URL]
 
-  /** All class, trait and object templates which are part of this template's linearization, in lineratization order.
+  /** All class, trait and object templates which are part of this template's linearization, in linearization order.
     * This template's linearization contains all of its direct and indirect super-classes and super-traits. */
   def linearizationTemplates: List[TemplateEntity]
 
-  /** All instantiated types which are part of this template's linearization, in lineratization order.
+  /** All instantiated types which are part of this template's linearization, in linearization order.
     * This template's linearization contains all of its direct and indirect super-types. */
   def linearizationTypes: List[TypeEntity]
 
@@ -511,11 +517,11 @@ trait ImplicitConversion {
 
 /** Shadowing captures the information that the member is shadowed by some other members
  *  There are two cases of implicitly added member shadowing:
- *  1) shadowing from a original class member (the class already has that member)
+ *  1) shadowing from an original class member (the class already has that member)
  *     in this case, it won't be possible to call the member directly, the type checker will fail attempting to adapt
- *     the call arguments (or if they fit it will call the original class' method)
+ *     the call arguments (or if they fit it will call the original class method)
  *  2) shadowing from other possible implicit conversions ()
- *     this will result in an ambiguous implicit converion error
+ *     this will result in an ambiguous implicit conversion error
  */
 trait ImplicitMemberShadowing {
   /** The members that shadow the current entry use .inTemplate to get to the template name */
@@ -526,8 +532,8 @@ trait ImplicitMemberShadowing {
       assert(ambiguatingMembers.foreach(_.byConversion.isDefined) */
   def ambiguatingMembers: List[MemberEntity]
 
-  def isShadowed: Boolean = !shadowingMembers.isEmpty
-  def isAmbiguous: Boolean = !ambiguatingMembers.isEmpty
+  def isShadowed: Boolean = shadowingMembers.nonEmpty
+  def isAmbiguous: Boolean = ambiguatingMembers.nonEmpty
 }
 
 /** A trait that encapsulates a constraint necessary for implicit conversion */

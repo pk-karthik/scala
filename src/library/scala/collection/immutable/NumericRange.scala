@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2006-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -30,12 +34,12 @@ package immutable
  *  }}}
  *
  *  @author  Paul Phillips
- *  @version 2.8
  *  @define Coll `NumericRange`
  *  @define coll numeric range
  *  @define mayNotTerminateInf
  *  @define willNotTerminateInf
  */
+@SerialVersionUID(-5580158174769432538L)
 abstract class NumericRange[T]
   (val start: T, val end: T, val step: T, val isInclusive: Boolean)
   (implicit num: Integral[T])
@@ -114,15 +118,20 @@ extends AbstractSeq[T] with IndexedSeq[T] with Serializable {
   import NumericRange.defaultOrdering
 
   override def min[T1 >: T](implicit ord: Ordering[T1]): T =
-    if (ord eq defaultOrdering(num)) {
-      if (num.signum(step) > 0) start
+    // We can take the fast path:
+    // - If the Integral of this NumericRange is also the requested Ordering
+    //   (Integral <: Ordering). This can happen for custom Integral types.
+    // - The Ordering is the default Ordering of a well-known Integral type.
+    if ((ord eq num) || defaultOrdering.get(num).exists(ord eq _)) {
+      if (num.signum(step) > 0) head
       else last
     } else super.min(ord)
 
   override def max[T1 >: T](implicit ord: Ordering[T1]): T =
-    if (ord eq defaultOrdering(num)) {
+    // See comment for fast path in min().
+    if ((ord eq num) || defaultOrdering.get(num).exists(ord eq _)) {
       if (num.signum(step) > 0) last
-      else start
+      else head
     } else super.max(ord)
 
   // Motivated by the desire for Double ranges with BigDecimal precision,
@@ -357,6 +366,7 @@ object NumericRange {
     }
   }
 
+  @SerialVersionUID(-5986512874781685419L)
   class Inclusive[T](start: T, end: T, step: T)(implicit num: Integral[T])
   extends NumericRange(start, end, step, true) {
     def copy(start: T, end: T, step: T): Inclusive[T] =
@@ -365,6 +375,7 @@ object NumericRange {
     def exclusive: Exclusive[T] = NumericRange(start, end, step)
   }
 
+  @SerialVersionUID(-7058074814271573640L)
   class Exclusive[T](start: T, end: T, step: T)(implicit num: Integral[T])
   extends NumericRange(start, end, step, false) {
     def copy(start: T, end: T, step: T): Exclusive[T] =

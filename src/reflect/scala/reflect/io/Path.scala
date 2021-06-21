@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author Paul Phillips
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala
@@ -12,7 +19,6 @@ import scala.language.implicitConversions
 import java.io.{ RandomAccessFile, File => JFile }
 import java.net.{ URI, URL }
 import scala.util.Random.alphanumeric
-import scala.reflect.internal.util.Statistics
 
 /** An abstraction for filesystem paths.  The differences between
  *  Path, File, and Directory are primarily to communicate intent.
@@ -33,14 +39,10 @@ import scala.reflect.internal.util.Statistics
 object Path {
   def isExtensionJarOrZip(jfile: JFile): Boolean = isExtensionJarOrZip(jfile.getName)
   def isExtensionJarOrZip(name: String): Boolean = {
-    val ext = extension(name)
-    ext == "jar" || ext == "zip"
+    name.endsWith(".jar") || name.endsWith(".zip")
   }
   def extension(name: String): String = {
-    var i = name.length - 1
-    while (i >= 0 && name.charAt(i) != '.')
-      i -= 1
-
+    val i = name.lastIndexOf('.')
     if (i < 0) ""
     else name.substring(i + 1).toLowerCase
   }
@@ -58,12 +60,12 @@ object Path {
   def apply(path: String): Path = apply(new JFile(path))
   def apply(jfile: JFile): Path = try {
     def isFile = {
-      if (Statistics.canEnable) Statistics.incCounter(IOStats.fileIsFileCount)
+      //if (settings.areStatisticsEnabled) Statistics.incCounter(IOStats.fileIsFileCount)
       jfile.isFile
     }
 
     def isDirectory = {
-      if (Statistics.canEnable) Statistics.incCounter(IOStats.fileIsDirectoryCount)
+      //if (settings.areStatisticsEnabled) Statistics.incCounter(IOStats.fileIsDirectoryCount)
       jfile.isDirectory
     }
 
@@ -107,19 +109,20 @@ class Path private[io] (val jfile: JFile) {
   def /(child: Directory): Directory = /(child: Path).toDirectory
   def /(child: File): File = /(child: Path).toFile
 
-  /** If this path is a container, recursively iterate over its contents.
+  /** If this path is a directory, recursively iterate over its contents.
    *  The supplied condition is a filter which is applied to each element,
-   *  with that branch of the tree being closed off if it is true.  So for
-   *  example if the condition is true for some subdirectory, nothing
-   *  under that directory will be in the Iterator; but otherwise each
-   *  file and subdirectory underneath it will appear.
+   *  with that branch of the tree being closed off if it is false.
+   *  So for example if the condition is false for some subdirectory, nothing
+   *  under that directory will be in the Iterator. If it's true, all files for
+   *  which the condition holds and are directly in that subdirectory are in the
+   *  Iterator, and all sub-subdirectories are recursively evaluated
    */
   def walkFilter(cond: Path => Boolean): Iterator[Path] =
     if (isFile) toFile walkFilter cond
     else if (isDirectory) toDirectory walkFilter cond
     else Iterator.empty
 
-  /** Equivalent to walkFilter(_ => false).
+  /** Equivalent to walkFilter(_ => true).
    */
   def walk: Iterator[Path] = walkFilter(_ => true)
 
@@ -198,16 +201,16 @@ class Path private[io] (val jfile: JFile) {
   def canRead = jfile.canRead()
   def canWrite = jfile.canWrite()
   def exists = {
-    if (Statistics.canEnable) Statistics.incCounter(IOStats.fileExistsCount)
+    //if (settings.areStatisticsEnabled) Statistics.incCounter(IOStats.fileExistsCount)
     try jfile.exists() catch { case ex: SecurityException => false }
   }
 
   def isFile = {
-    if (Statistics.canEnable) Statistics.incCounter(IOStats.fileIsFileCount)
+    //if (settings.areStatisticsEnabled) Statistics.incCounter(IOStats.fileIsFileCount)
     try jfile.isFile() catch { case ex: SecurityException => false }
   }
   def isDirectory = {
-    if (Statistics.canEnable) Statistics.incCounter(IOStats.fileIsDirectoryCount)
+    //if (settings.areStatisticsEnabled) Statistics.incCounter(IOStats.fileIsDirectoryCount)
     try jfile.isDirectory() catch { case ex: SecurityException => jfile.getPath == "." }
   }
   def isAbsolute = jfile.isAbsolute()

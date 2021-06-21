@@ -1,12 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
-
-
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -30,7 +32,6 @@ import scala.annotation.migration
  *
  *  @author  Martin Odersky
  *  @author  Matthias Zenger
- *  @version 2.8
  *  @since   2.8
  *  @define buffernote @note
  *    This trait provides most of the operations of a `Buffer` independently of its representation.
@@ -100,7 +101,7 @@ trait BufferLike[A, +This <: BufferLike[A, This] with Buffer[A]]
     *
     *  @param n  the index which refers to the element to delete.
     *  @return   the previous element at index `n`
-    *   @throws   IndexOutOfBoundsException if the if the index `n` is not in the valid range
+    *  @throws   IndexOutOfBoundsException if the index `n` is not in the valid range
     *            `0 <= n < length`.
     */
   def remove(n: Int): A

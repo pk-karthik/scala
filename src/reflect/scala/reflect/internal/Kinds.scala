@@ -1,6 +1,13 @@
-/* NSC -- new scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala
@@ -145,7 +152,7 @@ trait Kinds {
           kindErrors = f(kindErrors)
       }
 
-      if (settings.debug) {
+      if (settings.isDebug) {
         log("checkKindBoundsHK expected: "+ param +" with params "+ hkparams +" by definition in "+ paramowner)
         log("checkKindBoundsHK supplied: "+ arg +" with params "+ hkargs +" from "+ owner)
         log("checkKindBoundsHK under params: "+ underHKParams +" with args "+ withHKArgs)
@@ -184,7 +191,7 @@ trait Kinds {
           )
         }
         else {
-          hkarg.initialize // SI-7902 otherwise hkarg.typeParams yields List(NoSymbol)!
+          hkarg.initialize // scala/bug#7902 otherwise hkarg.typeParams yields List(NoSymbol)!
           debuglog("checkKindBoundsHK recursing to compare params of "+ hkparam +" with "+ hkarg)
           kindErrors ++= checkKindBoundsHK(
             hkarg.typeParams,
@@ -202,7 +209,7 @@ trait Kinds {
       else NoKindErrors
     }
 
-    if (settings.debug && (tparams.nonEmpty || targs.nonEmpty)) log(
+    if (settings.isDebug && (tparams.nonEmpty || targs.nonEmpty)) log(
       "checkKindBounds0(" + tparams + ", " + targs + ", " + pre + ", "
       + owner + ", " + explainErrors + ")"
     )

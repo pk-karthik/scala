@@ -1,13 +1,19 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala
 package reflect
 package internal
 
-import java.lang.Integer.toOctalString
 import scala.annotation.switch
 
 trait Constants extends api.Constants {
@@ -83,13 +89,34 @@ trait Constants extends api.Constants {
     // !!! In what circumstance could `equalHashValue == that.equalHashValue && tag != that.tag` be true?
     override def equals(other: Any): Boolean = other match {
       case that: Constant =>
-        this.tag == that.tag && equalHashValue == that.equalHashValue
+        this.tag == that.tag && {
+          //
+          // Consider two `NaN`s to be identical, despite non-equality
+          // Consider -0d to be distinct from 0d, despite equality
+          //
+          // We use the raw versions (i.e. `floatToRawIntBits` rather than `floatToIntBits`)
+          // to avoid treating different encodings of `NaN` as the same constant.
+          // You probably can't express different `NaN` varieties as compile time
+          // constants in regular Scala code, but it is conceivable that you could
+          // conjure them with a macro.
+          //
+          this.tag match {
+            case NullTag =>
+              true
+            case FloatTag =>
+              floatToRawIntBits(value.asInstanceOf[Float]) == floatToRawIntBits(that.value.asInstanceOf[Float])
+            case DoubleTag =>
+              doubleToRawLongBits(value.asInstanceOf[Double]) == doubleToRawLongBits(that.value.asInstanceOf[Double])
+            case _ =>
+              this.value.equals(that.value)
+          }
+        }
       case _ => false
     }
 
     def isNaN = value match {
-      case f: Float  => f.isNaN
-      case d: Double => d.isNaN
+      case f: Float  => java.lang.Float.isNaN(f)
+      case d: Double => java.lang.Double.isNaN(d)
       case _ => false
     }
 
@@ -203,7 +230,7 @@ trait Constants extends api.Constants {
       else if (tag == ClazzTag) signature(typeValue)
       else value.toString()
 
-    @switch def escapedChar(ch: Char): String = ch match {
+    def escapedChar(ch: Char): String = (ch: @switch) match {
       case '\b' => "\\b"
       case '\t' => "\\t"
       case '\n' => "\\n"
@@ -212,7 +239,7 @@ trait Constants extends api.Constants {
       case '"'  => "\\\""
       case '\'' => "\\\'"
       case '\\' => "\\\\"
-      case _    => if (ch.isControl) "\\0" + toOctalString(ch.toInt) else String.valueOf(ch)
+      case _    => if (ch.isControl) "\\u%04X".format(ch.toInt) else String.valueOf(ch)
     }
 
     def escapedStringValue: String = {
@@ -243,28 +270,19 @@ trait Constants extends api.Constants {
     def typeValue: Type     = value.asInstanceOf[Type]
     def symbolValue: Symbol = value.asInstanceOf[Symbol]
 
-    /**
-     * Consider two `NaN`s to be identical, despite non-equality
-     * Consider -0d to be distinct from 0d, despite equality
-     *
-     * We use the raw versions (i.e. `floatToRawIntBits` rather than `floatToIntBits`)
-     * to avoid treating different encodings of `NaN` as the same constant.
-     * You probably can't express different `NaN` varieties as compile time
-     * constants in regular Scala code, but it is conceivable that you could
-     * conjure them with a macro.
-     */
-    private def equalHashValue: Any = value match {
-      case f: Float  => floatToRawIntBits(f)
-      case d: Double => doubleToRawLongBits(d)
-      case v         => v
-    }
-
     override def hashCode: Int = {
       import scala.util.hashing.MurmurHash3._
       val seed = 17
       var h = seed
       h = mix(h, tag.##) // include tag in the hash, otherwise 0, 0d, 0L, 0f collide.
-      h = mix(h, equalHashValue.##)
+      val valueHash = tag match {
+        case NullTag => 0
+        // We could just use value.hashCode here, at the cost of a collition between different NaNs
+        case FloatTag => java.lang.Integer.hashCode(floatToRawIntBits(value.asInstanceOf[Float]))
+        case DoubleTag => java.lang.Long.hashCode(doubleToRawLongBits(value.asInstanceOf[Double]))
+        case _ => value.hashCode()
+      }
+      h = mix(h, valueHash)
       finalizeHash(h, length = 2)
     }
   }

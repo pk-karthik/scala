@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala
 package reflect
 package macros
@@ -16,14 +28,14 @@ trait Evals {
    *  Can be used to perform compile-time computations on macro arguments to the extent
    *  permitted by the shape of the arguments.
    *
-   *  Known issues: because of [[https://issues.scala-lang.org/browse/SI-5748 https://issues.scala-lang.org/browse/SI-5748]]
+   *  Known issues: because of [[https://github.com/scala/bug/issues/5748 https://github.com/scala/bug/issues/5748]]
    *  trees being evaluated first need to undergo `untypecheck`. Resetting symbols and types
    *  mutates the tree in place, therefore the conventional approach is to `duplicate` the tree first.
    *
    *  {{{
    *  scala> def impl(c: Context)(x: c.Expr[String]) = {
    *       | val x1 = c.Expr[String](c.untypecheck(x.tree.duplicate))
-   *       | println(s"compile-time value is: ${c.eval(x1)}")
+   *       | println(s"compile-time value is: \${c.eval(x1)}")
    *       | x
    *       | }
    *  impl: (c: Context)(x: c.Expr[String])c.Expr[String]

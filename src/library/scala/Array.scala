@@ -1,19 +1,23 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2002-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 
 import scala.collection.generic._
-import scala.collection.{ mutable, immutable }
-import mutable.{ ArrayBuilder, ArraySeq }
-import scala.compat.Platform.arraycopy
-import scala.reflect.ClassTag
-import scala.runtime.ScalaRunTime.{ array_apply, array_update }
+import scala.collection.{immutable, mutable}
+import mutable.{ArrayBuilder, ArraySeq}
+import scala.reflect.{ClassTag, classTag}
+import scala.runtime.ScalaRunTime
+import scala.runtime.ScalaRunTime.{array_apply, array_update}
 
 /** Contains a fallback builder for arrays when the element type
  *  does not have a class tag. In that case a generic array is built.
@@ -45,23 +49,95 @@ class FallbackArrayBuilding {
  *  `Array(1, 2)`, `Array(0, 0)` and `Array(1, 2, 0, 0)`.
  *
  *  @author Martin Odersky
- *  @version 1.0
+ *  @since  1.0
  */
 object Array extends FallbackArrayBuilding {
-  val emptyBooleanArray = new Array[Boolean](0)
-  val emptyByteArray    = new Array[Byte](0)
-  val emptyCharArray    = new Array[Char](0)
-  val emptyDoubleArray  = new Array[Double](0)
-  val emptyFloatArray   = new Array[Float](0)
-  val emptyIntArray     = new Array[Int](0)
-  val emptyLongArray    = new Array[Long](0)
-  val emptyShortArray   = new Array[Short](0)
-  val emptyObjectArray  = new Array[Object](0)
 
-  implicit def canBuildFrom[T](implicit t: ClassTag[T]): CanBuildFrom[Array[_], T, Array[T]] =
+  val emptyBooleanArray = empty[Boolean]
+  val emptyByteArray    = empty[Byte]
+  val emptyCharArray    = empty[Char]
+  val emptyDoubleArray  = empty[Double]
+  val emptyFloatArray   = empty[Float]
+  val emptyIntArray     = empty[Int]
+  val emptyLongArray    = empty[Long]
+  val emptyShortArray   = empty[Short]
+
+  private[scala] //this is only private because of binary compatability
+  val emptyUnitArray    = empty[scala.runtime.BoxedUnit].asInstanceOf[Array[Unit]]
+  val emptyObjectArray  = empty[Object]
+
+  implicit def canBuildFrom[T](implicit tag: ClassTag[T]): CanBuildFrom[Array[_], T, Array[T]] = {
+    val cls = tag.runtimeClass
+    (if (cls.isPrimitive) {
+      cls match {
+        case java.lang.Integer.TYPE   => cbfIntArray
+        case java.lang.Double.TYPE    => cbfDoubleArray
+        case java.lang.Long.TYPE      => cbfLongArray
+        case java.lang.Float.TYPE     => cbfFloatArray
+        case java.lang.Character.TYPE => cbfCharArray
+        case java.lang.Byte.TYPE      => cbfByteArray
+        case java.lang.Short.TYPE     => cbfShortArray
+        case java.lang.Boolean.TYPE   => cbfBooleanArray
+        case java.lang.Void.TYPE      => cbfUnitArray
+      }
+    } else if (cls == ObjectClass) {
+      cbfObjectArray
+    } else {
+      refCBF[T with AnyRef](tag.asInstanceOf[ClassTag[T with AnyRef]])
+    }).asInstanceOf[CanBuildFrom[Array[_], T, Array[T]]]
+  }
+  private[this] val ObjectClass = classOf[Object]
+
+  private[this] val cbfBooleanArray = new CanBuildFrom[Array[_], Boolean, Array[Boolean]] {
+    def apply(from: Array[_]) = new ArrayBuilder.ofBoolean()
+    def apply() = new ArrayBuilder.ofBoolean()
+  }
+
+  private[this] val cbfByteArray    = new CanBuildFrom[Array[_], Byte, Array[Byte]] {
+    def apply(from: Array[_]) = new ArrayBuilder.ofByte()
+    def apply() = new ArrayBuilder.ofByte()
+  }
+
+  private[this] val cbfCharArray    = new CanBuildFrom[Array[_], Char, Array[Char]] {
+    def apply(from: Array[_]) = new ArrayBuilder.ofChar()
+    def apply() = new ArrayBuilder.ofChar()
+  }
+
+  private[this] val cbfDoubleArray  = new CanBuildFrom[Array[_], Double, Array[Double]] {
+    def apply(from: Array[_]) = new ArrayBuilder.ofDouble()
+    def apply() = new ArrayBuilder.ofDouble()
+  }
+
+  private[this] val cbfFloatArray   = new CanBuildFrom[Array[_], Float, Array[Float]] {
+    def apply(from: Array[_]) = new ArrayBuilder.ofFloat()
+    def apply() = new ArrayBuilder.ofFloat()
+  }
+
+  private[this] val cbfIntArray     = new CanBuildFrom[Array[_], Int, Array[Int]] {
+    def apply(from: Array[_]) = new ArrayBuilder.ofInt()
+    def apply() = new ArrayBuilder.ofInt()
+  }
+
+  private[this] val cbfLongArray    = new CanBuildFrom[Array[_], Long, Array[Long]] {
+    def apply(from: Array[_]) = new ArrayBuilder.ofLong()
+    def apply() = new ArrayBuilder.ofLong()
+  }
+
+  private[this] val cbfShortArray   = new CanBuildFrom[Array[_], Short, Array[Short]] {
+    def apply(from: Array[_]) = new ArrayBuilder.ofShort()
+    def apply() = new ArrayBuilder.ofShort()
+  }
+
+  private[this] val cbfUnitArray    = new CanBuildFrom[Array[_], Unit, Array[Unit]] {
+    def apply(from: Array[_]) = new ArrayBuilder.ofUnit()
+    def apply() = new ArrayBuilder.ofUnit()
+  }
+
+  private[this] val cbfObjectArray  = refCBF[Object]
+  private[this] def refCBF[T <: AnyRef](implicit t: ClassTag[T]): CanBuildFrom[Array[_], T, Array[T]] =
     new CanBuildFrom[Array[_], T, Array[T]] {
-      def apply(from: Array[_]) = ArrayBuilder.make[T]()(t)
-      def apply() = ArrayBuilder.make[T]()(t)
+      def apply(from: Array[_]) = new ArrayBuilder.ofRef[T]()(t)
+      def apply() = new ArrayBuilder.ofRef[T]()(t)
     }
 
   /**
@@ -102,14 +178,15 @@ object Array extends FallbackArrayBuilding {
   def copy(src: AnyRef, srcPos: Int, dest: AnyRef, destPos: Int, length: Int) {
     val srcClass = src.getClass
     if (srcClass.isArray && dest.getClass.isAssignableFrom(srcClass))
-      arraycopy(src, srcPos, dest, destPos, length)
+      java.lang.System.arraycopy(src, srcPos, dest, destPos, length)
     else
       slowcopy(src, srcPos, dest, destPos, length)
   }
 
   /** Returns an array of length 0 */
-  def empty[T: ClassTag]: Array[T] = new Array[T](0)
-
+  def empty[T: ClassTag]: Array[T] =  {
+    implicitly[ClassTag[T]].emptyArray
+  }
   /** Creates an array with given elements.
    *
    *  @param xs the elements to put in the array
@@ -118,10 +195,20 @@ object Array extends FallbackArrayBuilding {
   // Subject to a compiler optimization in Cleanup.
   // Array(e0, ..., en) is translated to { val a = new Array(3); a(i) = ei; a }
   def apply[T: ClassTag](xs: T*): Array[T] = {
-    val array = new Array[T](xs.length)
-    var i = 0
-    for (x <- xs.iterator) { array(i) = x; i += 1 }
-    array
+    val len = xs.length
+    xs match {
+      case wa: mutable.WrappedArray[_] if wa.elemTag == classTag[T] =>
+        // We get here in test/files/run/sd760a.scala, `Array[T](t)` for
+        // a specialized type parameter `T`. While we still pay for two
+        // copies of the array it is better than before when we also boxed
+        // each element when populating the result.
+        ScalaRunTime.array_clone(wa.array).asInstanceOf[Array[T]]
+      case _ =>
+        val array = new Array[T](len)
+        var i = 0
+        for (x <- xs.iterator) { array(i) = x; i += 1 }
+        array
+    }
   }
 
   /** Creates an array of `Boolean` objects */
@@ -482,8 +569,8 @@ object Array extends FallbackArrayBuilding {
  *  `WrappedArray`.
  *
  *  @author Martin Odersky
- *  @version 1.0
- *  @see [[http://www.scala-lang.org/files/archive/spec/2.11/ Scala Language Specification]], for in-depth information on the transformations the Scala compiler makes on Arrays (Sections 6.6 and 6.15 respectively.)
+ *  @since  1.0
+ *  @see [[http://www.scala-lang.org/files/archive/spec/2.12/ Scala Language Specification]], for in-depth information on the transformations the Scala compiler makes on Arrays (Sections 6.6 and 6.15 respectively.)
  *  @see [[http://docs.scala-lang.org/sips/completed/scala-2-8-arrays.html "Scala 2.8 Arrays"]] the Scala Improvement Document detailing arrays since Scala 2.8.
  *  @see [[http://docs.scala-lang.org/overviews/collections/arrays.html "The Scala 2.8 Collections' API"]] section on `Array` by Martin Odersky for more information.
  *  @hideImplicitConversion scala.Predef.booleanArrayOps
@@ -496,16 +583,6 @@ object Array extends FallbackArrayBuilding {
  *  @hideImplicitConversion scala.Predef.refArrayOps
  *  @hideImplicitConversion scala.Predef.shortArrayOps
  *  @hideImplicitConversion scala.Predef.unitArrayOps
- *  @hideImplicitConversion scala.Predef._booleanArrayOps
- *  @hideImplicitConversion scala.Predef._byteArrayOps
- *  @hideImplicitConversion scala.Predef._charArrayOps
- *  @hideImplicitConversion scala.Predef._doubleArrayOps
- *  @hideImplicitConversion scala.Predef._floatArrayOps
- *  @hideImplicitConversion scala.Predef._intArrayOps
- *  @hideImplicitConversion scala.Predef._longArrayOps
- *  @hideImplicitConversion scala.Predef._refArrayOps
- *  @hideImplicitConversion scala.Predef._shortArrayOps
- *  @hideImplicitConversion scala.Predef._unitArrayOps
  *  @hideImplicitConversion scala.LowPriorityImplicits.wrapRefArray
  *  @hideImplicitConversion scala.LowPriorityImplicits.wrapIntArray
  *  @hideImplicitConversion scala.LowPriorityImplicits.wrapDoubleArray

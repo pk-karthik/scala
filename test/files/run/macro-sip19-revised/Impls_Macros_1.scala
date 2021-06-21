@@ -1,8 +1,13 @@
+// scalac: -language:experimental.macros
 import scala.reflect.macros.whitebox.Context
 
 object Macros {
   def impl(c: Context) = {
     import c.universe._
+
+    val thisMacro = c.macroApplication.symbol
+    val depth = c.enclosingMacros.count(_.macroApplication.symbol == thisMacro)
+    if (depth > 1) c.abort(c.enclosingPosition, "") // avoid StackOverflow
 
     val inscope = c.inferImplicitValue(c.mirror.staticClass("SourceLocation").toType)
     val outer = c.Expr[SourceLocation](if (!inscope.isEmpty) inscope else Literal(Constant(null)))

@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala.reflect
 package quasiquotes
 
@@ -85,10 +97,10 @@ trait Parsers { self: Quasiquotes =>
         // tq"$a => $b"
         override def makeFunctionTypeTree(argtpes: List[Tree], restpe: Tree): Tree = FunctionTypePlaceholder(argtpes, restpe)
 
-        // make q"val (x: T) = rhs" be equivalent to q"val x: T = rhs" for sake of bug compatibility (SI-8211)
-        override def makePatDef(mods: Modifiers, pat: Tree, rhs: Tree) = pat match {
-          case TuplePlaceholder(inParensPat :: Nil) => super.makePatDef(mods, inParensPat, rhs)
-          case _ => super.makePatDef(mods, pat, rhs)
+        // make q"val (x: T) = rhs" be equivalent to q"val x: T = rhs" for sake of bug compatibility (scala/bug#8211)
+        override def makePatDef(mods: Modifiers, pat: Tree, rhs: Tree, rhsPos: Position) = pat match {
+          case TuplePlaceholder(inParensPat :: Nil) => super.makePatDef(mods, inParensPat, rhs, rhsPos)
+          case _ => super.makePatDef(mods, pat, rhs, rhsPos)
         }
       }
       import treeBuilder.{global => _, unit => _}

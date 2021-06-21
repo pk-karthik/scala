@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala
@@ -24,8 +31,7 @@ trait Definitions extends api.StandardDefinitions {
   /** Since both the value parameter types and the result type may
    *  require access to the type parameter symbols, we model polymorphic
    *  creation as a function from those symbols to (formal types, result type).
-   *  The Option is to distinguish between nullary methods and empty-param-list
-   *  methods.
+   *  The Option is to distinguish between nullary methods and nilary methods.
    */
   private type PolyMethodCreator = List[Symbol] => (Option[List[Type]], Type)
 
@@ -81,7 +87,7 @@ trait Definitions extends api.StandardDefinitions {
       }
     }
 
-    private[Definitions] def classesMap[T](f: Name => T) = symbolsMap(ScalaValueClassesNoUnit, f)
+    private[Definitions] def classesMap[T](f: Name => T): Map[Symbol, T] = symbolsMap(ScalaValueClassesNoUnit, f)
     private def symbolsMap[T](syms: List[Symbol], f: Name => T): Map[Symbol, T] = mapFrom(syms)(x => f(x.name))
     private def symbolsMapFilt[T](syms: List[Symbol], p: Name => Boolean, f: Name => T) = symbolsMap(syms filter (x => p(x.name)), f)
 
@@ -93,6 +99,9 @@ trait Definitions extends api.StandardDefinitions {
     lazy val boxedClass       = classesMap(x => getClassByName(boxedName(x)))
     lazy val refClass         = classesMap(x => getRequiredClass("scala.runtime." + x + "Ref"))
     lazy val volatileRefClass = classesMap(x => getRequiredClass("scala.runtime.Volatile" + x + "Ref"))
+    lazy val lazyHolders      = symbolsMap(ScalaValueClasses, x => getClassIfDefined("scala.runtime.Lazy" + x))
+    lazy val LazyRefClass     = getClassIfDefined("scala.runtime.LazyRef")
+    lazy val LazyUnitClass    = getClassIfDefined("scala.runtime.LazyUnit")
 
     lazy val allRefClasses: Set[Symbol] = {
       refClass.values.toSet ++ volatileRefClass.values.toSet ++ Set(VolatileObjectRefClass, ObjectRefClass)
@@ -105,7 +114,7 @@ trait Definitions extends api.StandardDefinitions {
     )
 
     /** Is symbol a numeric value class? */
-    def isNumericValueClass(sym: Symbol) = ScalaNumericValueClasses contains sym
+    def isNumericValueClass(sym: Symbol) = ScalaNumericValueClassesSet contains sym
 
     def isGetClass(sym: Symbol) = (
          sym.name == nme.getClass_ // this condition is for performance only, this is called from `Typer#stabilize`.
@@ -148,6 +157,27 @@ trait Definitions extends api.StandardDefinitions {
       FloatClass,
       DoubleClass
     )
+    lazy val ScalaValueClassesSet: SymbolSet = new SymbolSet(ScalaValueClasses)
+    lazy val ScalaNumericValueClassesSet: SymbolSet = new SymbolSet(ScalaNumericValueClasses)
+    final class SymbolSet(syms: List[Symbol]) {
+      private[this] val ids: Array[Symbol] = syms.toArray
+      private[this] val commonOwner =
+        if (syms.isEmpty) null else {
+          val hhOwner = syms.head.rawowner
+          if (syms.tail.forall(_.rawowner == hhOwner)) hhOwner else null
+        }
+      final def contains(sym: Symbol): Boolean = {
+        if (commonOwner != null && (commonOwner ne sym.rawowner))
+          return false
+        val array = ids
+        var i = 0
+        while (i < array.length) {
+          if (array(i) eq sym) return true
+          i += 1
+        }
+        false
+      }
+    }
     def ScalaPrimitiveValueClasses: List[ClassSymbol] = ScalaValueClasses
 
     def underlyingOfValueClass(clazz: Symbol): Type =
@@ -161,11 +191,11 @@ trait Definitions extends api.StandardDefinitions {
 
     // It becomes tricky to create dedicated objects for other symbols because
     // of initialization order issues.
-    lazy val JavaLangPackage      = getPackage(TermName("java.lang"))
+    lazy val JavaLangPackage      = getPackage("java.lang")
     lazy val JavaLangPackageClass = JavaLangPackage.moduleClass.asClass
-    lazy val ScalaPackage         = getPackage(TermName("scala"))
+    lazy val ScalaPackage         = getPackage("scala")
     lazy val ScalaPackageClass    = ScalaPackage.moduleClass.asClass
-    lazy val RuntimePackage       = getPackage(TermName("scala.runtime"))
+    lazy val RuntimePackage       = getPackage("scala.runtime")
     lazy val RuntimePackageClass  = RuntimePackage.moduleClass.asClass
 
     def javaTypeToValueClass(jtype: Class[_]): Symbol = jtype match {
@@ -261,7 +291,7 @@ trait Definitions extends api.StandardDefinitions {
     // top types
     lazy val AnyClass    = enterNewClass(ScalaPackageClass, tpnme.Any, Nil, ABSTRACT) markAllCompleted
     lazy val AnyRefClass = newAlias(ScalaPackageClass, tpnme.AnyRef, ObjectTpe) markAllCompleted
-    lazy val ObjectClass = getRequiredClass(sn.Object.toString)
+    lazy val ObjectClass = getRequiredClass("java.lang.Object")
 
     // Cached types for core monomorphic classes
     lazy val AnyRefTpe       = AnyRefClass.tpe
@@ -288,8 +318,8 @@ trait Definitions extends api.StandardDefinitions {
       def AnyVal_getClass = getMemberMethod(AnyValClass, nme.getClass_)
 
     // bottom types
-    lazy val RuntimeNothingClass  = getClassByName(fulltpnme.RuntimeNothing)
-    lazy val RuntimeNullClass     = getClassByName(fulltpnme.RuntimeNull)
+    lazy val RuntimeNothingClass = requiredClass[scala.runtime.Nothing$]
+    lazy val RuntimeNullClass    = requiredClass[scala.runtime.Null$]
 
     sealed abstract class BottomClassSymbol(name: TypeName, parent: Symbol) extends ClassSymbol(ScalaPackageClass, NoPosition, name) {
       locally {
@@ -312,13 +342,14 @@ trait Definitions extends api.StandardDefinitions {
 
     // exceptions and other throwables
     lazy val ClassCastExceptionClass        = requiredClass[ClassCastException]
-    lazy val IndexOutOfBoundsExceptionClass = getClassByName(sn.IOOBException)
-    lazy val InvocationTargetExceptionClass = getClassByName(sn.InvTargetException)
+    lazy val IndexOutOfBoundsExceptionClass = getClassByName("java.lang.IndexOutOfBoundsException")
+    lazy val InvocationTargetExceptionClass = getClassByName("java.lang.reflect.InvocationTargetException")
     lazy val MatchErrorClass                = requiredClass[MatchError]
     lazy val NonLocalReturnControlClass     = requiredClass[scala.runtime.NonLocalReturnControl[_]]
-    lazy val NullPointerExceptionClass      = getClassByName(sn.NPException)
-    lazy val ThrowableClass                 = getClassByName(sn.Throwable)
+    lazy val NullPointerExceptionClass      = getClassByName("java.lang.NullPointerException")
+    lazy val ThrowableClass                 = getClassByName("java.lang.Throwable")
     lazy val UninitializedErrorClass        = requiredClass[UninitializedFieldError]
+    lazy val IllegalArgExceptionClass       = requiredClass[IllegalArgumentException]
 
     lazy val UninitializedFieldConstructor = UninitializedErrorClass.primaryConstructor
 
@@ -337,7 +368,7 @@ trait Definitions extends api.StandardDefinitions {
       def Sys_error    = getMemberMethod(SysPackage, nme.error)
 
     // Modules whose members are in the default namespace
-    // SI-5941: ScalaPackage and JavaLangPackage are never ever shared between mirrors
+    // scala/bug#5941: ScalaPackage and JavaLangPackage are never ever shared between mirrors
     // as a result, `Int` becomes `scala.Int` and `String` becomes `java.lang.String`
     // I could just change `isOmittablePrefix`, but there's more to it, so I'm leaving this as a todo for now
     lazy val UnqualifiedModules = List(PredefModule, ScalaPackage, JavaLangPackage)
@@ -347,6 +378,7 @@ trait Definitions extends api.StandardDefinitions {
     lazy val PredefModule               = requiredModule[scala.Predef.type]
          def Predef_wrapArray(tp: Type) = getMemberMethod(PredefModule, wrapArrayMethodName(tp))
          def Predef_???                 = getMemberMethod(PredefModule, nme.???)
+         def Predef_locally             = getMemberMethod(PredefModule, nme.locally)
     def isPredefMemberNamed(sym: Symbol, name: Name) = (
       (sym.name == name) && (sym.owner == PredefModule.moduleClass)
     )
@@ -362,7 +394,6 @@ trait Definitions extends api.StandardDefinitions {
     // classes with special meanings
     lazy val StringAddClass             = requiredClass[scala.runtime.StringAdd]
     lazy val ScalaNumberClass           = requiredClass[scala.math.ScalaNumber]
-    lazy val TraitSetterAnnotationClass = requiredClass[scala.runtime.TraitSetter]
     lazy val DelayedInitClass           = requiredClass[scala.DelayedInit]
       def delayedInitMethod = getMemberMethod(DelayedInitClass, nme.delayedInit)
 
@@ -391,11 +422,14 @@ trait Definitions extends api.StandardDefinitions {
     def isByName(param: Symbol)            = isByNameParamType(param.tpe_*)
     def isCastSymbol(sym: Symbol)          = sym == Any_asInstanceOf || sym == Object_asInstanceOf
 
-    def isJavaVarArgsMethod(m: Symbol)      = m.isMethod && isJavaVarArgs(m.info.params)
-    def isJavaVarArgs(params: Seq[Symbol])  = params.nonEmpty && isJavaRepeatedParamType(params.last.tpe)
-    def isScalaVarArgs(params: Seq[Symbol]) = params.nonEmpty && isScalaRepeatedParamType(params.last.tpe)
-    def isVarArgsList(params: Seq[Symbol])  = params.nonEmpty && isRepeatedParamType(params.last.tpe)
-    def isVarArgTypes(formals: Seq[Type])   = formals.nonEmpty && isRepeatedParamType(formals.last)
+    def isJavaVarArgsMethod(m: Symbol)      = m.isMethod && (m.rawInfo match {
+      case completer: LazyType => completer.isJavaVarargsMethod
+      case _ => isJavaVarArgs(m.info.params)
+    })
+    def isJavaVarArgs(params: Seq[Symbol])  = !params.isEmpty && isJavaRepeatedParamType(params.last.tpe)
+    def isScalaVarArgs(params: Seq[Symbol]) = !params.isEmpty && isScalaRepeatedParamType(params.last.tpe)
+    def isVarArgsList(params: Seq[Symbol])  = !params.isEmpty && isRepeatedParamType(params.last.tpe)
+    def isVarArgTypes(formals: Seq[Type])   = !formals.isEmpty && isRepeatedParamType(formals.last)
 
     def firstParamType(tpe: Type): Type = tpe.paramTypes match {
       case p :: _ => p
@@ -432,6 +466,7 @@ trait Definitions extends api.StandardDefinitions {
     lazy val IteratorClass          = requiredClass[scala.collection.Iterator[_]]
     lazy val IterableClass          = requiredClass[scala.collection.Iterable[_]]
     lazy val ListClass              = requiredClass[scala.collection.immutable.List[_]]
+         def List_cons              = getMemberMethod(ListClass, nme.CONS)
     lazy val SeqClass               = requiredClass[scala.collection.Seq[_]]
     lazy val JavaStringBuilderClass = requiredClass[java.lang.StringBuilder]
     lazy val JavaStringBufferClass  = requiredClass[java.lang.StringBuffer]
@@ -442,6 +477,7 @@ trait Definitions extends api.StandardDefinitions {
          def List_apply       = getMemberMethod(ListModule, nme.apply)
     lazy val NilModule        = requiredModule[scala.collection.immutable.Nil.type]
     lazy val SeqModule        = requiredModule[scala.collection.Seq.type]
+    lazy val ISeqModule       = requiredModule[scala.collection.immutable.Seq.type]
 
     // arrays and their members
     lazy val ArrayModule                   = requiredModule[scala.Array.type]
@@ -456,7 +492,7 @@ trait Definitions extends api.StandardDefinitions {
 
     // reflection / structural types
     lazy val SoftReferenceClass     = requiredClass[java.lang.ref.SoftReference[_]]
-    lazy val MethodClass            = getClassByName(sn.MethodAsObject)
+    lazy val MethodClass            = getClassByName("java.lang.reflect.Method")
     lazy val EmptyMethodCacheClass  = requiredClass[scala.runtime.EmptyMethodCache]
     lazy val MethodCacheClass       = requiredClass[scala.runtime.MethodCache]
       def methodCache_find          = getMemberMethod(MethodCacheClass, nme.find_)
@@ -474,14 +510,14 @@ trait Definitions extends api.StandardDefinitions {
 
     // XML
     lazy val ScalaXmlTopScope = getModuleIfDefined("scala.xml.TopScope")
-    lazy val ScalaXmlPackage  = getPackageIfDefined(TermName("scala.xml"))
+    lazy val ScalaXmlPackage  = getPackageIfDefined("scala.xml")
 
     // scala.reflect
     lazy val ReflectPackage              = requiredModule[scala.reflect.`package`.type]
     lazy val ReflectApiPackage           = getPackageObjectIfDefined("scala.reflect.api") // defined in scala-reflect.jar, so we need to be careful
     lazy val ReflectRuntimePackage       = getPackageObjectIfDefined("scala.reflect.runtime") // defined in scala-reflect.jar, so we need to be careful
-         def ReflectRuntimeUniverse      = ReflectRuntimePackage.map(sym => getMemberValue(sym, nme.universe))
-         def ReflectRuntimeCurrentMirror = ReflectRuntimePackage.map(sym => getMemberMethod(sym, nme.currentMirror))
+         def ReflectRuntimeUniverse      = ReflectRuntimePackage.map(sym => getDeclValue(sym, nme.universe))
+         def ReflectRuntimeCurrentMirror = ReflectRuntimePackage.map(sym => getDeclMethod(sym, nme.currentMirror))
 
     lazy val UniverseClass    = getClassIfDefined("scala.reflect.api.Universe") // defined in scala-reflect.jar, so we need to be careful
          def UniverseInternal = getMemberValue(UniverseClass, nme.internal)
@@ -504,6 +540,7 @@ trait Definitions extends api.StandardDefinitions {
     lazy val TypeTagsClass          = getClassIfDefined("scala.reflect.api.TypeTags") // defined in scala-reflect.jar, so we need to be careful
 
     lazy val ApiUniverseClass      = getClassIfDefined("scala.reflect.api.Universe") // defined in scala-reflect.jar, so we need to be careful
+    lazy val ApiQuasiquotesClass   = getClassIfDefined("scala.reflect.api.Quasiquotes") // defined in scala-reflect.jar, so we need to be careful
     lazy val JavaUniverseClass     = getClassIfDefined("scala.reflect.api.JavaUniverse") // defined in scala-reflect.jar, so we need to be careful
 
     lazy val MirrorClass           = getClassIfDefined("scala.reflect.api.Mirror") // defined in scala-reflect.jar, so we need to be careful
@@ -524,18 +561,20 @@ trait Definitions extends api.StandardDefinitions {
     lazy val MacroImplAnnotation          = requiredClass[scala.reflect.macros.internal.macroImpl]
 
     lazy val StringContextClass           = requiredClass[scala.StringContext]
+    lazy val StringContextModule          = requiredModule[scala.StringContext.type]
 
-    // SI-8392 a reflection universe on classpath may not have
+    // scala/bug#8392 a reflection universe on classpath may not have
     // quasiquotes, if e.g. crosstyping with -Xsource on
-    lazy val QuasiquoteClass             = if (ApiUniverseClass != NoSymbol) getMemberIfDefined(ApiUniverseClass, tpnme.Quasiquote) else NoSymbol
-    lazy val QuasiquoteClass_api         = if (QuasiquoteClass != NoSymbol) getMember(QuasiquoteClass, tpnme.api) else NoSymbol
-    lazy val QuasiquoteClass_api_apply   = if (QuasiquoteClass_api != NoSymbol) getMember(QuasiquoteClass_api, nme.apply) else NoSymbol
-    lazy val QuasiquoteClass_api_unapply = if (QuasiquoteClass_api != NoSymbol) getMember(QuasiquoteClass_api, nme.unapply) else NoSymbol
+    lazy val QuasiquoteClass             = if (ApiUniverseClass != NoSymbol) ApiQuasiquotesClass.info.decl(tpnme.Quasiquote) else NoSymbol
+    lazy val QuasiquoteClass_api         = if (QuasiquoteClass != NoSymbol) QuasiquoteClass.info.decl(tpnme.api) else NoSymbol
+    lazy val QuasiquoteClass_api_apply   = if (QuasiquoteClass_api != NoSymbol) getDeclMethod(QuasiquoteClass_api, nme.apply) else NoSymbol
+    lazy val QuasiquoteClass_api_unapply = if (QuasiquoteClass_api != NoSymbol) getDeclMethod(QuasiquoteClass_api, nme.unapply) else NoSymbol
 
     lazy val ScalaSignatureAnnotation = requiredClass[scala.reflect.ScalaSignature]
     lazy val ScalaLongSignatureAnnotation = requiredClass[scala.reflect.ScalaLongSignature]
 
-    lazy val MethodHandle = getClassIfDefined("java.lang.invoke.MethodHandle")
+    lazy val MethodHandleClass = getClassIfDefined("java.lang.invoke.MethodHandle")
+    lazy val VarHandleClass = getClassIfDefined("java.lang.invoke.VarHandle")
 
     // Option classes
     lazy val OptionClass: ClassSymbol   = requiredClass[Option[_]]
@@ -560,11 +599,13 @@ trait Definitions extends api.StandardDefinitions {
       private val offset = countFrom - init.size
       private def isDefinedAt(i: Int) = i < seq.length + offset && i >= offset
       val seq: IndexedSeq[ClassSymbol] = (init ++: countFrom.to(maxArity).map { i => getRequiredClass("scala." + name + i) }).toVector
+      private val symSet = new SymbolSet(seq.toList)
+      def contains(sym: Symbol): Boolean = symSet.contains(sym)
       def apply(i: Int) = if (isDefinedAt(i)) seq(i - offset) else NoSymbol
-      def specificType(args: List[Type], others: Type*): Type = {
+      def specificType(args: List[Type], others: List[Type] = Nil): Type = {
         val arity = args.length
         if (!isDefinedAt(arity)) NoType
-        else appliedType(apply(arity), args ++ others: _*)
+        else appliedType(apply(arity), args ::: others)
       }
     }
     // would be created synthetically for the default args. We call all objects in this method from the generated code
@@ -572,6 +613,8 @@ trait Definitions extends api.StandardDefinitions {
     object VarArityClass
 
     val MaxTupleArity, MaxProductArity, MaxFunctionArity = 22
+    // A unit test checks these are kept in synch with the library.
+    val MaxTupleAritySpecialized, MaxProductAritySpecialized, MaxFunctionAritySpecialized = 2
 
     lazy val ProductClass          = new VarArityClass("Product", MaxProductArity, countFrom = 1, init = Some(UnitClass))
     lazy val TupleClass            = new VarArityClass("Tuple", MaxTupleArity, countFrom = 1)
@@ -580,8 +623,8 @@ trait Definitions extends api.StandardDefinitions {
 
     /** Creators for TupleN, ProductN, FunctionN. */
     def tupleType(elems: List[Type])                            = TupleClass.specificType(elems)
-    def functionType(formals: List[Type], restpe: Type)         = FunctionClass.specificType(formals, restpe)
-    def abstractFunctionType(formals: List[Type], restpe: Type) = AbstractFunctionClass.specificType(formals, restpe)
+    def functionType(formals: List[Type], restpe: Type)         = FunctionClass.specificType(formals, restpe :: Nil)
+    def abstractFunctionType(formals: List[Type], restpe: Type) = AbstractFunctionClass.specificType(formals, restpe :: Nil)
 
     def wrapArrayMethodName(elemtp: Type): TermName = elemtp.typeSymbol match {
       case ByteClass    => nme.wrapByteArray
@@ -598,9 +641,16 @@ trait Definitions extends api.StandardDefinitions {
         else nme.genericWrapArray
     }
 
-    def isTupleSymbol(sym: Symbol) = TupleClass.seq contains unspecializedSymbol(sym)
-    def isFunctionSymbol(sym: Symbol) = FunctionClass.seq contains unspecializedSymbol(sym)
-    def isProductNSymbol(sym: Symbol) = ProductClass.seq contains unspecializedSymbol(sym)
+    def isTupleSymbol(sym: Symbol) = TupleClass contains unspecializedSymbol(sym)
+    def isFunctionSymbol(sym: Symbol) = FunctionClass contains unspecializedSymbol(sym)
+    def isProductNSymbol(sym: Symbol) = ProductClass contains unspecializedSymbol(sym)
+
+    lazy val TryClass = requiredClass[scala.util.Try[_]]
+    lazy val FailureClass = requiredClass[scala.util.Failure[_]]
+    lazy val SuccessClass = requiredClass[scala.util.Success[_]]
+    lazy val FutureClass = requiredClass[scala.concurrent.Future[_]]
+    lazy val PromiseClass = requiredClass[scala.concurrent.Promise[_]]
+    lazy val NonFatalClass = requiredClass[scala.util.control.NonFatal.type]
 
     def unspecializedSymbol(sym: Symbol): Symbol = {
       if (sym hasFlag SPECIALIZED) {
@@ -664,8 +714,8 @@ trait Definitions extends api.StandardDefinitions {
       isBundle && isBlackbox
     }
 
-    def isListType(tp: Type)     = tp <:< classExistentialType(ListClass)
-    def isIterableType(tp: Type) = tp <:< classExistentialType(IterableClass)
+    def isListType(tp: Type)     = tp.typeSymbol.isNonBottomSubClass(ListClass)
+    def isIterableType(tp: Type) = tp.typeSymbol.isNonBottomSubClass(IterableClass)
 
     // These "direct" calls perform no dealiasing. They are most needed when
     // printing types when one wants to preserve the true nature of the type.
@@ -675,8 +725,10 @@ trait Definitions extends api.StandardDefinitions {
     // Note that these call .dealiasWiden and not .normalize, the latter of which
     // tends to change the course of events by forcing types.
     def isFunctionType(tp: Type)       = isFunctionTypeDirect(tp.dealiasWiden)
+
     // the number of arguments expected by the function described by `tp` (a FunctionN or SAM type),
     // or `-1` if `tp` does not represent a function type or SAM
+    // for use during typers (after fields, samOf will be confused by abstract accessors for trait fields)
     def functionArityFromType(tp: Type) = {
       val dealiased = tp.dealiasWiden
       if (isFunctionTypeDirect(dealiased)) dealiased.typeArgs.length - 1
@@ -686,13 +738,14 @@ trait Definitions extends api.StandardDefinitions {
       }
     }
 
-    // the result type of a function or corresponding SAM type
-    def functionResultType(tp: Type): Type = {
+    // the argument types expected by the function described by `tp` (a FunctionN or SAM type),
+    // or `Nil` if `tp` does not represent a function type or SAM (or if it happens to be Function0...)
+    def functionOrSamArgTypes(tp: Type): List[Type] = {
       val dealiased = tp.dealiasWiden
-      if (isFunctionTypeDirect(dealiased)) dealiased.typeArgs.last
+      if (isFunctionTypeDirect(dealiased)) dealiased.typeArgs.init
       else samOf(tp) match {
-        case samSym if samSym.exists => tp.memberInfo(samSym).resultType.deconst
-        case _ => NoType
+        case samSym if samSym.exists => tp.memberInfo(samSym).paramTypes
+        case _ => Nil
       }
     }
 
@@ -724,9 +777,6 @@ trait Definitions extends api.StandardDefinitions {
       case tp                     => tp
     }
 
-    def getterMemberTypes(tpe: Type, getters: List[Symbol]): List[Type] =
-      getters map (m => dropNullaryMethod(tpe memberType m))
-
     def dropNullaryMethod(tp: Type) = tp match {
       case NullaryMethodType(restpe) => restpe
       case _                         => tp
@@ -751,9 +801,9 @@ trait Definitions extends api.StandardDefinitions {
       case _: SingletonType                             => true
       case NoPrefix                                     => true
       case TypeRef(_, NothingClass | SingletonClass, _) => true
-      case TypeRef(_, sym, _) if sym.isAbstractType     => tp.bounds.hi.typeSymbol isSubClass SingletonClass
+      case TypeRef(_, sym, _) if sym.isAbstractType     => tp.upperBound.typeSymbol isSubClass SingletonClass
       case TypeRef(pre, sym, _) if sym.isModuleClass    => isStable(pre)
-      case TypeRef(_, _, _) if tp ne tp.dealias         => isStable(tp.dealias)
+      case TypeRef(_, _, _)                             => val normalize = tp.normalize; (normalize ne tp) && isStable(normalize)
       case TypeVar(origin, _)                           => isStable(origin)
       case AnnotatedType(_, atp)                        => isStable(atp)    // Really?
       case _: SimpleTypeProxy                           => isStable(tp.underlying)
@@ -766,7 +816,7 @@ trait Definitions extends api.StandardDefinitions {
       // indirectly upper-bounded by itself. See #2918
       def isVolatileAbstractType: Boolean = {
         def sym = tp.typeSymbol
-        def volatileUpperBound = isVolatile(tp.bounds.hi)
+        def volatileUpperBound = isVolatile(tp.upperBound)
         def safeIsVolatile = (
           if (volatileRecursions < TypeConstants.LogVolatileThreshold)
             volatileUpperBound
@@ -802,14 +852,19 @@ trait Definitions extends api.StandardDefinitions {
           }
         }
       }
+      def isVolatileTypeRef(tr: TypeRef) = {
+        val dealised = tr.dealias
+        if (dealised ne tr) isVolatile(dealised)
+        else if (tr.sym.isAbstractType) isVolatileAbstractType
+        else false
+      }
 
       tp match {
         case ThisType(_)                              => false
         case SingleType(_, sym)                       => isVolatile(tp.underlying) && (sym.hasVolatileType || !sym.isStable)
         case NullaryMethodType(restpe)                => isVolatile(restpe)
         case PolyType(_, restpe)                      => isVolatile(restpe)
-        case TypeRef(_, _, _) if tp ne tp.dealias     => isVolatile(tp.dealias)
-        case TypeRef(_, sym, _) if sym.isAbstractType => isVolatileAbstractType
+        case tr: TypeRef                              => isVolatileTypeRef(tr)
         case RefinedType(_, _)                        => isVolatileRefinedType
         case TypeVar(origin, _)                       => isVolatile(origin)
         case _: SimpleTypeProxy                       => isVolatile(tp.underlying)
@@ -835,14 +890,14 @@ trait Definitions extends api.StandardDefinitions {
      *
      * The method must be monomorphic and have exactly one parameter list.
      * The class defining the method is a supertype of `tp` that
-     * has a public no-arg primary constructor.
+     * has a public no-arg primary constructor and it can be subclassed (not final or sealed).
      */
-    def samOf(tp: Type): Symbol = if (!doSam) NoSymbol else {
+    def samOf(tp: Type): Symbol = if (!doSam) NoSymbol else if (!isNonRefinementClassType(unwrapToClass(tp))) NoSymbol else {
       // look at erased type because we (only) care about what ends up in bytecode
-      // (e.g., an alias type or intersection type is fine as long as the intersection dominator compiles to an interface)
+      // (e.g., an alias type is fine as long as is compiles to a single-abstract-method)
       val tpSym: Symbol = erasure.javaErasure(tp).typeSymbol
 
-      if (tpSym.exists && tpSym.isClass
+      if (tpSym.exists && tpSym.isClass && !(tpSym hasFlag (FINAL | SEALED))
           // if tp has a constructor (its class is not a trait), it must be public and must not take any arguments
           // (implementation restriction: implicit argument lists are excluded to simplify type inference in adaptToSAM)
           && { val ctor = tpSym.primaryConstructor
@@ -864,7 +919,7 @@ trait Definitions extends api.StandardDefinitions {
         // must filter out "universal" members (getClass is deferred for some reason)
         val deferredMembers = (
           tp.membersBasedOnFlags(excludedFlags = BridgeAndPrivateFlags, requiredFlags = METHOD).toList.filter(
-            mem => mem.isDeferredNotJavaDefault && !isUniversalMember(mem)
+            mem => mem.isDeferred && !isUniversalMember(mem)
           ) // TODO: test
         )
 
@@ -877,26 +932,23 @@ trait Definitions extends api.StandardDefinitions {
       } else NoSymbol
     }
 
-    def arrayType(arg: Type)         = appliedType(ArrayClass, arg)
-    def byNameType(arg: Type)        = appliedType(ByNameParamClass, arg)
-    def iteratorOfType(tp: Type)     = appliedType(IteratorClass, tp)
-    def javaRepeatedType(arg: Type)  = appliedType(JavaRepeatedParamClass, arg)
-    def optionType(tp: Type)         = appliedType(OptionClass, tp)
-    def scalaRepeatedType(arg: Type) = appliedType(RepeatedParamClass, arg)
-    def seqType(arg: Type)           = appliedType(SeqClass, arg)
+    def arrayType(arg: Type)         = appliedType(ArrayClass, arg :: Nil)
+    def byNameType(arg: Type)        = appliedType(ByNameParamClass, arg :: Nil)
+    def iteratorOfType(tp: Type)     = appliedType(IteratorClass, tp :: Nil)
+    def javaRepeatedType(arg: Type)  = appliedType(JavaRepeatedParamClass, arg :: Nil)
+    def optionType(tp: Type)         = appliedType(OptionClass, tp :: Nil)
+    def scalaRepeatedType(arg: Type) = appliedType(RepeatedParamClass, arg :: Nil)
+    def seqType(arg: Type)           = appliedType(SeqClass, arg :: Nil)
 
-    // FYI the long clunky name is because it's really hard to put "get" into the
-    // name of a method without it sounding like the method "get"s something, whereas
-    // this method is about a type member which just happens to be named get.
-    def typeOfMemberNamedGet(tp: Type)   = typeArgOfBaseTypeOr(tp, OptionClass)(resultOfMatchingMethod(tp, nme.get)())
-    def typeOfMemberNamedHead(tp: Type)  = typeArgOfBaseTypeOr(tp, SeqClass)(resultOfMatchingMethod(tp, nme.head)())
-    def typeOfMemberNamedApply(tp: Type) = typeArgOfBaseTypeOr(tp, SeqClass)(resultOfMatchingMethod(tp, nme.apply)(IntTpe))
-    def typeOfMemberNamedDrop(tp: Type)  = typeArgOfBaseTypeOr(tp, SeqClass)(resultOfMatchingMethod(tp, nme.drop)(IntTpe))
-    def typesOfSelectors(tp: Type)       =
-      if (isTupleType(tp)) tupleComponents(tp)
-      else getterMemberTypes(tp, productSelectors(tp))
+    // For name-based pattern matching, derive the "element type" (type argument of Option/Seq)
+    // from the relevant part of the signature of various members (get/head/apply/drop)
+    def elementTypeFromGet(tp: Type)   = typeArgOfBaseTypeOr(tp, OptionClass)(resultOfMatchingMethod(tp, nme.get)())
+    def elementTypeFromHead(tp: Type)  = typeArgOfBaseTypeOr(tp, SeqClass)(resultOfMatchingMethod(tp, nme.head)())
+    def elementTypeFromApply(tp: Type) = typeArgOfBaseTypeOr(tp, SeqClass)(resultOfMatchingMethod(tp, nme.apply)(IntTpe))
+    def elementTypeFromDrop(tp: Type)  = typeArgOfBaseTypeOr(tp, SeqClass)(resultOfMatchingMethod(tp, nme.drop)(IntTpe))
+    def resultOfIsEmpty(tp: Type)      = resultOfMatchingMethod(tp, nme.isEmpty)()
 
-    // SI-8128 Still using the type argument of the base type at Seq/Option if this is an old-style (2.10 compatible)
+    // scala/bug#8128 Still using the type argument of the base type at Seq/Option if this is an old-style (2.10 compatible)
     //         extractor to limit exposure to regressions like the reported problem with existentials.
     //         TODO fix the existential problem in the general case, see test/pending/pos/t8128.scala
     private def typeArgOfBaseTypeOr(tp: Type, baseClass: Symbol)(or: => Type): Type = (tp baseType baseClass).typeArgs match {
@@ -907,32 +959,12 @@ trait Definitions extends api.StandardDefinitions {
       case _        => or
     }
 
-    // Can't only check for _1 thanks to pos/t796.
-    def hasSelectors(tp: Type) = (
-         (tp.members containsName nme._1)
-      && (tp.members containsName nme._2)
-    )
-
-    /** Returns the method symbols for members _1, _2, ..., _N
-     *  which exist in the given type.
-     */
-    def productSelectors(tpe: Type): List[Symbol] = {
-      def loop(n: Int): List[Symbol] = tpe member TermName("_" + n) match {
-        case NoSymbol                => Nil
-        case m if m.paramss.nonEmpty => Nil
-        case m                       => m :: loop(n + 1)
-      }
-      // Since ErrorType always returns a symbol from a call to member, we
-      // had better not start looking for _1, _2, etc. expecting it to run out.
-      if (tpe.isErroneous) Nil else loop(1)
-    }
-
     /** If `tp` has a term member `name`, the first parameter list of which
      *  matches `paramTypes`, and which either has no further parameter
      *  lists or only an implicit one, then the result type of the matching
      *  method. Otherwise, NoType.
      */
-    def resultOfMatchingMethod(tp: Type, name: TermName)(paramTypes: Type*): Type = {
+    private def resultOfMatchingMethod(tp: Type, name: TermName)(paramTypes: Type*): Type = {
       def matchesParams(member: Symbol) = member.paramss match {
         case Nil        => paramTypes.isEmpty
         case ps :: rest => (rest.isEmpty || isImplicitParamss(rest)) && (ps corresponds paramTypes)(_.tpe =:= _)
@@ -943,7 +975,9 @@ trait Definitions extends api.StandardDefinitions {
       }
     }
 
-    def ClassType(arg: Type) = if (phase.erasedTypes) ClassClass.tpe else appliedType(ClassClass, arg)
+    def ClassType(arg: Type) =
+      if (phase.erasedTypes) ClassClass.tpe
+      else appliedType(ClassClass, arg :: Nil)
 
     /** Can we tell by inspecting the symbol that it will never
      *  at any phase have type parameters?
@@ -964,29 +998,25 @@ trait Definitions extends api.StandardDefinitions {
       //  - sym: the symbol of the actual enumeration value (VAL1)
       //  - .owner: the ModuleClassSymbol of the enumeration (object E)
       //  - .linkedClassOfClass: the ClassSymbol of the enumeration (class E)
-      // SI-6613 Subsequent runs of the resident compiler demand the phase discipline here.
+      // scala/bug#6613 Subsequent runs of the resident compiler demand the phase discipline here.
       enteringPhaseNotLaterThan(picklerPhase)(sym.owner.linkedClassOfClass).tpe
     }
 
     /** Given a class symbol C with type parameters T1, T2, ... Tn
-     *  which have upper/lower bounds LB1/UB1, LB1/UB2, ..., LBn/UBn,
+     *  which have upper/lower bounds LB1/UB1, LB2/UB2, ..., LBn/UBn,
      *  returns an existential type of the form
      *
-     *    C[E1, ..., En] forSome { E1 >: LB1 <: UB1 ... en >: LBn <: UBn }.
+     *    C[E1, ..., En] forSome { E1 >: LB1 <: UB1 ... En >: LBn <: UBn }.
      */
-    // TODO Review the way this is used. I see two potential problems:
-    //  1. `existentialAbstraction` here doesn't create fresh existential type symbols, it just
-    //     uses the class type parameter symbols directly as the list of quantified symbols.
-    //     See SI-8244 for the trouble that this can cause.
-    //     Compare with callers of `typeParamsToExistentials` (used in Java raw type handling)
-    //  2. Why don't we require a prefix? Could its omission lead to wrong results in CheckabilityChecker?
-    def classExistentialType(clazz: Symbol): Type =
-      existentialAbstraction(clazz.typeParams, clazz.tpe_*)
+    def classExistentialType(prefix: Type, clazz: Symbol): Type = {
+      val eparams = typeParamsToExistentials(clazz, clazz.unsafeTypeParams)
+      newExistentialType(eparams, typeRef(prefix, clazz, eparams.map(_.tpeHK)))
+    }
 
     // members of class scala.Any
 
     // TODO these aren't final! They are now overridden in AnyRef/Object. Prior to the fix
-    //      for SI-8129, they were actually *overloaded* by the members in AnyRef/Object.
+    //      for scala/bug#8129, they were actually *overloaded* by the members in AnyRef/Object.
     //      We should unfinalize these, override in AnyValClass, and make the overrides final.
     //      Refchecks never actually looks at these, so it's just for consistency.
     lazy val Any_==       = enterNewMethod(AnyClass, nme.EQ, AnyTpe :: Nil, BooleanTpe, FINAL)
@@ -1007,8 +1037,8 @@ trait Definitions extends api.StandardDefinitions {
     // participation.  At the "Any" level, the return type is Class[_] as it is in
     // java.lang.Object.  Java also special cases the return type.
     lazy val Any_getClass     = enterNewMethod(AnyClass, nme.getClass_, Nil, getMemberMethod(ObjectClass, nme.getClass_).tpe.resultType, DEFERRED)
-    lazy val Any_isInstanceOf = newT1NullaryMethod(AnyClass, nme.isInstanceOf_, FINAL)(_ => BooleanTpe)
-    lazy val Any_asInstanceOf = newT1NullaryMethod(AnyClass, nme.asInstanceOf_, FINAL)(_.typeConstructor)
+    lazy val Any_isInstanceOf = enterNewT1NullaryMethod(AnyClass, nme.isInstanceOf_, FINAL)(_ => BooleanTpe)
+    lazy val Any_asInstanceOf = enterNewT1NullaryMethod(AnyClass, nme.asInstanceOf_, FINAL)(_.typeConstructor)
 
     lazy val primitiveGetClassMethods = Set[Symbol](Any_getClass, AnyVal_getClass) ++ (
       ScalaValueClasses map (_.tpe member nme.getClass_)
@@ -1049,11 +1079,7 @@ trait Definitions extends api.StandardDefinitions {
       }
     }
 
-    /** Remove references to class Object (other than the head) in a list of parents */
-    def removeLaterObjects(tps: List[Type]): List[Type] = tps match {
-      case Nil      => Nil
-      case x :: xs  => x :: xs.filterNot(_.typeSymbol == ObjectClass)
-    }
+
     /** Remove all but one reference to class Object from a list of parents. */
     def removeRedundantObjects(tps: List[Type]): List[Type] = tps match {
       case Nil      => Nil
@@ -1102,11 +1128,9 @@ trait Definitions extends api.StandardDefinitions {
     lazy val Object_!= = enterNewMethod(ObjectClass, nme.NE, AnyTpe :: Nil, BooleanTpe, FINAL)
     lazy val Object_eq = enterNewMethod(ObjectClass, nme.eq, AnyRefTpe :: Nil, BooleanTpe, FINAL)
     lazy val Object_ne = enterNewMethod(ObjectClass, nme.ne, AnyRefTpe :: Nil, BooleanTpe, FINAL)
-    lazy val Object_isInstanceOf = newT1NoParamsMethod(ObjectClass, nme.isInstanceOf_Ob, FINAL | SYNTHETIC | ARTIFACT)(_ => BooleanTpe)
-    lazy val Object_asInstanceOf = newT1NoParamsMethod(ObjectClass, nme.asInstanceOf_Ob, FINAL | SYNTHETIC | ARTIFACT)(_.typeConstructor)
-    lazy val Object_synchronized = newPolyMethod(1, ObjectClass, nme.synchronized_, FINAL)(tps =>
-      (Some(List(tps.head.typeConstructor)), tps.head.typeConstructor)
-    )
+    lazy val Object_isInstanceOf = newT1NilaryMethod(ObjectClass, nme.isInstanceOf_Ob, FINAL | SYNTHETIC | ARTIFACT)(_ => BooleanTpe)
+    lazy val Object_asInstanceOf = newT1NilaryMethod(ObjectClass, nme.asInstanceOf_Ob, FINAL | SYNTHETIC | ARTIFACT)(_.typeConstructor)
+    lazy val Object_synchronized = enterNewT1Method(ObjectClass, nme.synchronized_, FINAL)(_.typeConstructor)
     lazy val String_+ = enterNewMethod(StringClass, nme.raw.PLUS, AnyTpe :: Nil, StringTpe, FINAL)
 
     def Object_getClass  = getMemberMethod(ObjectClass, nme.getClass_)
@@ -1144,21 +1168,22 @@ trait Definitions extends api.StandardDefinitions {
     lazy val ClassfileAnnotationClass   = requiredClass[scala.annotation.ClassfileAnnotation]
     lazy val StaticAnnotationClass      = requiredClass[scala.annotation.StaticAnnotation]
 
-    // Java retention annotations
+    // Java annotation annotations
     lazy val AnnotationRetentionAttr       = requiredClass[java.lang.annotation.Retention]
     lazy val AnnotationRetentionPolicyAttr = requiredClass[java.lang.annotation.RetentionPolicy]
+    lazy val AnnotationRepeatableAttr      = requiredClass[java.lang.annotation.Repeatable]
 
     // Annotations
     lazy val BridgeClass                = requiredClass[scala.annotation.bridge]
     lazy val ElidableMethodClass        = requiredClass[scala.annotation.elidable]
     lazy val ImplicitNotFoundClass      = requiredClass[scala.annotation.implicitNotFound]
     lazy val ImplicitAmbiguousClass     = getClassIfDefined("scala.annotation.implicitAmbiguous")
-    lazy val JUnitTestClass             = getClassIfDefined("org.junit.Test")
     lazy val MigrationAnnotationClass   = requiredClass[scala.annotation.migration]
     lazy val ScalaStrictFPAttr          = requiredClass[scala.annotation.strictfp]
     lazy val SwitchClass                = requiredClass[scala.annotation.switch]
     lazy val TailrecClass               = requiredClass[scala.annotation.tailrec]
     lazy val VarargsClass               = requiredClass[scala.annotation.varargs]
+    lazy val NowarnClass                = getClassIfDefined("scala.annotation.nowarn")
     lazy val uncheckedStableClass       = requiredClass[scala.annotation.unchecked.uncheckedStable]
     lazy val uncheckedVarianceClass     = requiredClass[scala.annotation.unchecked.uncheckedVariance]
 
@@ -1182,6 +1207,8 @@ trait Definitions extends api.StandardDefinitions {
     lazy val UncheckedBoundsClass       = getClassIfDefined("scala.reflect.internal.annotations.uncheckedBounds")
     lazy val UnspecializedClass         = requiredClass[scala.annotation.unspecialized]
     lazy val VolatileAttr               = requiredClass[scala.volatile]
+    lazy val JavaDeprecatedAttr         = requiredClass[java.lang.Deprecated]
+    lazy val FunctionalInterfaceClass   = requiredClass[java.lang.FunctionalInterface]
 
     // Meta-annotations
     lazy val BeanGetterTargetClass      = requiredClass[meta.beanGetter]
@@ -1195,6 +1222,8 @@ trait Definitions extends api.StandardDefinitions {
     lazy val MethodTargetClass          = requiredClass[meta.companionMethod]    // TODO: module, moduleClass? package, packageObject?
     lazy val LanguageFeatureAnnot       = requiredClass[meta.languageFeature]
 
+    lazy val JUnitAnnotations = List("Test", "Ignore", "Before", "After", "BeforeClass", "AfterClass").map(n => getClassIfDefined("org.junit." + n))
+
     // Language features
     lazy val languageFeatureModule      = getRequiredModule("scala.languageFeature")
 
@@ -1202,7 +1231,7 @@ trait Definitions extends api.StandardDefinitions {
       // Trying to allow for deprecated locations
       sym.isAliasType && isMetaAnnotation(sym.info.typeSymbol)
     )
-    lazy val metaAnnotations: Set[Symbol] = getPackage(TermName("scala.annotation.meta")).info.members filter (_ isSubClass StaticAnnotationClass) toSet
+    lazy val metaAnnotations: Set[Symbol] = getPackage("scala.annotation.meta").info.members filter (_ isSubClass StaticAnnotationClass) toSet
 
     // According to the scala.annotation.meta package object:
     // * By default, annotations on (`val`-, `var`- or plain) constructor parameters
@@ -1220,7 +1249,7 @@ trait Definitions extends api.StandardDefinitions {
 
     lazy val AnnotationDefaultAttr: ClassSymbol = {
       val sym = RuntimePackageClass.newClassSymbol(tpnme.AnnotationDefaultATTR, NoPosition, 0L)
-      sym setInfo ClassInfoType(List(AnnotationClass.tpe), newScope, sym)
+      sym setInfo ClassInfoType(List(StaticAnnotationClass.tpe), newScope, sym)
       markAllCompleted(sym)
       RuntimePackageClass.info.decls.toList.filter(_.name == sym.name) match {
         case existing :: _ =>
@@ -1254,7 +1283,7 @@ trait Definitions extends api.StandardDefinitions {
       getMemberIfDefined(owner, name) orElse {
         if (phase.flatClasses && name.isTypeName && !owner.isPackageObjectOrClass) {
           val pkg = owner.owner
-          val flatname = tpnme.flattenedName(owner.name, name)
+          val flatname = tpnme.flattenedName(owner, name)
           getMember(pkg, flatname)
         }
         else fatalMissingSymbol(owner, name)
@@ -1289,6 +1318,18 @@ trait Definitions extends api.StandardDefinitions {
       getMember(owner, name.toTermName) match {
         case x: TermSymbol => x
         case _             => fatalMissingSymbol(owner, name, "method")
+      }
+    }
+    def getDeclMethod(owner: Symbol, name: Name): TermSymbol = {
+      getDecl(owner, name.toTermName) match {
+        case x: TermSymbol => x
+        case _             => fatalMissingSymbol(owner, name, "method")
+      }
+    }
+    def getDeclValue(owner: Symbol, name: Name): TermSymbol = {
+      getDecl(owner, name.toTermName) match {
+        case x: TermSymbol => x
+        case _             => fatalMissingSymbol(owner, name, "declared value")
       }
     }
 
@@ -1331,18 +1372,34 @@ trait Definitions extends api.StandardDefinitions {
         case (Some(formals), restpe) => MethodType(msym.newSyntheticValueParams(formals), restpe)
         case (_, restpe)             => NullaryMethodType(restpe)
       }
-
-      msym setInfoAndEnter genPolyType(tparams, mtpe) markAllCompleted
+      msym.setInfo(genPolyType(tparams, mtpe)).markAllCompleted()
+    }
+    def enterNewPolyMethod(typeParamCount: Int, owner: Symbol, name: TermName, flags: Long)(createFn: PolyMethodCreator): MethodSymbol = {
+      val m = newPolyMethod(typeParamCount, owner, name, flags)(createFn)
+      owner.info.decls.enter(m)
+      m
     }
 
-    /** T1 means one type parameter.
+    /** T1 means one type parameter. Nullary means no param lists.
      */
-    def newT1NullaryMethod(owner: Symbol, name: TermName, flags: Long)(createFn: Symbol => Type): MethodSymbol = {
+    def newT1NullaryMethod(owner: Symbol, name: TermName, flags: Long)(createFn: Symbol => Type): MethodSymbol =
       newPolyMethod(1, owner, name, flags)(tparams => (None, createFn(tparams.head)))
-    }
-    def newT1NoParamsMethod(owner: Symbol, name: TermName, flags: Long)(createFn: Symbol => Type): MethodSymbol = {
-      newPolyMethod(1, owner, name, flags)(tparams => (Some(Nil), createFn(tparams.head)))
-    }
+    def enterNewT1NullaryMethod(owner: Symbol, name: TermName, flags: Long)(createFn: Symbol => Type): MethodSymbol =
+      enterNewPolyMethod(1, owner, name, flags)(tparams => (None, createFn(tparams.head)))
+
+    /** Nilary means one empty param list. The method takes parens.
+     */
+    def newT1NilaryMethod(owner: Symbol, name: TermName, flags: Long)(createFn: Symbol => Type): MethodSymbol =
+      newPolyMethod(1, owner, name, flags)(tparams => (util.SomeOfNil, createFn(tparams.head)))
+    def enterNewT1NilaryMethod(owner: Symbol, name: TermName, flags: Long)(createFn: Symbol => Type): MethodSymbol =
+      enterNewPolyMethod(1, owner, name, flags)(tparams => (util.SomeOfNil, createFn(tparams.head)))
+
+    /** (T1) => T1.
+     */
+    def newT1Method(owner: Symbol, name: TermName, flags: Long)(createFn: Symbol => Type): MethodSymbol =
+      newPolyMethod(1, owner, name, flags) { tparams => val t = createFn(tparams.head) ; (Some(List(t)), t) }
+    def enterNewT1Method(owner: Symbol, name: TermName, flags: Long)(createFn: Symbol => Type): MethodSymbol =
+      enterNewPolyMethod(1, owner, name, flags) { tparams => val t = createFn(tparams.head) ; (Some(List(t)), t) }
 
     /** Is symbol a phantom class for which no runtime representation exists? */
     lazy val isPhantomClass = Set[Symbol](AnyClass, AnyValClass, NullClass, NothingClass)
@@ -1398,7 +1455,7 @@ trait Definitions extends api.StandardDefinitions {
     private lazy val boxedValueClassesSet = boxedClass.values.toSet[Symbol] + BoxedUnitClass
 
     /** Is symbol a value class? */
-    def isPrimitiveValueClass(sym: Symbol) = ScalaValueClasses contains sym
+    def isPrimitiveValueClass(sym: Symbol) = ScalaValueClassesSet contains sym
     def isPrimitiveValueType(tp: Type)     = isPrimitiveValueClass(tp.typeSymbol)
 
     /** Is symbol a boxed value class, e.g. java.lang.Integer? */
@@ -1417,6 +1474,8 @@ trait Definitions extends api.StandardDefinitions {
       case TypeRef(_, sym, _) => isNumericValueClass(sym)
       case _                  => false
     }
+
+    lazy val ShowAsInfixAnnotationClass = rootMirror.getClassIfDefined("scala.annotation.showAsInfix")
 
     // todo: reconcile with javaSignature!!!
     def signature(tp: Type): String = {
@@ -1468,13 +1527,19 @@ trait Definitions extends api.StandardDefinitions {
     /** Efficient access to member symbols which must be looked up each run. Access via `currentRun.runDefinitions` */
     final class RunDefinitions {
       lazy val StringAdd_+ = getMemberMethod(StringAddClass, nme.PLUS)
+      lazy val String_valueOf_Int = getMemberMethod(StringClass.companionModule, nme.valueOf).suchThat(
+        x => x.paramss.head.length == 1 && x.firstParam.info.typeSymbol == IntClass)
 
       // The given symbol represents either String.+ or StringAdd.+
+      // TODO: this misses Predef.any2stringadd
       def isStringAddition(sym: Symbol) = sym == String_+ || sym == StringAdd_+
 
       lazy val StringContext_f = getMemberMethod(StringContextClass, nme.f)
+      lazy val StringContext_s = getMemberMethod(StringContextClass, nme.s)
+      lazy val StringContext_raw = getMemberMethod(StringContextClass, nme.raw_)
+      lazy val StringContext_apply = getMemberMethod(StringContextModule, nme.apply)
 
-      lazy val ArrowAssocClass = getMemberClass(PredefModule, TypeName("ArrowAssoc")) // SI-5731
+      lazy val ArrowAssocClass = getMemberClass(PredefModule, TypeName("ArrowAssoc")) // scala/bug#5731
       def isArrowAssoc(sym: Symbol) = sym.owner == ArrowAssocClass
 
       lazy val Boxes_isNumberOrBool  = getDecl(BoxesRunTimeClass, nme.isBoxedNumberOrBoolean)
@@ -1500,6 +1565,8 @@ trait Definitions extends api.StandardDefinitions {
       lazy val Boolean_not = definitions.Boolean_not
 
       lazy val Option_apply = getMemberMethod(OptionModule, nme.apply)
+      lazy val Option_isDefined: Symbol = getMemberMethod(OptionClass, TermName("isDefined"))
+      lazy val Option_get: Symbol = getMemberMethod(OptionClass, TermName("get"))
       lazy val List_apply = DefinitionsClass.this.List_apply
 
       /**
@@ -1518,8 +1585,23 @@ trait Definitions extends api.StandardDefinitions {
       lazy val Predef_conforms     = (getMemberIfDefined(PredefModule, nme.conforms)
                                orElse getMemberMethod(PredefModule, TermName("conforms"))) // TODO: predicate on -Xsource:2.10 (for now, needed for transition from M8 -> RC1)
       lazy val Predef_classOf      = getMemberMethod(PredefModule, nme.classOf)
+
+      lazy val Predef_double2Double = getMemberMethod(PredefModule, nme.double2Double)
+      lazy val Predef_float2Float = getMemberMethod(PredefModule, nme.float2Float)
+      lazy val Predef_byte2Byte = getMemberMethod(PredefModule, nme.byte2Byte)
+      lazy val Predef_short2Short = getMemberMethod(PredefModule, nme.short2Short)
+      lazy val Predef_char2Character = getMemberMethod(PredefModule, nme.char2Character)
+      lazy val Predef_int2Integer = getMemberMethod(PredefModule, nme.int2Integer)
+      lazy val Predef_long2Long = getMemberMethod(PredefModule, nme.long2Long)
+      lazy val Predef_boolean2Boolean = getMemberMethod(PredefModule, nme.boolean2Boolean)
+
+      lazy val PreDef_primitives2Primitives =
+        Set[Symbol](Predef_double2Double, Predef_float2Float, Predef_byte2Byte, Predef_short2Short,
+          Predef_char2Character, Predef_int2Integer, Predef_long2Long, Predef_boolean2Boolean)
+
       lazy val Predef_implicitly   = getMemberMethod(PredefModule, nme.implicitly)
       lazy val Predef_wrapRefArray = getMemberMethod(PredefModule, nme.wrapRefArray)
+      lazy val Predef_genericWrapRefArray = getMemberMethod(PredefModule, nme.genericWrapArray)
       lazy val Predef_???          = DefinitionsClass.this.Predef_???
 
       lazy val arrayApplyMethod       = getMemberMethod(ScalaRunTimeModule, nme.array_apply)
@@ -1551,7 +1633,7 @@ trait Definitions extends api.StandardDefinitions {
       lazy val HigherKindsFeature         = getLanguageFeature("higherKinds")
       lazy val ExistentialsFeature        = getLanguageFeature("existentials")
 
-      lazy val ApiUniverseReify = ApiUniverseClass.map(sym => getMemberMethod(sym, nme.reify))
+      lazy val ApiUniverseReify = ApiUniverseClass.map(sym => getDeclIfDefined(sym, nme.reify))
 
       lazy val ReflectRuntimeUniverse      = DefinitionsClass.this.ReflectRuntimeUniverse
       lazy val ReflectRuntimeCurrentMirror = DefinitionsClass.this.ReflectRuntimeCurrentMirror
@@ -1564,11 +1646,27 @@ trait Definitions extends api.StandardDefinitions {
 
       lazy val PartialManifestClass  = getTypeMember(ReflectPackage, tpnme.ClassManifest)
       lazy val ManifestSymbols = Set[Symbol](PartialManifestClass, FullManifestClass, OptManifestClass)
+      private lazy val PolymorphicSignatureClass = MethodHandleClass.companionModule.info.decl(TypeName("PolymorphicSignature"))
+      private val PolymorphicSignatureName = TypeName("java.lang.invoke.MethodHandle$PolymorphicSignature")
 
-      def isPolymorphicSignature(sym: Symbol) = PolySigMethods(sym)
-      private lazy val PolySigMethods: Set[Symbol] = Set[Symbol](MethodHandle.info.decl(sn.Invoke), MethodHandle.info.decl(sn.InvokeExact)).filter(_.exists)
+      def isPolymorphicSignature(sym: Symbol) = sym != null && sym.isJavaDefined && {
+        val owner = sym.safeOwner
+        (owner == MethodHandleClass || owner == VarHandleClass) && {
+          if (PolymorphicSignatureClass eq NoSymbol) {
+            // Hack to find the annotation under `scalac -release 8` on JDK 9+, in which the lookup of `PolymorphicSignatureClass` above fails
+            // We fall back to looking for a stub symbol with the expected flattened name.
+            sym.annotations.exists(_.atp.typeSymbolDirect.name == PolymorphicSignatureName)
+          }
+          else sym.hasAnnotation(PolymorphicSignatureClass)
+        }
+      }
 
       lazy val Scala_Java8_CompatPackage = rootMirror.getPackageIfDefined("scala.runtime.java8")
+
+      lazy val Future_unit: Symbol = getMemberMethod(FutureClass.companionModule, TermName("unit"))
+      lazy val Future_onComplete: Symbol = getMemberMethod(FutureClass, TermName("onComplete"))
+      lazy val Future_value: Symbol = getMemberMethod(FutureClass, TermName("value"))
+      lazy val Promise_complete: Symbol = getMemberMethod(PromiseClass, TermName("complete"))
     }
   }
 }

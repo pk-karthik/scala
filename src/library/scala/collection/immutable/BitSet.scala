@@ -1,12 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
-
-
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -18,7 +20,7 @@ import mutable.Builder
 
 /** A class for immutable bitsets.
  *  $bitsetinfo
- *  @see [[http://docs.scala-lang.org/overviews/collections/concrete-immutable-collection-classes.html#immutable_bitsets "Scala's Collection Library overview"]]
+ *  @see [[http://docs.scala-lang.org/overviews/collections/concrete-immutable-collection-classes.html#immutable-bitsets"Scala's Collection Library overview"]]
  *  section on `Immutable BitSets` for more information.
  *
  *  @define Coll `immutable.BitSet`
@@ -79,7 +81,7 @@ object BitSet extends BitSetFactory[BitSet] {
   }
 
   /** $bitsetCanBuildFrom */
-  implicit def canBuildFrom: CanBuildFrom[BitSet, Int, BitSet] = bitsetCanBuildFrom
+  implicit val canBuildFrom: CanBuildFrom[BitSet, Int, BitSet] = bitsetCanBuildFrom
 
   /** A bitset containing all the bits in an array */
   def fromBitMask(elems: Array[Long]): BitSet = {
@@ -121,6 +123,7 @@ object BitSet extends BitSetFactory[BitSet] {
       else new BitSet1(elems - java.lang.Long.lowestOneBit(elems))
   }
 
+  @SerialVersionUID(-860417644893387539L)
   class BitSet2(val elems0: Long, elems1: Long) extends BitSet {
     protected def nwords = 2
     protected def word(idx: Int) = if (idx == 0) elems0 else if (idx == 1) elems1 else 0L
@@ -148,6 +151,7 @@ object BitSet extends BitSetFactory[BitSet] {
    *  implementation. Care needs to be taken not to modify the exposed
    *  array.
    */
+  @SerialVersionUID(807040099560956194L)
   class BitSetN(val elems: Array[Long]) extends BitSet {
     protected def nwords = elems.length
     protected def word(idx: Int) = if (idx < nwords) elems(idx) else 0L

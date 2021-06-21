@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2007-2013 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala
@@ -33,10 +40,10 @@ trait AnnotationInfos extends api.Annotations { self: SymbolTable =>
       val throwableTpe = if (throwableSym.isMonomorphicType) throwableSym.tpe else {
         debuglog(s"Encountered polymorphic exception `${throwableSym.fullName}` while parsing class file.")
         // in case we encounter polymorphic exception the best we can do is to convert that type to
-        // monomorphic one by introducing existentials, see SI-7009 for details
+        // monomorphic one by introducing existentials, see scala/bug#7009 for details
         existentialAbstraction(throwableSym.typeParams, throwableSym.tpe)
       }
-      this withAnnotation AnnotationInfo(appliedType(ThrowsClass, throwableTpe), List(Literal(Constant(throwableTpe))), Nil)
+      this withAnnotation AnnotationInfo(appliedType(ThrowsClass, throwableTpe :: Nil), List(Literal(Constant(throwableTpe))), Nil)
     }
 
     /** Tests for, get, or remove an annotation */
@@ -133,7 +140,12 @@ trait AnnotationInfos extends api.Annotations { self: SymbolTable =>
      */
     def fitsInOneString: Boolean = {
       // due to escaping, a zero byte in a classfile-annotation of string-type takes actually two characters.
-      val numZeros = (sevenBitsMayBeZero count { b => b == 0 })
+      var i = 0
+      var numZeros = 0
+      while (i < sevenBitsMayBeZero.length) {
+        if (sevenBitsMayBeZero(i) == 0) numZeros += 1
+        i += 1
+      }
 
       (sevenBitsMayBeZero.length + numZeros) <= 65535
     }
@@ -163,6 +175,9 @@ trait AnnotationInfos extends api.Annotations { self: SymbolTable =>
     def lazily(lazyInfo: => AnnotationInfo) =
       new LazyAnnotationInfo(lazyInfo)
 
+    def lazily(lazySymbol: => Symbol, lazyInfo: => AnnotationInfo) =
+      new ExtraLazyAnnotationInfo(lazySymbol, lazyInfo)
+
     def apply(atp: Type, args: List[Tree], assocs: List[(Name, ClassfileAnnotArg)]): AnnotationInfo =
       new CompleteAnnotationInfo(atp, args, assocs)
 
@@ -174,15 +189,6 @@ trait AnnotationInfos extends api.Annotations { self: SymbolTable =>
         case (Nil, Nil)      => defaultRetention
         case (Nil, defaults) => defaults contains category
         case (metas, _)      => metas exists (_ matches category)
-      }
-
-    def mkFilter(categories: List[Symbol], defaultRetention: Boolean)(ann: AnnotationInfo) =
-      (ann.metaAnnotations, ann.defaultTargets) match {
-        case (Nil, Nil)      => defaultRetention
-        case (Nil, defaults) => categories exists defaults.contains
-        case (metas, _)      =>
-          val metaSyms = metas collect { case ann if !ann.symbol.isInstanceOf[StubSymbol] => ann.symbol }
-          categories exists (category => metaSyms exists (_ isNonBottomSubClass category))
       }
   }
 
@@ -216,7 +222,7 @@ trait AnnotationInfos extends api.Annotations { self: SymbolTable =>
   /** Symbol annotations parsed in `Namer` (typeCompleter of
    *  definitions) have to be lazy (#1782)
    */
-  final class LazyAnnotationInfo(lazyInfo: => AnnotationInfo) extends AnnotationInfo {
+  class LazyAnnotationInfo(lazyInfo: => AnnotationInfo) extends AnnotationInfo {
     private var forced = false
     private lazy val forcedInfo = try lazyInfo finally forced = true
 
@@ -232,6 +238,11 @@ trait AnnotationInfos extends api.Annotations { self: SymbolTable =>
     override def pos: Position = if (forced) forcedInfo.pos else NoPosition
 
     override def completeInfo(): Unit = forcedInfo
+  }
+
+  final class ExtraLazyAnnotationInfo(sym: => Symbol, lazyInfo: => AnnotationInfo) extends LazyAnnotationInfo(lazyInfo) {
+    private[this] lazy val typeSymbol = sym
+    override def symbol: Symbol = typeSymbol
   }
 
   /** Typed information about an annotation. It can be attached to either
@@ -305,10 +316,13 @@ trait AnnotationInfos extends api.Annotations { self: SymbolTable =>
     }
 
     /** The default kind of members to which this annotation is attached.
-     *  For instance, for scala.deprecated defaultTargets =
-     *    List(getter, setter, beanGetter, beanSetter).
-     */
-    def defaultTargets = symbol.annotations map (_.symbol) filter isMetaAnnotation
+      * For instance, for scala.deprecated defaultTargets =
+      * List(getter, setter, beanGetter, beanSetter).
+      *
+      * NOTE: have to call symbol.initialize, since we won't get any annotations if the symbol hasn't yet been completed
+      */
+    def defaultTargets = symbol.initialize.annotations map (_.symbol) filter isMetaAnnotation
+
     // Test whether the typeSymbol of atp conforms to the given class.
     def matches(clazz: Symbol) = !symbol.isInstanceOf[StubSymbol] && (symbol isNonBottomSubClass clazz)
     // All subtrees of all args are considered.
@@ -317,13 +331,14 @@ trait AnnotationInfos extends api.Annotations { self: SymbolTable =>
     /** Check whether the type or any of the arguments are erroneous */
     def isErroneous = atp.isErroneous || args.exists(_.isErroneous)
 
-    def isStatic = symbol isNonBottomSubClass StaticAnnotationClass
+    def isStatic = symbol.isNonBottomSubClass(StaticAnnotationClass) && symbol != NowarnClass
 
     /** Check whether any of the arguments mention a symbol */
     def refsSymbol(sym: Symbol) = hasArgWhich(_.symbol == sym)
 
-    def stringArg(index: Int) = constantAtIndex(index) map (_.stringValue)
-    def intArg(index: Int)    = constantAtIndex(index) map (_.intValue)
+    def stringArg(index: Int)  = constantAtIndex(index) map (_.stringValue)
+    def intArg(index: Int)     = constantAtIndex(index) map (_.intValue)
+    def booleanArg(index: Int) = constantAtIndex(index) map (_.booleanValue)
     def symbolArg(index: Int) = argAtIndex(index) collect {
       case Apply(fun, Literal(str) :: Nil) if fun.symbol == definitions.Symbol_apply =>
         newTermName(str.stringValue)
@@ -332,11 +347,26 @@ trait AnnotationInfos extends api.Annotations { self: SymbolTable =>
     // !!! when annotation arguments are not literals, but any sort of
     // expression, there is a fair chance they will turn up here not as
     // Literal(const) but some arbitrary AST.
-    def constantAtIndex(index: Int): Option[Constant] =
-      argAtIndex(index) collect { case Literal(x) => x }
+    //
+    // We recurse over Typed / Annotated trees to allow things like:
+    // `@implicitNotFound("$foo": @nowarn)`
+    def constantAtIndex(index: Int): Option[Constant] = {
+      @tailrec
+      def lit(tree: Tree): Option[Constant] = tree match {
+        case Literal(c)      => Some(c)
+        case Typed(t, _)     => lit(t)
+        case Annotated(_, t) => lit(t)
+        case _               => None
+      }
+
+      argAtIndex(index).flatMap(lit)
+    }
 
     def argAtIndex(index: Int): Option[Tree] =
       if (index < args.size) Some(args(index)) else None
+
+    def transformArgs(f: List[Tree] => List[Tree]): AnnotationInfo =
+      new CompleteAnnotationInfo(atp, f(args), assocs)
 
     override def hashCode = atp.## + args.## + assocs.##
     override def equals(other: Any) = other match {
@@ -418,7 +448,7 @@ trait AnnotationInfos extends api.Annotations { self: SymbolTable =>
   /** Extracts the type of the thrown exception from an AnnotationInfo.
     *
     * Supports both “old-style” `@throws(classOf[Exception])`
-    * as well as “new-stye” `@throws[Exception]("cause")` annotations.
+    * as well as “new-style” `@throws[Exception]("cause")` annotations.
     */
   object ThrownException {
     def unapply(ann: AnnotationInfo): Option[Type] = {

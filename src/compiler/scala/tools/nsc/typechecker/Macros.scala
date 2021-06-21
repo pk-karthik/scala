@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala.tools.nsc
 package typechecker
 
@@ -6,12 +18,14 @@ import symtab.Flags._
 import scala.reflect.internal.util.ScalaClassLoader
 import scala.reflect.runtime.ReflectionUtils
 import scala.reflect.internal.util.Statistics
+import scala.reflect.internal.TypesStats
 import scala.reflect.macros.util._
 import scala.util.control.ControlThrowable
 import scala.reflect.internal.util.ListOfNil
 import scala.reflect.macros.runtime.{AbortMacroException, MacroRuntimes}
 import scala.reflect.macros.compiler.DefaultMacroCompiler
 import scala.tools.reflect.FastTrack
+import scala.util.control.NonFatal
 import Fingerprint._
 
 /**
@@ -45,23 +59,45 @@ trait Macros extends MacroRuntimes with Traces with Helpers {
   import global._
   import definitions._
   import treeInfo.{isRepeatedParamType => _, _}
-  import MacrosStats._
 
   lazy val fastTrack = new FastTrack[self.type](self)
 
   def globalSettings = global.settings
 
   /** Obtains a `ClassLoader` instance used for macro expansion.
-   *
-   *  By default a new `ScalaClassLoader` is created using the classpath
-   *  from global and the classloader of self as parent.
-   *
-   *  Mirrors with runtime definitions (e.g. Repl) need to adjust this method.
-   */
+    *
+    *  By default a new `ScalaClassLoader` is created using the classpath
+    *  from global and the classloader of self as parent.
+    *
+    *  Mirrors with runtime definitions (e.g. Repl) need to adjust this method.
+    */
   protected def findMacroClassLoader(): ClassLoader = {
-    val classpath = global.classPath.asURLs
-    macroLogVerbose("macro classloader: initializing from -cp: %s".format(classpath))
-    ScalaClassLoader.fromURLs(classpath, self.getClass.getClassLoader)
+    import java.net.URL
+
+    val classpath: Seq[URL] = if (settings.YmacroClasspath.isSetByUser) {
+      for {
+        file <- scala.tools.nsc.util.ClassPath.expandPath(settings.YmacroClasspath.value, true)
+        af <- Option(settings.pathFactory.getDirectory(file))
+      } yield af.file.toURI.toURL
+    } else global.classPath.asURLs
+    def newLoader: () => ScalaClassLoader.URLClassLoader = () => {
+      analyzer.macroLogVerbose("macro classloader: initializing from -cp: %s".format(classpath))
+      ScalaClassLoader.fromURLs(classpath, getClass.getClassLoader)
+    }
+
+    val policy = settings.YcacheMacroClassLoader.value
+    val cache = Macros.macroClassLoadersCache
+    val disableCache = policy == settings.CachePolicy.None.name
+    val checkStamps = policy == settings.CachePolicy.LastModified.name
+    cache.checkCacheability(classpath, checkStamps, disableCache) match {
+      case Left(msg) =>
+        analyzer.macroLogVerbose(s"macro classloader: $msg.")
+        val loader = newLoader()
+        closeableRegistry.registerClosable(loader)
+        loader
+      case Right(paths) =>
+        cache.getOrCreate((), paths, newLoader, closeableRegistry, checkStamps)
+    }
   }
 
   /** `MacroImplBinding` and its companion module are responsible for
@@ -74,7 +110,7 @@ trait Macros extends MacroRuntimes with Traces with Helpers {
    *  This solution is very simple, but unfortunately it's also lacking. If we use it, then
    *  signatures of macro defs become transitively dependent on scala-reflect.jar
    *  (because they refer to macro impls, and macro impls refer to *box.Context defined in scala-reflect.jar).
-   *  More details can be found in comments to https://issues.scala-lang.org/browse/SI-5940.
+   *  More details can be found in comments to https://github.com/scala/bug/issues/5940.
    *
    *  Therefore we have to avoid putting macro impls into binding pickles and come up with our own serialization format.
    *  Situation is further complicated by the fact that it's not enough to just pickle macro impl's class name and method name,
@@ -161,7 +197,7 @@ trait Macros extends MacroRuntimes with Traces with Helpers {
       import runDefinitions._
       val MacroImplReference(isBundle, isBlackbox, owner, macroImpl, targs) = macroImplRef
 
-      // todo. refactor when fixing SI-5498
+      // todo. refactor when fixing scala/bug#5498
       def className: String = {
         def loop(sym: Symbol): String = sym match {
           case sym if sym.isTopLevel =>
@@ -275,12 +311,16 @@ trait Macros extends MacroRuntimes with Traces with Helpers {
     macroDef withAnnotation AnnotationInfo(MacroImplAnnotation.tpe, List(pickle), Nil)
   }
 
-  def loadMacroImplBinding(macroDef: Symbol): Option[MacroImplBinding] =
-    macroDef.getAnnotation(MacroImplAnnotation) collect {
-      case AnnotationInfo(_, List(pickle), _) => MacroImplBinding.unpickle(pickle)
-    }
+  def loadMacroImplBinding(macroDef: Symbol): Option[MacroImplBinding] = {
+    macroImplBindingCache.getOrElseUpdate(macroDef,
+      macroDef.getAnnotation(MacroImplAnnotation) collect {
+        case AnnotationInfo(_, List(pickle), _) => MacroImplBinding.unpickle(pickle)
+      }
+    )
+  }
+  private val macroImplBindingCache = perRunCaches.newAnyRefMap[Symbol, Option[MacroImplBinding]]()
 
-  def isBlackbox(expandee: Tree): Boolean = isBlackbox(dissectApplied(expandee).core.symbol)
+  def isBlackbox(expandee: Tree): Boolean = isBlackbox(dissectCore(expandee).symbol)
   def isBlackbox(macroDef: Symbol): Boolean = pluginsIsBlackbox(macroDef)
 
   /** Default implementation of `isBlackbox`.
@@ -442,7 +482,7 @@ trait Macros extends MacroRuntimes with Traces with Helpers {
               val fingerprint = implParams(min(j, implParams.length - 1))
               val duplicatedArg = duplicateAndKeepPositions(arg)
               fingerprint match {
-                case LiftedTyped => context.Expr[Nothing](duplicatedArg)(TypeTag.Nothing) // TODO: SI-5752
+                case LiftedTyped => context.Expr[Nothing](duplicatedArg)(TypeTag.Nothing) // TODO: scala/bug#5752
                 case LiftedUntyped => duplicatedArg
                 case _ => abort(s"unexpected fingerprint $fingerprint in $binding with paramss being $paramss " +
                                 s"corresponding to arg $arg in $argss")
@@ -575,8 +615,8 @@ trait Macros extends MacroRuntimes with Traces with Helpers {
       if (macroDebugVerbose) println(s"macroExpand: ${summary()}")
       linkExpandeeAndDesugared(expandee, desugared)
 
-      val start = if (Statistics.canEnable) Statistics.startTimer(macroExpandNanos) else null
-      if (Statistics.canEnable) Statistics.incCounter(macroExpandCount)
+      val start = if (settings.areStatisticsEnabled) statistics.startTimer(statistics.macroExpandNanos) else null
+      if (settings.areStatisticsEnabled) statistics.incCounter(statistics.macroExpandCount)
       try {
         withInfoLevel(nodePrinters.InfoLevel.Quiet) { // verbose printing might cause recursive macro expansions
           if (expandee.symbol.isErroneous || (expandee exists (_.isErroneous))) {
@@ -594,7 +634,7 @@ trait Macros extends MacroRuntimes with Traces with Helpers {
                 // also see http://groups.google.com/group/scala-internals/browse_thread/thread/492560d941b315cc
                 val expanded1 = try onSuccess(duplicateAndKeepPositions(expanded)) finally popMacroContext()
                 if (!hasMacroExpansionAttachment(expanded1)) linkExpandeeAndExpanded(expandee, expanded1)
-                if (settings.Ymacroexpand.value == settings.MacroExpand.Discard) {
+                if (settings.Ymacroexpand.value == settings.MacroExpand.Discard && !typer.context.isSearchingForImplicitParam) {
                   suppressMacroExpansion(expandee)
                   expandee.setType(expanded1.tpe)
                 }
@@ -609,7 +649,7 @@ trait Macros extends MacroRuntimes with Traces with Helpers {
           }
         }
       } finally {
-        if (Statistics.canEnable) Statistics.stopTimer(macroExpandNanos, start)
+        if (settings.areStatisticsEnabled) statistics.stopTimer(statistics.macroExpandNanos, start)
       }
     }
   }
@@ -651,8 +691,8 @@ trait Macros extends MacroRuntimes with Traces with Helpers {
         val expanded1 = atPos(enclosingMacroPosition.makeTransparent)(Typed(expanded0, TypeTree(innerPt)))
         typecheck("blackbox typecheck", expanded1, outerPt)
       } else {
-        // whitebox expansions need to be typechecked against WildcardType first in order to avoid SI-6992 and SI-8048
-        // then we typecheck against innerPt, not against outerPt in order to prevent SI-8209
+        // whitebox expansions need to be typechecked against WildcardType first in order to avoid scala/bug#6992 and scala/bug#8048
+        // then we typecheck against innerPt, not against outerPt in order to prevent scala/bug#8209
         val expanded1 = typecheck("whitebox typecheck #0", expanded0, WildcardType)
         val expanded2 = typecheck("whitebox typecheck #1", expanded1, innerPt)
         typecheck("whitebox typecheck #2", expanded2, outerPt)
@@ -674,7 +714,7 @@ trait Macros extends MacroRuntimes with Traces with Helpers {
       //
       // Situation #2 requires measures to be taken. If we're in it, then noone's going to help us infer
       // the undetermined type params. Therefore we need to do something ourselves or otherwise this
-      // expandee will forever remain not expanded (see SI-5692). A traditional way out of this conundrum
+      // expandee will forever remain not expanded (see scala/bug#5692). A traditional way out of this conundrum
       // is to call `instantiate` and let the inferencer try to find the way out. It works for simple cases,
       // but sometimes, if the inferencer lacks information, it will be forced to approximate.
       //
@@ -697,7 +737,7 @@ trait Macros extends MacroRuntimes with Traces with Helpers {
       //   foo(Foo(23, "foo", true))
       //
       // In the snippet above, even though we know that there's a fundep going from T to U
-      // (in a sense that a datatype's uniform representation is unambiguously determined by the datatype,
+      // (in a sense that a datatype's uniform representation is unambiguously determined by the data type,
       // e.g. for Foo it will be Int :: String :: Boolean :: HNil), there's no way to convey this information
       // to the typechecker. Therefore the typechecker will infer Nothing for L, which is hardly what we want.
       //
@@ -723,7 +763,18 @@ trait Macros extends MacroRuntimes with Traces with Helpers {
   /** Expands a term macro used in apply role as `M(2)(3)` in `val x = M(2)(3)`.
    *  @see DefMacroExpander
    */
-  def macroExpand(typer: Typer, expandee: Tree, mode: Mode, pt: Type): Tree = pluginsMacroExpand(typer, expandee, mode, pt)
+  def macroExpand(typer: Typer, expandee: Tree, mode: Mode, pt: Type): Tree = {
+    // By default, use the current typer's fresh name creator in macros. The compiler option
+    // allows people to opt in to the old behaviour of Scala 2.12, which used a global fresh creator.
+    if (!settings.YmacroFresh.value) currentFreshNameCreator = typer.fresh
+    val macroSym = expandee.symbol
+    currentRun.profiler.beforeMacroExpansion(macroSym)
+    try {
+      pluginsMacroExpand(typer, expandee, mode, pt)
+    } finally {
+      currentRun.profiler.afterMacroExpansion(macroSym)
+    }
+  }
 
   /** Default implementation of `macroExpand`.
    *  Can be overridden by analyzer plugins (see AnalyzerPlugins.pluginsMacroExpand for more details)
@@ -735,7 +786,7 @@ trait Macros extends MacroRuntimes with Traces with Helpers {
 
   sealed abstract class MacroStatus(val result: Tree)
   case class Success(expanded: Tree) extends MacroStatus(expanded)
-  case class Fallback(fallback: Tree) extends MacroStatus(fallback) { currentRun.reporting.seenMacroExpansionsFallingBack = true }
+  case class Fallback(fallback: Tree) extends MacroStatus(fallback) { runReporting.seenMacroExpansionsFallingBack = true }
   case class Delayed(delayed: Tree) extends MacroStatus(delayed)
   case class Skipped(skipped: Tree) extends MacroStatus(skipped)
   case class Failure(failure: Tree) extends MacroStatus(failure)
@@ -767,14 +818,14 @@ trait Macros extends MacroRuntimes with Traces with Helpers {
         macroLogLite("performing macro expansion %s at %s".format(expandee, expandee.pos))
         val args = macroArgs(typer, expandee)
         try {
-          val numErrors    = reporter.ERROR.count
-          def hasNewErrors = reporter.ERROR.count > numErrors
+          val numErrors    = reporter.errorCount
+          def hasNewErrors = reporter.errorCount > numErrors
           val expanded = { pushMacroContext(args.c); runtime(args) }
           if (hasNewErrors) MacroGeneratedTypeError(expandee)
           def validateResultingTree(expanded: Tree) = {
             macroLogVerbose("original:")
             macroLogLite("" + expanded + "\n" + showRaw(expanded))
-            val freeSyms = expanded.freeTerms ++ expanded.freeTypes
+            val freeSyms = expanded.freeSyms
             freeSyms foreach (sym => MacroFreeSymbolError(expandee, sym))
             // Macros might have spliced arguments with range positions into non-compliant
             // locations, notably, under a tree without a range position. Or, they might
@@ -812,10 +863,12 @@ trait Macros extends MacroRuntimes with Traces with Helpers {
             if (openMacros.nonEmpty) popMacroContext() // weirdly we started popping on an empty stack when refactoring fatalWarnings logic
             val realex = ReflectionUtils.unwrapThrowable(ex)
             realex match {
+              case ex: InterruptedException => throw ex
               case ex: AbortMacroException => MacroGeneratedAbort(expandee, ex)
               case ex: ControlThrowable => throw ex
               case ex: TypeError => MacroGeneratedTypeError(expandee, ex)
-              case _ => MacroGeneratedException(expandee, realex)
+              case NonFatal(_) => MacroGeneratedException(expandee, realex)
+              case fatal => throw fatal
             }
         } finally {
           expandee.removeAttachment[MacroRuntimeAttachment]
@@ -853,34 +906,36 @@ trait Macros extends MacroRuntimes with Traces with Helpers {
    *    1) type vars (tpe.isInstanceOf[TypeVar]) // [Eugene] this check is disabled right now, because TypeVars seem to be created from undetparams anyways
    *    2) undetparams (sym.isTypeParameter && !sym.isSkolem)
    */
-  var hasPendingMacroExpansions = false
+  var hasPendingMacroExpansions = false // JZ this is never reset to false. What is its purpose? Should it not be stored in Context?
+  def typerShouldExpandDeferredMacros: Boolean = hasPendingMacroExpansions && !delayed.isEmpty
   private val forced = perRunCaches.newWeakSet[Tree]
-  private val delayed = perRunCaches.newWeakMap[Tree, scala.collection.mutable.Set[Int]]()
-  private def isDelayed(expandee: Tree) = delayed contains expandee
-  private def calculateUndetparams(expandee: Tree): scala.collection.mutable.Set[Int] =
-    if (forced(expandee)) scala.collection.mutable.Set[Int]()
+  private val delayed = perRunCaches.newWeakMap[Tree, scala.collection.mutable.Set[Symbol]]()
+  private def isDelayed(expandee: Tree) = !delayed.isEmpty && (delayed contains expandee)
+  def clearDelayed(): Unit = delayed.clear()
+  private def calculateUndetparams(expandee: Tree): scala.collection.mutable.Set[Symbol] =
+    if (forced(expandee)) scala.collection.mutable.Set[Symbol]()
     else delayed.getOrElse(expandee, {
       val calculated = scala.collection.mutable.Set[Symbol]()
       expandee foreach (sub => {
-        def traverse(sym: Symbol) = if (sym != null && (undetparams contains sym.id)) calculated += sym
+        def traverse(sym: Symbol) = if (sym != null && (undetparams contains sym)) calculated += sym
         if (sub.symbol != null) traverse(sub.symbol)
         if (sub.tpe != null) sub.tpe foreach (sub => traverse(sub.typeSymbol))
       })
       macroLogVerbose("calculateUndetparams: %s".format(calculated))
-      calculated map (_.id)
+      calculated
     })
-  private val undetparams = perRunCaches.newSet[Int]()
+  private val undetparams = perRunCaches.newSet[Symbol]()
   def notifyUndetparamsAdded(newUndets: List[Symbol]): Unit = {
-    undetparams ++= newUndets map (_.id)
+    undetparams ++= newUndets
     if (macroDebugVerbose) newUndets foreach (sym => println("undetParam added: %s".format(sym)))
   }
   def notifyUndetparamsInferred(undetNoMore: List[Symbol], inferreds: List[Type]): Unit = {
-    undetparams --= undetNoMore map (_.id)
+    undetparams --= undetNoMore
     if (macroDebugVerbose) (undetNoMore zip inferreds) foreach { case (sym, tpe) => println("undetParam inferred: %s as %s".format(sym, tpe))}
     if (!delayed.isEmpty)
       delayed.toList foreach {
         case (expandee, undetparams) if !undetparams.isEmpty =>
-          undetparams --= undetNoMore map (_.id)
+          undetparams --= undetNoMore
           if (undetparams.isEmpty) {
             hasPendingMacroExpansions = true
             macroLogVerbose(s"macro expansion is pending: $expandee")
@@ -904,17 +959,27 @@ trait Macros extends MacroRuntimes with Traces with Helpers {
           context.implicitsEnabled = typer.context.implicitsEnabled
           context.enrichmentEnabled = typer.context.enrichmentEnabled
           context.macrosEnabled = typer.context.macrosEnabled
-          macroExpand(newTyper(context), tree, EXPRmode, WildcardType)
+          try {
+            macroExpand(newTyper(context), tree, EXPRmode, WildcardType)
+          } finally {
+            if (context.reporter.isBuffering)
+              context.reporter.propagateErrorsTo(typer.context.reporter)
+          }
         case _ =>
           tree
       })
     }.transform(expandee)
 }
 
-object MacrosStats {
-  import scala.reflect.internal.TypesStats.typerNanos
-  val macroExpandCount    = Statistics.newCounter ("#macro expansions", "typer")
-  val macroExpandNanos    = Statistics.newSubTimer("time spent in macroExpand", typerNanos)
+object Macros {
+  final val macroClassLoadersCache =
+    new scala.tools.nsc.classpath.FileBasedCache[Unit, ScalaClassLoader.URLClassLoader]()
+}
+
+trait MacrosStats {
+  self: TypesStats with Statistics =>
+  val macroExpandCount    = newCounter ("#macro expansions", "typer")
+  val macroExpandNanos    = newSubTimer("time spent in macroExpand", typerNanos)
 }
 
 class Fingerprint private[Fingerprint](val value: Int) extends AnyVal {

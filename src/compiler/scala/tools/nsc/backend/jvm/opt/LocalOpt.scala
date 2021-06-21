@@ -1,20 +1,26 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2014 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
 package backend.jvm
 package opt
 
-import scala.annotation.{tailrec, switch}
-
-import scala.tools.asm.Type
-import scala.tools.asm.tree.analysis.Frame
-import scala.tools.asm.Opcodes._
-import scala.tools.asm.tree._
-import scala.collection.mutable
+import scala.annotation.{switch, tailrec}
 import scala.collection.JavaConverters._
+import scala.collection.mutable
+import scala.tools.asm.Opcodes._
+import scala.tools.asm.Type
+import scala.tools.asm.tree._
+import scala.tools.asm.tree.analysis.Frame
 import scala.tools.nsc.backend.jvm.BTypes.InternalName
 import scala.tools.nsc.backend.jvm.analysis._
 import scala.tools.nsc.backend.jvm.opt.BytecodeUtils._
@@ -47,7 +53,7 @@ import scala.tools.nsc.backend.jvm.opt.BytecodeUtils._
  *   note that eliminating empty handlers and stale local variable descriptors is required for
  *   correctness, see the comment in the body of `methodOptimizations`.
  *
- * box-unbox elimination (eliminates box-unbox pairs withing the same method)
+ * box-unbox elimination (eliminates box-unbox pairs within the same method)
  *   + enables UPSTREAM:
  *     - nullness optimizations (a box extraction operation (unknown nullness) may be rewritten to
  *       a read of a non-null local. example in doc comment of box-unbox implementation)
@@ -59,9 +65,10 @@ import scala.tools.nsc.backend.jvm.opt.BytecodeUtils._
  *     - redundant casts (`("a", "b")._1`: the generic `_1` method returns `Object`, a cast
  *       to String is added. The cast is redundant after eliminating the tuple.)
  *     - empty local variable descriptors (local variables that were holding the box may become unused)
+  *    - push-pop (due to artifacts of eliminating runtime type tests on primitives)
  *
  * copy propagation (replaces LOAD n to the LOAD m for the smallest m that is an alias of n)
- *   + enables downstrem:
+ *   + enables downstream:
  *     - stale stores (a stored value may not be loaded anymore)
  *     - store-load pairs (a load n may now be right after a store n)
  *   + NOTE: copy propagation is only executed once, in the first fixpoint loop iteration. none of
@@ -76,7 +83,7 @@ import scala.tools.nsc.backend.jvm.opt.BytecodeUtils._
  *   + enables UPSTREAM:
  *     - box-unbox elimination (a removed checkcast may be a box consumer)
  *   + enables downstream:
- *     - push-pop for closure allocation elimination (every indyLambda is followed by a checkcast, see SI-9540)
+ *     - push-pop for closure allocation elimination (every indyLambda is followed by a checkcast, see scala/bug#9540)
  *
  * push-pop (when a POP is the only consumer of a value, remove the POP and its producer)
  *   + enables UPSTREAM:
@@ -113,14 +120,13 @@ import scala.tools.nsc.backend.jvm.opt.BytecodeUtils._
  *
  *
  * empty local variable descriptors (removes unused variables from the local variable table)
- *   + enables downstream:
- *     - stale labels (labels that the entry points to, if not otherwise referenced)
  *
  * empty line numbers (eliminates line number nodes that describe no executable instructions)
- *   + enables downstream:
- *     - stale labels (label of the line number node, if not otherwise referenced)
  *
- * stale labels (eliminate labels that are not referenced, merge sequences of label definitions)
+ * At this point, we used to filter out redundant label nodes (sequences of labels without any
+ * executable instructions in between). However, this operation is relatively expensive, and
+ * unnecessary: labels don't exist in the classfile, they are lowered to bytecode offsets, so
+ * redundant labels disappear by design.
  *
  *
  * Note on a method's maxLocals / maxStack: the backend only uses those values for running
@@ -136,16 +142,22 @@ import scala.tools.nsc.backend.jvm.opt.BytecodeUtils._
  * Note on updating the call graph: whenever an optimization eliminates a callsite or a closure
  * instantiation, we eliminate the corresponding entry from the call graph.
  */
-class LocalOpt[BT <: BTypes](val btypes: BT) {
-  import LocalOptImpls._
-  import btypes._
-  import coreBTypes._
-  import backendUtils._
+abstract class LocalOpt {
+  val postProcessor: PostProcessor
 
-  val boxUnbox = new BoxUnbox(btypes)
+  import postProcessor._
+  import bTypes._
+  import bTypesFromClassfile._
+  import backendUtils._
+  import coreBTypes._
+  import frontendAccess.compilerSettings
+
+  import LocalOptImpls._
+
+  val boxUnbox = new BoxUnbox { val postProcessor: LocalOpt.this.postProcessor.type = LocalOpt.this.postProcessor }
   import boxUnbox._
 
-  val copyProp = new CopyProp(btypes)
+  val copyProp = new CopyProp { val postProcessor: LocalOpt.this.postProcessor.type = LocalOpt.this.postProcessor }
   import copyProp._
 
   /**
@@ -157,29 +169,30 @@ class LocalOpt[BT <: BTypes](val btypes: BT) {
    *
    * @return A set containing the eliminated instructions
    */
-  def minimalRemoveUnreachableCode(method: MethodNode, ownerClassName: InternalName): Boolean = {
+  def minimalRemoveUnreachableCode(method: MethodNode): Boolean = {
     // In principle, for the inliner, a single removeUnreachableCodeImpl would be enough. But that
     // would potentially leave behind stale handlers (empty try block) which is not legal in the
     // classfile. So we run both removeUnreachableCodeImpl and removeEmptyExceptionHandlers.
-    if (method.instructions.size == 0) return false     // fast path for abstract methods
-    if (unreachableCodeEliminated(method)) return false // we know there is no unreachable code
-    if (!AsmAnalyzer.sizeOKForBasicValue(method)) return false // the method is too large for running an analyzer
+    if (method.instructions.size == 0) return false  // fast path for abstract methods
+    if (BackendUtils.isDceDone(method)) return false // we know there is no unreachable code
 
     // For correctness, after removing unreachable code, we have to eliminate empty exception
     // handlers, see scaladoc of def methodOptimizations. Removing an live handler may render more
     // code unreachable and therefore requires running another round.
     def removalRound(): Boolean = {
-      val (insnsRemoved, liveLabels) = removeUnreachableCodeImpl(method, ownerClassName)
+      val insnsRemoved = removeUnreachableCodeImpl(method)
       if (insnsRemoved) {
-        val liveHandlerRemoved = removeEmptyExceptionHandlers(method).exists(h => liveLabels(h.start))
-        if (liveHandlerRemoved) removalRound()
+        val removeHandlersResult = removeEmptyExceptionHandlers(method)
+        if (removeHandlersResult.liveHandlerRemoved) removalRound()
       }
+      // Note that `removeUnreachableCodeImpl` adds `LABEL_REACHABLE_STATUS` to label.status fields. We don't clean up
+      // this flag here (in `minimalRemoveUnreachableCode`), we rely on that being done later in `methodOptimizations`.
       insnsRemoved
     }
 
     val changed = removalRound()
     if (changed) removeUnusedLocalVariableNodes(method)()
-    unreachableCodeEliminated += method
+    BackendUtils.setDceDone(method)
     changed
   }
 
@@ -231,8 +244,13 @@ class LocalOpt[BT <: BTypes](val btypes: BT) {
     // for local variables in dead blocks. Maybe that's a bug in the ASM framework.
 
     var currentTrace: String = null
-    val methodPrefix = {val p = compilerSettings.YoptTrace.value; if (p == "_") "" else p }
-    val doTrace = compilerSettings.YoptTrace.isSetByUser && s"$ownerClassName.${method.name}".startsWith(methodPrefix)
+    val doTrace = compilerSettings.optTrace match {
+      case Some(v) =>
+        val prefix = if (v == "_") "" else v
+        s"$ownerClassName.${method.name}".startsWith(prefix)
+
+      case _ => false
+    }
     def traceIfChanged(optName: String): Unit = if (doTrace) {
       val after = AsmUtils.textify(method)
       if (currentTrace != after) {
@@ -272,7 +290,7 @@ class LocalOpt[BT <: BTypes](val btypes: BT) {
       val runDCE = (compilerSettings.optUnreachableCode && (requestDCE || nullnessOptChanged)) ||
         compilerSettings.optBoxUnbox ||
         compilerSettings.optCopyPropagation
-      val (codeRemoved, liveLabels) = if (runDCE) removeUnreachableCodeImpl(method, ownerClassName) else (false, Set.empty[LabelNode])
+      val codeRemoved = if (runDCE) removeUnreachableCodeImpl(method) else false
       traceIfChanged("dce")
 
       // BOX-UNBOX
@@ -306,9 +324,7 @@ class LocalOpt[BT <: BTypes](val btypes: BT) {
       traceIfChanged("storeLoadPairs")
 
       // STALE HANDLERS
-      val removedHandlers = if (runDCE) removeEmptyExceptionHandlers(method) else Set.empty[TryCatchBlockNode]
-      val handlersRemoved = removedHandlers.nonEmpty
-      val liveHandlerRemoved = removedHandlers.exists(h => liveLabels(h.start))
+      val removeHandlersResult = if (runDCE) removeEmptyExceptionHandlers(method) else RemoveHandlersResult.NoneRemoved
       traceIfChanged("staleHandlers")
 
       // SIMPLIFY JUMPS
@@ -319,8 +335,8 @@ class LocalOpt[BT <: BTypes](val btypes: BT) {
 
       // See doc comment in the beginning of this file (optimizations marked UPSTREAM)
       val runNullnessAgain = boxUnboxChanged
-      val runDCEAgain = liveHandlerRemoved || jumpsChanged
-      val runBoxUnboxAgain = boxUnboxChanged || castRemoved || pushPopRemoved || liveHandlerRemoved
+      val runDCEAgain = removeHandlersResult.liveHandlerRemoved || jumpsChanged
+      val runBoxUnboxAgain = boxUnboxChanged || castRemoved || pushPopRemoved || removeHandlersResult.liveHandlerRemoved
       val runStaleStoresAgain = pushPopRemoved
       val runPushPopAgain = jumpsChanged
       val runStoreLoadAgain = jumpsChanged
@@ -342,26 +358,24 @@ class LocalOpt[BT <: BTypes](val btypes: BT) {
         boxUnboxChanged ||    // box-unbox renders locals (holding boxes) unused
         storesRemoved  ||
         storeLoadRemoved ||
-        handlersRemoved
+        removeHandlersResult.handlerRemoved
 
-      val codeChanged = nullnessOptChanged || codeRemoved || boxUnboxChanged || castRemoved || copyPropChanged || storesRemoved || pushPopRemoved || storeLoadRemoved || handlersRemoved || jumpsChanged
+      val codeChanged = nullnessOptChanged || codeRemoved || boxUnboxChanged || castRemoved || copyPropChanged || storesRemoved || pushPopRemoved || storeLoadRemoved || removeHandlersResult.handlerRemoved || jumpsChanged
       (codeChanged, requireEliminateUnusedLocals)
     }
 
-    val (nullnessDceBoxesCastsCopypropPushpopOrJumpsChanged, requireEliminateUnusedLocals) = if (AsmAnalyzer.sizeOKForBasicValue(method)) {
-      // we run DCE even if the method is already in the `unreachableCodeEliminated` map: the DCE
-      // here is more thorough than `minimalRemoveUnreachableCode` that run before inlining.
-      val r = removalRound(
-        requestNullness = true,
-        requestDCE = true,
-        requestBoxUnbox = true,
-        requestStaleStores = true,
-        requestPushPop = true,
-        requestStoreLoad = true,
-        firstIteration = true)
-      if (compilerSettings.optUnreachableCode) unreachableCodeEliminated += method
-      r
-    } else (false, false)
+    // we run DCE even if the method is already in the `unreachableCodeEliminated` map: the DCE
+    // here is more thorough than `minimalRemoveUnreachableCode` that run before inlining.
+    val (nullnessDceBoxesCastsCopypropPushpopOrJumpsChanged, requireEliminateUnusedLocals) = removalRound(
+      requestNullness = true,
+      requestDCE = true,
+      requestBoxUnbox = true,
+      requestStaleStores = true,
+      requestPushPop = true,
+      requestStoreLoad = true,
+      firstIteration = true)
+
+    if (compilerSettings.optUnreachableCode) BackendUtils.setDceDone(method)
 
     // (*) Removing stale local variable descriptors is required for correctness, see comment in `methodOptimizations`
     val localsRemoved =
@@ -370,11 +384,11 @@ class LocalOpt[BT <: BTypes](val btypes: BT) {
       else false
     traceIfChanged("localVariables")
 
+    // The asm.MethodWriter writes redundant line numbers 1:1 to the classfile, so we filter them out
+    // Note that this traversal also cleans up `LABEL_REACHABLE_STATUS` flags that were added to Label's
+    // `stats` fields during `removeUnreachableCodeImpl` (both are guarded by `optUnreachableCode`).
     val lineNumbersRemoved = if (compilerSettings.optUnreachableCode) removeEmptyLineNumbers(method) else false
     traceIfChanged("lineNumbers")
-
-    val labelsRemoved = if (compilerSettings.optUnreachableCode) removeEmptyLabelNodes(method) else false
-    traceIfChanged("labels")
 
     // assert that local variable annotations are empty (we don't emit them) - otherwise we'd have
     // to eliminate those covering an empty range, similar to removeUnusedLocalVariableNodes.
@@ -382,7 +396,11 @@ class LocalOpt[BT <: BTypes](val btypes: BT) {
     assert(nullOrEmpty(method.visibleLocalVariableAnnotations), method.visibleLocalVariableAnnotations)
     assert(nullOrEmpty(method.invisibleLocalVariableAnnotations), method.invisibleLocalVariableAnnotations)
 
-    nullnessDceBoxesCastsCopypropPushpopOrJumpsChanged || localsRemoved || lineNumbersRemoved || labelsRemoved
+    // clear the non-official "access" flags once we're done and no longer look at them
+    BackendUtils.clearMaxsComputed(method)
+    BackendUtils.clearDceDone(method)
+
+    nullnessDceBoxesCastsCopypropPushpopOrJumpsChanged || localsRemoved || lineNumbersRemoved
   }
 
   /**
@@ -397,7 +415,7 @@ class LocalOpt[BT <: BTypes](val btypes: BT) {
    */
   def nullnessOptimizations(method: MethodNode, ownerClassName: InternalName): Boolean = {
     AsmAnalyzer.sizeOKForNullness(method) && {
-      lazy val nullnessAnalyzer = new AsmAnalyzer(method, ownerClassName, new NullnessAnalyzer(btypes, method))
+      lazy val nullnessAnalyzer = new AsmAnalyzer(method, ownerClassName, new NullnessAnalyzer(backendUtils.isNonNullMethodInvocation, method))
 
       // When running nullness optimizations the method may still have unreachable code. Analyzer
       // frames of unreachable instructions are `null`.
@@ -480,55 +498,148 @@ class LocalOpt[BT <: BTypes](val btypes: BT) {
   }
 
   /**
-   * Removes unreachable basic blocks.
+   * Removes unreachable basic blocks, returns `true` if instructions were removed.
    *
-   * @return A set containing eliminated instructions, and a set containing all live label nodes.
+   * When this method returns, each `labelNode.getLabel` has a status set whether the label is live
+   * or not. This can be queried using `BackendUtils.isLabelReachable`.
    */
-  def removeUnreachableCodeImpl(method: MethodNode, ownerClassName: InternalName): (Boolean, Set[LabelNode]) = {
-    val a = new AsmAnalyzer(method, ownerClassName)
-    val frames = a.analyzer.getFrames
+  def removeUnreachableCodeImpl(method: MethodNode): Boolean = {
+    val size = method.instructions.size
 
-    var i = 0
-    var liveLabels = Set.empty[LabelNode]
-    var changed = false
-    var maxLocals = parametersSize(method)
-    var maxStack = 0
-    val itr = method.instructions.iterator()
-    while (itr.hasNext) {
-      val insn = itr.next()
-      val isLive = frames(i) != null
-      if (isLive) maxStack = math.max(maxStack, frames(i).getStackSize)
-
-      insn match {
-        case l: LabelNode =>
-          // label nodes are not removed: they might be referenced for example in a LocalVariableNode
-          if (isLive) liveLabels += l
-
-        case v: VarInsnNode if isLive =>
-          val longSize = if (isSize2LoadOrStore(v.getOpcode)) 1 else 0
-          maxLocals = math.max(maxLocals, v.`var` + longSize + 1) // + 1 because local numbers are 0-based
-
-        case i: IincInsnNode if isLive =>
-          maxLocals = math.max(maxLocals, i.`var` + 1)
-
-        case _ =>
-          if (!isLive || insn.getOpcode == NOP) {
-            // Instruction iterators allow removing during iteration.
-            // Removing is O(1): instructions are doubly linked list elements.
-            itr.remove()
-            changed = true
-            insn match {
-              case invocation: MethodInsnNode => callGraph.removeCallsite(invocation, method)
-              case indy: InvokeDynamicInsnNode => callGraph.removeClosureInstantiation(indy, method)
-              case _ =>
-            }
-          }
-      }
-      i += 1
+    // queue of instruction indices where analysis should start
+    var queue = new Array[Int](8)
+    var top = -1
+    def enq(i: Int): Unit = {
+      if (top == queue.length - 1)
+        queue = java.util.Arrays.copyOf(queue, queue.length * 2)
+      top += 1
+      queue(top) = i
     }
-    method.maxLocals = maxLocals
-    method.maxStack  = maxStack
-    (changed, liveLabels)
+    def deq(): Int = {
+      val r = queue(top)
+      top -= 1
+      r
+    }
+
+    val handlers = new Array[mutable.ArrayBuffer[TryCatchBlockNode]](size)
+    val tcbIt = method.tryCatchBlocks.iterator()
+    while (tcbIt.hasNext) {
+      val tcb = tcbIt.next()
+      var i = method.instructions.indexOf(tcb.start)
+      val e = method.instructions.indexOf(tcb.end)
+      while (i < e) {
+        var insnHandlers = handlers(i)
+        if (insnHandlers == null) {
+          insnHandlers = mutable.ArrayBuffer.empty[TryCatchBlockNode]
+          handlers(i) = insnHandlers
+        }
+        insnHandlers += tcb
+        i += 1
+      }
+    }
+
+    val visited = mutable.BitSet.empty
+
+    def enqInsn(insn: AbstractInsnNode): Unit = {
+      enqInsnIndex(method.instructions.indexOf(insn))
+    }
+
+    def enqInsnIndex(insnIndex: Int): Unit = {
+      if (insnIndex < size && !visited.contains(insnIndex))
+        enq(insnIndex)
+    }
+
+    /* Subroutines are jumps, historically used for `finally` (https://www.artima.com/underthehood/finally.html)
+     *   - JSR pushes the return address (next instruction) on the stack and jumps to a label
+     *   - The subroutine typically saves the address to a local variable (ASTORE x)
+     *   - The subroutine typically jumps back to the return address using `RET x`, where `x` is the local variable
+     *
+     * However, the JVM spec does not require subroutines to `RET x` to their caller, they could return back to an
+     * outer subroutine caller (nested subroutines), or `RETURN`, or use a static jump. Static analysis of subroutines
+     * is therefore complex (http://www21.in.tum.de/~kleing/papers/KleinW-TPHOLS03.pdf).
+     *
+     * The asm.Analyzer however makes the assumption that subroutines only occur in the shape emitted by early
+     * javac, i.e., `RET` always returns to the next enclosing caller. So we do that as well.
+     */
+
+    enq(0)
+    while (top != -1) {
+      val insnIndex = deq()
+      val insn = method.instructions.get(insnIndex)
+      visited.add(insnIndex)
+
+      if (insn.getOpcode == -1) { // frames, labels, line numbers
+        enqInsnIndex(insnIndex + 1)
+      } else {
+        insn match {
+          case j: JumpInsnNode =>
+            enqInsn(j.label)
+            // For conditional jumps the successor is also a possible control flow target.
+            // The successor of a JSR is also enqueued, see subroutine shape assumption above.
+            if (j.getOpcode != GOTO) enqInsnIndex(insnIndex + 1)
+
+          case l: LookupSwitchInsnNode =>
+            var j = 0
+            while (j < l.labels.size) {
+              enqInsn(l.labels.get(j)); j += 1
+            }
+            enqInsn(l.dflt)
+
+          case t: TableSwitchInsnNode =>
+            var j = 0
+            while (j < t.labels.size) {
+              enqInsn(t.labels.get(j)); j += 1
+            }
+            enqInsn(t.dflt)
+
+          case r: VarInsnNode if r.getOpcode == RET =>
+            // the target is already enqueued, see subroutine shape assumption above
+
+          case _ =>
+            if (insn.getOpcode != ATHROW && !isReturn(insn))
+              enqInsnIndex(insnIndex + 1)
+        }
+      }
+
+      val insnHandlers = handlers(insnIndex)
+      if (insnHandlers != null)
+        insnHandlers.foreach(h => enqInsn(h.handler))
+    }
+
+    def dce(): Boolean = {
+      var i = 0
+      var changed = false
+      val itr = method.instructions.iterator()
+      while (itr.hasNext) {
+        val insn = itr.next()
+        val isLive = visited.contains(i)
+
+        insn match {
+          case l: LabelNode =>
+            // label nodes are not removed: they might be referenced for example in a LocalVariableNode
+            if (isLive) BackendUtils.setLabelReachable(l) else BackendUtils.clearLabelReachable(l)
+
+          case _: LineNumberNode =>
+
+          case _ =>
+            if (!isLive || insn.getOpcode == NOP) {
+              // Instruction iterators allow removing during iteration.
+              // Removing is O(1): instructions are doubly linked list elements.
+              itr.remove()
+              changed = true
+              insn match {
+                case invocation: MethodInsnNode => callGraph.removeCallsite(invocation, method)
+                case indy: InvokeDynamicInsnNode => callGraph.removeClosureInstantiation(indy, method)
+                case _ =>
+              }
+            }
+        }
+        i += 1
+      }
+      changed
+    }
+
+    dce()
   }
 
   /**
@@ -583,9 +694,12 @@ object LocalOptImpls {
    *
    * Note that no instructions are eliminated.
    *
-   * @return the set of removed handlers
+   * Returns a pair of booleans (handlerRemoved, liveHandlerRemoved)
+   *
+   * The `liveHandlerRemoved` result depends on `removeUnreachableCode` being executed
+   * before, so that `BackendUtils.isLabelReachable` gives a correct answer.
    */
-  def removeEmptyExceptionHandlers(method: MethodNode): Set[TryCatchBlockNode] = {
+  def removeEmptyExceptionHandlers(method: MethodNode): RemoveHandlersResult = {
     /** True if there exists code between start and end. */
     def containsExecutableCode(start: AbstractInsnNode, end: LabelNode): Boolean = {
       start != end && ((start.getOpcode: @switch) match {
@@ -595,16 +709,35 @@ object LocalOptImpls {
       })
     }
 
-    var removedHandlers = Set.empty[TryCatchBlockNode]
+    var result: RemoveHandlersResult = RemoveHandlersResult.NoneRemoved
+
     val handlersIter = method.tryCatchBlocks.iterator()
     while (handlersIter.hasNext) {
       val handler = handlersIter.next()
       if (!containsExecutableCode(handler.start, handler.end)) {
-        removedHandlers += handler
+        if (!result.handlerRemoved) result = RemoveHandlersResult.HandlerRemoved
+        if (!result.liveHandlerRemoved && BackendUtils.isLabelReachable(handler.start))
+          result = RemoveHandlersResult.LiveHandlerRemoved
         handlersIter.remove()
       }
     }
-    removedHandlers
+
+    result
+  }
+
+  sealed abstract class RemoveHandlersResult {
+    def handlerRemoved: Boolean = false
+    def liveHandlerRemoved: Boolean = false
+  }
+  object RemoveHandlersResult {
+    object NoneRemoved extends RemoveHandlersResult
+    object HandlerRemoved extends RemoveHandlersResult {
+      override def handlerRemoved: Boolean = true
+    }
+    object LiveHandlerRemoved extends RemoveHandlersResult {
+      override def handlerRemoved: Boolean = true
+      override def liveHandlerRemoved: Boolean = true
+    }
   }
 
   /**
@@ -631,7 +764,13 @@ object LocalOptImpls {
       val index = local.index
       // parameters and `this` (the lowest indices, starting at 0) are never removed or renumbered
       if (index >= firstLocalIndex) {
-        if (!variableIsUsed(local.start, local.end, index)) localsIter.remove()
+        def previousOrSelf(insn: AbstractInsnNode) = insn.getPrevious match {
+          case null => insn
+          case i => i
+        }
+        val storeInsn = previousOrSelf(local.start) // the start index is after the store, see scala/scala#8897
+        val used = variableIsUsed(storeInsn, local.end, index)
+        if (!used) localsIter.remove()
         else if (renumber(index) != index) local.index = renumber(index)
       }
     }
@@ -708,6 +847,9 @@ object LocalOptImpls {
   /**
    * Removes LineNumberNodes that don't describe any executable instructions.
    *
+   * As a side-effect, this traversal removes the `LABEL_REACHABLE_STATUS` flag from all label's
+   * `status` fields.
+   *
    * This method expects (and asserts) that the `start` label of each LineNumberNode is the
    * lexically preceding label declaration.
    */
@@ -724,7 +866,9 @@ object LocalOptImpls {
     var previousLabel: LabelNode = null
     while (iterator.hasNext) {
       iterator.next match {
-        case label: LabelNode => previousLabel = label
+        case label: LabelNode =>
+          BackendUtils.clearLabelReachable(label)
+          previousLabel = label
         case line: LineNumberNode if isEmpty(line) =>
           assert(line.start == previousLabel)
           iterator.remove()
@@ -735,39 +879,9 @@ object LocalOptImpls {
   }
 
   /**
-   * Removes unreferenced label declarations, also squashes sequences of label definitions.
-   *
-   *      [ops];              Label(a); Label(b);  [ops];
-   *   => subs([ops], b, a);  Label(a);            subs([ops], b, a);
-   */
-  def removeEmptyLabelNodes(method: MethodNode): Boolean = {
-    val references = labelReferences(method)
-
-    val initialSize = method.instructions.size
-    val iterator = method.instructions.iterator()
-    var prev: LabelNode = null
-    while (iterator.hasNext) {
-      iterator.next match {
-        case label: LabelNode =>
-          if (!references.contains(label)) iterator.remove()
-          else if (prev != null) {
-            references(label).foreach(substituteLabel(_, label, prev))
-            iterator.remove()
-          } else prev = label
-
-        case instruction =>
-          if (instruction.getOpcode >= 0) prev = null
-      }
-    }
-    method.instructions.size != initialSize
-  }
-
-  /**
    * Apply various simplifications to branching instructions.
    */
   def simplifyJumps(method: MethodNode): Boolean = {
-    var changed = false
-
     val allHandlers = method.tryCatchBlocks.asScala.toSet
 
     // A set of all exception handlers that guard the current instruction, required for simplifyGotoReturn
@@ -828,8 +942,10 @@ object LocalOptImpls {
     /**
      * Replace jumps to a sequence of GOTO instructions by a jump to the final destination.
      *
+     * {{{
      *      Jump l;  [any ops];  l: GOTO m;  [any ops];  m: GOTO n;  [any ops];   n: NotGOTO; [...]
      *   => Jump n;  [rest unchanged]
+     * }}}
      *
      * If there's a loop of GOTOs, the initial jump is replaced by one of the labels in the loop.
      */
@@ -848,8 +964,10 @@ object LocalOptImpls {
     /**
      * Eliminates unnecessary jump instructions
      *
+     * {{{
      *      Jump l;  [nops];  l: [...]
      *   => POP*;    [nops];  l: [...]
+     * }}}
      *
      * Introduces 0, 1 or 2 POP instructions, depending on the number of values consumed by the Jump.
      */
@@ -865,8 +983,10 @@ object LocalOptImpls {
      * If the "else" part of a conditional branch is a simple GOTO, negates the conditional branch
      * and eliminates the GOTO.
      *
+     * {{{
      *      CondJump l;         [nops, no jump targets];  GOTO m;  [nops];  l: [...]
      *   => NegatedCondJump m;  [nops, no jump targets];           [nops];  l: [...]
+     * }}}
      *
      * Note that no jump targets are allowed in the first [nops] section. Otherwise, there could
      * be some other jump to the GOTO, and eliminating it would change behavior.
@@ -893,8 +1013,10 @@ object LocalOptImpls {
     /**
      * Inlines xRETURN and ATHROW
      *
+     * {{{
      *      GOTO l;            [any ops];  l: xRETURN/ATHROW
      *   => xRETURN/ATHROW;    [any ops];  l: xRETURN/ATHROW
+     * }}}
      *
      * inlining is only done if the GOTO instruction is not part of a try block, otherwise the
      * rewrite might change the behavior. For xRETURN, the reason is that return instructions may throw
@@ -916,6 +1038,51 @@ object LocalOptImpls {
       case _ => false
     })
 
+    /**
+      * Replace conditional jump instructions with GOTO or NOP if statically known to be true or false.
+      *
+      * {{{
+      *      ICONST_0; IFEQ l;
+      *   => ICONST_0; POP; GOTO l;
+      *
+      *      ICONST_1; IFEQ l;
+      *   => ICONST_1; POP;
+      * }}}
+      *
+      * Note that the LOAD/POP pairs will be removed later by `eliminatePushPop`, and the code between
+      * the GOTO and `l` will be removed by DCE (if it's not jumped into from somewhere else).
+      */
+    def simplifyConstantConditions(instruction: AbstractInsnNode): Boolean = {
+      def replace(jump: JumpInsnNode, success: Boolean): Boolean = {
+        if (success) method.instructions.insert(jump, new JumpInsnNode(GOTO, jump.label))
+        replaceJumpByPop(jump)
+        true
+      }
+
+      instruction match {
+        case ConditionalJump(jump) =>
+          previousExecutableInstruction(instruction, jumpTargets) match {
+            case Some(prev) =>
+              val prevOp = prev.getOpcode
+              val isIConst = prevOp >= ICONST_M1 && prevOp <= ICONST_5
+              (jump.getOpcode: @switch) match {
+                case IFNULL if prevOp == ACONST_NULL =>
+                  replace(jump, success = true)
+                case IFNONNULL if prevOp == ACONST_NULL =>
+                  replace(jump, success = false)
+                case IFEQ if isIConst =>
+                  replace(jump, success = prevOp == ICONST_0)
+                case IFNE if isIConst =>
+                  replace(jump, success = prevOp != ICONST_0)
+                /* TODO: we also have IFLE, IF_?CMP* and friends, but how likely are they to be profitably optimizeable? */
+                case _ => false
+              }
+            case _ => false
+          }
+        case _ => false
+      }
+    }
+
     def run(): Boolean = {
       var changed = false
 
@@ -930,6 +1097,7 @@ object LocalOptImpls {
           if (!jumpRemoved) {
             changed = simplifyBranchOverGoto(jumpInsn, inTryBlock) || changed
             changed = simplifyGotoReturn(jumpInsn, inTryBlock) || changed
+            changed = simplifyConstantConditions(jumpInsn) || changed
           }
         }
 

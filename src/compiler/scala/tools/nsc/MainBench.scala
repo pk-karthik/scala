@@ -1,11 +1,17 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
 
-import scala.reflect.internal.util.Statistics
 
 /** The main class for NSC, a compiler for the programming
  *  language Scala.
@@ -24,8 +30,8 @@ object MainBench extends Driver with EvalLoop {
     var start = System.nanoTime()
     for (i <- 0 until NIter) {
       if (i == NIter-1) {
-        theCompiler.settings.Ystatistics.default.get foreach theCompiler.settings.Ystatistics.add
-        Statistics.enabled = true
+        theCompiler.settings.Ystatistics.value    = List("all")
+        theCompiler.settings.YhotStatistics.value = true
       }
       process(args)
       val end = System.nanoTime()

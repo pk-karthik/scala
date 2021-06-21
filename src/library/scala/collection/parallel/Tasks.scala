@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection.parallel
@@ -391,12 +395,10 @@ trait ForkJoinTasks extends Tasks with HavingForkJoinPool {
   def execute[R, Tp](task: Task[R, Tp]): () => R = {
     val fjtask = newWrappedTask(task)
 
-    if (Thread.currentThread.isInstanceOf[ForkJoinWorkerThread]) {
-      fjtask.fork
-    } else {
-      forkJoinPool.execute(fjtask)
+    Thread.currentThread match {
+      case fjw: ForkJoinWorkerThread if fjw.getPool eq forkJoinPool => fjtask.fork()
+      case _ => forkJoinPool.execute(fjtask)
     }
-
     () => {
       fjtask.sync()
       fjtask.body.forwardThrowable()
@@ -414,12 +416,10 @@ trait ForkJoinTasks extends Tasks with HavingForkJoinPool {
   def executeAndWaitResult[R, Tp](task: Task[R, Tp]): R = {
     val fjtask = newWrappedTask(task)
 
-    if (Thread.currentThread.isInstanceOf[ForkJoinWorkerThread]) {
-      fjtask.fork
-    } else {
-      forkJoinPool.execute(fjtask)
+    Thread.currentThread match {
+      case fjw: ForkJoinWorkerThread if fjw.getPool eq forkJoinPool => fjtask.fork()
+      case _ => forkJoinPool.execute(fjtask)
     }
-
     fjtask.sync()
     // if (fjtask.body.throwable != null) println("throwing: " + fjtask.body.throwable + " at " + fjtask.body)
     fjtask.body.forwardThrowable()

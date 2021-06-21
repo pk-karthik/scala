@@ -1,16 +1,23 @@
-/* NSC -- new Scala compiler
- * Copyright 2007-2013 LAMP/EPFL
- * @author  Paul Phillips
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
 package doc
 
-import scala.tools.nsc.ast.parser.{ SyntaxAnalyzer, BracePatch }
+import scala.tools.nsc.ast.parser.{BracePatch, SyntaxAnalyzer}
 import typechecker.Analyzer
-import scala.reflect.internal.Chars._
-import scala.reflect.internal.util.{ BatchSourceFile, Position }
-import scala.tools.nsc.doc.base.{ CommentFactoryBase, MemberLookupBase, LinkTo, LinkToExternal }
+import scala.reflect.internal.util.{BatchSourceFile, Position}
+import scala.tools.nsc.Reporting.WarningCategory
+import scala.tools.nsc.doc.base.{CommentFactoryBase, LinkTo, MemberLookupBase}
 
 trait ScaladocAnalyzer extends Analyzer {
   val global : Global // generally, a ScaladocGlobal
@@ -39,12 +46,12 @@ trait ScaladocAnalyzer extends Analyzer {
         for (useCase <- comment.useCases) {
           typer1.silent(_.asInstanceOf[ScaladocTyper].defineUseCases(useCase)) match {
             case SilentTypeError(err) =>
-              reporter.warning(useCase.pos, err.errMsg)
+              context.warning(useCase.pos, err.errMsg, WarningCategory.Scaladoc)
             case _ =>
           }
           for (useCaseSym <- useCase.defined) {
             if (sym.name != useCaseSym.name)
-              reporter.warning(useCase.pos, "@usecase " + useCaseSym.name.decode + " does not match commented symbol: " + sym.name.decode)
+              context.warning(useCase.pos, "@usecase " + useCaseSym.name.decode + " does not match commented symbol: " + sym.name.decode, WarningCategory.Scaladoc)
           }
         }
       }
@@ -90,7 +97,7 @@ trait ScaladocAnalyzer extends Analyzer {
       typedStats(trees, NoSymbol)
       useCase.defined = context.scope.toList filterNot (useCase.aliases contains _)
 
-      if (settings.debug)
+      if (settings.isDebug)
         useCase.defined foreach (sym => println("defined use cases: %s:%s".format(sym, sym.tpe)))
 
       useCase.defined
@@ -101,58 +108,26 @@ trait ScaladocAnalyzer extends Analyzer {
 abstract class ScaladocSyntaxAnalyzer[G <: Global](val global: G) extends SyntaxAnalyzer {
   import global._
 
-  class ScaladocJavaUnitParser(unit: CompilationUnit) extends {
-    override val in = new ScaladocJavaUnitScanner(unit)
-  } with JavaUnitParser(unit) { }
+  trait ScaladocScanner extends DocScanner {
+    // When `docBuffer == null`, we're not in a doc comment.
+    private var docBuffer: StringBuilder = null
 
-  class ScaladocJavaUnitScanner(unit: CompilationUnit) extends JavaUnitScanner(unit) {
-    /** buffer for the documentation comment
-     */
-    var docBuffer: StringBuilder = null
+    override protected def beginDocComment(prefix: String): Unit =
+      if (docBuffer == null) docBuffer = new StringBuilder(prefix)
 
-    /** add the given character to the documentation buffer
-     */
-    protected def putDocChar(c: Char) {
-      if (docBuffer ne null) docBuffer.append(c)
-    }
+    protected def ch: Char
+    override protected def processCommentChar(): Unit =
+      if (docBuffer != null) docBuffer append ch
 
-    override protected def skipComment(): Boolean = {
-      if (in.ch == '/') {
-        do {
-          in.next
-        } while ((in.ch != CR) && (in.ch != LF) && (in.ch != SU))
-        true
-      } else if (in.ch == '*') {
+    protected def docPosition: Position
+    override protected def finishDocComment(): Unit =
+      if (docBuffer != null) {
+        registerDocComment(docBuffer.toString, docPosition)
         docBuffer = null
-        in.next
-        val scaladoc = ("/**", "*/")
-        if (in.ch == '*')
-          docBuffer = new StringBuilder(scaladoc._1)
-        do {
-          do {
-            if (in.ch != '*' && in.ch != SU) {
-              in.next; putDocChar(in.ch)
-            }
-          } while (in.ch != '*' && in.ch != SU)
-          while (in.ch == '*') {
-            in.next; putDocChar(in.ch)
-          }
-        } while (in.ch != '/' && in.ch != SU)
-        if (in.ch == '/') in.next
-        else incompleteInputError("unclosed comment")
-        true
-      } else {
-        false
       }
-    }
   }
 
-  class ScaladocUnitScanner(unit0: CompilationUnit, patches0: List[BracePatch]) extends UnitScanner(unit0, patches0) {
-
-    private var docBuffer: StringBuilder = null        // buffer for comments (non-null while scanning)
-    private var inDocComment             = false       // if buffer contains double-star doc comment
-    private var lastDoc: DocComment      = null        // last comment if it was double-star doc
-
+  class ScaladocUnitScanner(unit0: CompilationUnit, patches0: List[BracePatch]) extends UnitScanner(unit0, patches0) with ScaladocScanner {
     private object unmooredParser extends {                // minimalist comment parser
       val global: Global = ScaladocSyntaxAnalyzer.this.global
     }
@@ -160,15 +135,22 @@ abstract class ScaladocSyntaxAnalyzer[G <: Global](val global: G) extends Syntax
       import global.{ settings, Symbol }
       def parseComment(comment: DocComment) = {
         val nowarnings = settings.nowarn.value
-        settings.nowarn.value = true
+        val maxwarns   = settings.maxwarns.value
+        if (!nowarnings) {
+          settings.nowarn.value = true
+        }
         try parseAtSymbol(comment.raw, comment.raw, comment.pos)
-        finally settings.nowarn.value = nowarnings
+        finally
+          if (!nowarnings) {
+            settings.nowarn.value   = false
+            settings.maxwarns.value = maxwarns
+          }
       }
 
       override def internalLink(sym: Symbol, site: Symbol): Option[LinkTo] = None
       override def chooseLink(links: List[LinkTo]): LinkTo = links.headOption.orNull
       override def toString(link: LinkTo): String = "No link"
-      override def findExternalLink(sym: Symbol, name: String): Option[LinkToExternal] = None
+      override def findExternalLink(sym: Symbol, name: String): Option[LinkTo] = None
       override def warnNoLink: Boolean = false
     }
 
@@ -191,43 +173,10 @@ abstract class ScaladocSyntaxAnalyzer[G <: Global](val global: G) extends Syntax
       }
       def isDirty = unclean(unmooredParser parseComment doc)
       if ((doc ne null) && (settings.warnDocDetached || isDirty))
-        reporter.warning(doc.pos, "discarding unmoored doc comment")
+        runReporting.warning(doc.pos, "discarding unmoored doc comment", WarningCategory.LintDocDetached, site = "")
     }
 
-    override def flushDoc(): DocComment = (try lastDoc finally lastDoc = null)
-
-    override protected def putCommentChar() {
-      if (inDocComment)
-        docBuffer append ch
-
-      nextChar()
-    }
-    override def skipDocComment(): Unit = {
-      inDocComment = true
-      docBuffer = new StringBuilder("/**")
-      super.skipDocComment()
-    }
-    override def skipBlockComment(): Unit = {
-      inDocComment = false // ??? this means docBuffer won't receive contents of this comment???
-      docBuffer = new StringBuilder("/*")
-      super.skipBlockComment()
-    }
-    override def skipComment(): Boolean = {
-      // emit a block comment; if it's double-star, make Doc at this pos
-      def foundStarComment(start: Int, end: Int) = try {
-        val str = docBuffer.toString
-        val pos = Position.range(unit.source, start, start, end)
-        if (inDocComment) {
-          signalParsedDocComment(str, pos)
-          lastDoc = DocComment(str, pos)
-        }
-        true
-      } finally {
-        docBuffer    = null
-        inDocComment = false
-      }
-      super.skipComment() && ((docBuffer eq null) || foundStarComment(offset, charOffset - 2))
-    }
+    protected def docPosition: Position = Position.range(unit.source, offset, offset, charOffset - 2)
   }
   class ScaladocUnitParser(unit: CompilationUnit, patches: List[BracePatch]) extends UnitParser(unit, patches) {
     override def newScanner() = new ScaladocUnitScanner(unit, patches)
@@ -257,6 +206,49 @@ abstract class ScaladocSyntaxAnalyzer[G <: Global](val global: G) extends Syntax
         joined
       }
       else trees
+    }
+  }
+
+  class ScaladocJavaUnitScanner(unit: CompilationUnit) extends JavaUnitScanner(unit) with ScaladocScanner {
+    private var docStart: Int = 0
+
+    override protected def beginDocComment(prefix: String): Unit = {
+      super.beginDocComment(prefix)
+      docStart = currentPos.start
+    }
+
+    protected def ch = in.ch
+
+    override protected def docPosition = Position.range(unit.source, docStart, docStart, in.cpos)
+  }
+
+  class ScaladocJavaUnitParser(unit: CompilationUnit) extends {
+    override val in = new ScaladocJavaUnitScanner(unit)
+  } with JavaUnitParser(unit) {
+
+    override def joinComment(trees: => List[Tree]): List[Tree] = {
+      val doc = in.flushDoc()
+
+      if ((doc ne null) && doc.raw.length > 0) {
+        log(s"joinComment(doc=$doc)")
+        val joined = trees map { t =>
+          DocDef(doc, t) setPos {
+            if (t.pos.isDefined) {
+              val pos = doc.pos.withEnd(t.pos.end)
+              pos.makeTransparent
+            } else {
+              t.pos
+            }
+          }
+        }
+        joined.find(_.pos.isOpaqueRange) foreach { main =>
+          val mains = List(main)
+          joined foreach { t => if (t ne main) ensureNonOverlapping(t, mains) }
+        }
+        joined
+      } else {
+        trees
+      }
     }
   }
 }

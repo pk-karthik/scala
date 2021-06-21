@@ -1,12 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
-
-
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -19,7 +21,7 @@ import BitSetLike.{LogWL, MaxSize}
  *
  *  $bitsetinfo
  *
- *  @see [[http://docs.scala-lang.org/overviews/collections/concrete-mutable-collection-classes.html#mutable_bitsets "Scala's Collection Library overview"]]
+ *  @see [[http://docs.scala-lang.org/overviews/collections/concrete-mutable-collection-classes.html#mutable-bitsets "Scala's Collection Library overview"]]
  *  section on `Mutable Bitsets` for more information.
  *
  *  @define Coll `BitSet`
@@ -71,13 +73,17 @@ class BitSet(protected final var elems: Array[Long]) extends AbstractSet[Int]
     if (idx >= nwords) {
       var newlen = nwords
       while (idx >= newlen) newlen = (newlen * 2) min MaxSize
-      val elems1 = new Array[Long](newlen)
-      Array.copy(elems, 0, elems1, 0, nwords)
-      elems = elems1
+      elems = java.util.Arrays.copyOf(elems, newlen)
     }
   }
 
-  protected def fromBitMaskNoCopy(words: Array[Long]): BitSet = new BitSet(words)
+  protected def fromBitMaskNoCopy(words: Array[Long]): BitSet = {
+    if (words.length == 0) {
+      empty
+    } else {
+      new BitSet(words)
+    }
+  }
 
   override def add(elem: Int): Boolean = {
     require(elem >= 0)
@@ -164,14 +170,11 @@ class BitSet(protected final var elems: Array[Long]) extends AbstractSet[Int]
    */
   @deprecated("If this BitSet contains a value that is 128 or greater, the result of this method is an 'immutable' " +
     "BitSet that shares state with this mutable BitSet. Thus, if the mutable BitSet is modified, it will violate the " +
-    "immutability of the result.", "2.11.6")
+    "immutability of the result.", "2.12.0")
   def toImmutable = immutable.BitSet.fromBitMaskNoCopy(elems)
 
-  override def clone(): BitSet = {
-    val elems1 = new Array[Long](elems.length)
-    Array.copy(elems, 0, elems1, 0, elems.length)
-    new BitSet(elems1)
-  }
+  override def clone(): BitSet =
+    new BitSet(elems.clone)
 }
 
 /** $factoryInfo
@@ -185,18 +188,23 @@ object BitSet extends BitSetFactory[BitSet] {
   def newBuilder: Builder[Int, BitSet] = new GrowingBuilder[Int, BitSet](empty)
 
   /** $bitsetCanBuildFrom */
-  implicit def canBuildFrom: CanBuildFrom[BitSet, Int, BitSet] = bitsetCanBuildFrom
+  implicit val canBuildFrom: CanBuildFrom[BitSet, Int, BitSet] = bitsetCanBuildFrom
 
   /** A bitset containing all the bits in an array */
   def fromBitMask(elems: Array[Long]): BitSet = {
     val len = elems.length
-    val a = new Array[Long](len)
-    Array.copy(elems, 0, a, 0, len)
-    new BitSet(a)
+    if (len == 0) empty
+    else new BitSet(elems.clone)
   }
 
   /** A bitset containing all the bits in an array, wrapping the existing
    *  array without copying.
    */
-  def fromBitMaskNoCopy(elems: Array[Long]): BitSet = new BitSet(elems)
+  def fromBitMaskNoCopy(elems: Array[Long]): BitSet = {
+    if (elems.length == 0) {
+      empty
+    } else {
+      new BitSet(elems)
+    }
+  }
 }

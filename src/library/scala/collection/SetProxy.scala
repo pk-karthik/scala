@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -15,7 +19,7 @@ package collection
  *
  *  @author  Matthias Zenger
  *  @author  Martin Odersky
- *  @version 2.0, 01/01/2007
+ *  @since   2.0
  */
 @deprecated("proxying is deprecated due to lack of use and compiler-level support", "2.11.3")
 trait SetProxy[A] extends Set[A] with SetProxyLike[A, Set[A]]

@@ -1,3 +1,4 @@
+// scalac: -Xfatal-warnings -Ywarn-unused:imports
 class Bippo {
   def length: Int = 123
   class Tree
@@ -96,7 +97,7 @@ trait Warn {
 trait Nested {
   {
     import p1._   // warn
-    trait Warn {  // warn about unused local trait for good measure
+    trait Warn {  // don't warn about unused local trait with -Ywarn-unused:imports
       import p2._
       println(new A)
       println("abc".bippy)
@@ -152,4 +153,8 @@ trait Outsiders {
     println("abc".bippy)
     //Future("abc".bippy)
   }
+}
+
+class MacroClient {
+  def x = Macro.f  // don't crash; but also don't warn on expansion, see scala/bug#10270 and [pos|neg]/t10270
 }

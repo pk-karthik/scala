@@ -6,7 +6,7 @@ import scala.collection.JavaConverters._
 
 object Test extends BytecodeTest {
   // Helpful for debugging the test:
-  // println(new java.io.File(classpath.asURLs.head.toURI).list().sorted.mkString("\n"))
+   //println(new java.io.File(classpath.asURLs.head.toURI).list().sorted.mkString("\n"))
 
   def assertSame(a: Any, b: Any) = {
     assert(a == b, s"\na: $a\nb: $b")
@@ -114,11 +114,11 @@ object Test extends BytecodeTest {
 
   def testA5() = {
     val List(b1) = innerClassNodes("A5")
-    assertLocal(b1, "A5$B$2$", "B$2$")
-    val List(b2) = innerClassNodes("A5$B$2$")
-    assertLocal(b2, "A5$B$2$", "B$2$")
+    assertLocal(b1, "A5$B$1$", "B$1$")
+    val List(b2) = innerClassNodes("A5$B$1$")
+    assertLocal(b2, "A5$B$1$", "B$1$")
     assertEnclosingMethod(
-      "A5$B$2$",
+      "A5$B$1$",
       "A5", "f", "()Ljava/lang/Object;")
   }
 
@@ -221,7 +221,7 @@ object Test extends BytecodeTest {
     assertAnonymous(anon1, "A18$$anon$5")
     assertAnonymous(anon2, "A18$$anon$6")
 
-    assertLocal(a, "A18$A$2", "A$2")
+    assertLocal(a, "A18$A$1", "A$1")
     assertLocal(b, "A18$B$4", "B$4")
 
     assertEnclosingMethod(
@@ -232,7 +232,7 @@ object Test extends BytecodeTest {
       "A18", "g$1", "()V")
 
     assertEnclosingMethod(
-      "A18$A$2",
+      "A18$A$1",
       "A18", "g$1", "()V")
     assertEnclosingMethod(
       "A18$B$4",
@@ -293,16 +293,16 @@ object Test extends BytecodeTest {
     assertMember(defsApi, "A24Base", "DefinitionsApi", flags = publicAbstractInterface)
   }
 
-  def testSI_9105() {
-    assertEnclosingMethod  ("SI_9105$A$3"          , "SI_9105", null , null)
+  def testSI_9105(): Unit = {
+    assertEnclosingMethod  ("SI_9105$A$2"          , "SI_9105", null , null)
     assertEnclosingMethod  ("SI_9105$B$5"          , "SI_9105", "m$1", "()Ljava/lang/Object;")
     assertEnclosingMethod  ("SI_9105$C$1"          , "SI_9105", null , null)
     assertEnclosingMethod  ("SI_9105$D$1"          , "SI_9105", "met", "()Lscala/Function1;")
-    assertEnclosingMethod  ("SI_9105$E$1"          , "SI_9105", "m$3", "()Ljava/lang/Object;")
+    assertEnclosingMethod  ("SI_9105$E$1"          , "SI_9105", "m$2", "()Ljava/lang/Object;")
     assertEnclosingMethod  ("SI_9105$F$1"          , "SI_9105", "met", "()Lscala/Function1;")
     assertNoEnclosingMethod("SI_9105")
 
-    assertLocal(innerClassNodes("SI_9105$A$3").head, "SI_9105$A$3", "A$3")
+    assertLocal(innerClassNodes("SI_9105$A$2").head, "SI_9105$A$2", "A$2")
     assertLocal(innerClassNodes("SI_9105$B$5").head, "SI_9105$B$5", "B$5")
     assertLocal(innerClassNodes("SI_9105$C$1").head, "SI_9105$C$1", "C$1")
     assertLocal(innerClassNodes("SI_9105$D$1").head, "SI_9105$D$1", "D$1")
@@ -311,7 +311,7 @@ object Test extends BytecodeTest {
 
     // by-name
     assertEnclosingMethod("SI_9105$G$1", "SI_9105", null , null)
-    assertEnclosingMethod("SI_9105$H$1", "SI_9105", "m$2", "()Ljava/lang/Object;")
+    assertEnclosingMethod("SI_9105$H$1", "SI_9105", "m$3", "()Ljava/lang/Object;")
     assertEnclosingMethod("SI_9105$I$1", "SI_9105", null , null)
     assertEnclosingMethod("SI_9105$J$1", "SI_9105", "bnM", "()I")
     assertEnclosingMethod("SI_9105$K$2", "SI_9105", "m$4", "()Ljava/lang/Object;")
@@ -323,11 +323,11 @@ object Test extends BytecodeTest {
   def testSI_9124() {
     val classes: Map[String, String] = {
       List("SI_9124$$anon$10",
-           "SI_9124$$anon$11",
            "SI_9124$$anon$12",
+           "SI_9124$$anon$13",
            "SI_9124$$anon$8",
            "SI_9124$$anon$9",
-           "SI_9124$O$$anon$13").map({ name =>
+           "SI_9124$O$$anon$11").map({ name =>
         val node = loadClassNode(name)
         val fMethod = node.methods.asScala.find(_.name.startsWith("f")).get.name
         (fMethod, node.name)
@@ -380,8 +380,8 @@ object Test extends BytecodeTest {
     val b3 = assertLocal(_ : InnerClassNode, "ImplClassesAreTopLevel$B3$1", "B3$1", flags = publicAbstractInterface)
     val b4 = assertLocal(_ : InnerClassNode, "ImplClassesAreTopLevel$B4$1", "B4$1", flags = publicAbstractInterface)
 
-    testInner("ImplClassesAreTopLevel$$anon$14", an14, b3)
-    testInner("ImplClassesAreTopLevel$$anon$15", an15, b2)
+    testInner("ImplClassesAreTopLevel$$anon$14", an14, b2)
+    testInner("ImplClassesAreTopLevel$$anon$15", an15, b3)
     testInner("ImplClassesAreTopLevel$$anon$16", an16, b4)
 
     testInner("ImplClassesAreTopLevel$B1", b1)
@@ -444,6 +444,20 @@ object Test extends BytecodeTest {
     testInner("NestedInValueClass$A$", a, am, b, c, methodHandlesLookup)
   }
 
+  def testLocalAndAnonymousInLazyInitializer(): Unit = {
+    assertEnclosingMethod("LocalAndAnonymousInLazyInitializer$C$$anon$19", "LocalAndAnonymousInLazyInitializer$C", null, null)
+    assertEnclosingMethod("LocalAndAnonymousInLazyInitializer$C$AA$1",     "LocalAndAnonymousInLazyInitializer$C", null, null)
+    assertEnclosingMethod("LocalAndAnonymousInLazyInitializer$C$AA$2$",    "LocalAndAnonymousInLazyInitializer$C", null, null)
+
+    assertEnclosingMethod("LocalAndAnonymousInLazyInitializer$O$$anon$20", "LocalAndAnonymousInLazyInitializer$O$", null, null)
+    assertEnclosingMethod("LocalAndAnonymousInLazyInitializer$O$AA$4",     "LocalAndAnonymousInLazyInitializer$O$", null, null)
+    assertEnclosingMethod("LocalAndAnonymousInLazyInitializer$O$AA$5$",    "LocalAndAnonymousInLazyInitializer$O$", null, null)
+
+    assertEnclosingMethod("LocalAndAnonymousInLazyInitializer$T$$anon$21", "LocalAndAnonymousInLazyInitializer$T", null, null)
+    assertEnclosingMethod("LocalAndAnonymousInLazyInitializer$T$AA$7",     "LocalAndAnonymousInLazyInitializer$T", null, null)
+    assertEnclosingMethod("LocalAndAnonymousInLazyInitializer$T$AA$8$",    "LocalAndAnonymousInLazyInitializer$T", null, null)
+  }
+
   def show(): Unit = {
     testA1()
     testA2()
@@ -473,5 +487,6 @@ object Test extends BytecodeTest {
     testSpecializedClassesTopLevel()
     testAnonymousClassesMayBeNestedInSpecialized()
     testNestedInValueClass()
+    testLocalAndAnonymousInLazyInitializer()
   }
 }

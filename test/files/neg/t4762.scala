@@ -1,4 +1,5 @@
-// https://issues.scala-lang.org/browse/SI-4762
+// scalac: -Xlint -Xfatal-warnings
+// https://github.com/scala/bug/issues/4762
 
 // In A, x and y are -1.
 class A(var x: Int) {

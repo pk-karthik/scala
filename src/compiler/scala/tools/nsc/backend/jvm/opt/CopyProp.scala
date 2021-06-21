@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2014 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
@@ -8,18 +15,20 @@ package backend.jvm
 package opt
 
 import scala.annotation.{switch, tailrec}
-import scala.tools.asm.tree.analysis.BasicInterpreter
-import scala.tools.asm.Type
-import scala.tools.asm.Opcodes._
-import scala.tools.asm.tree._
-import scala.collection.mutable
 import scala.collection.JavaConverters._
+import scala.collection.mutable
+import scala.tools.asm.Opcodes._
+import scala.tools.asm.Type
+import scala.tools.asm.tree._
+import scala.tools.asm.tree.analysis.BasicInterpreter
 import scala.tools.nsc.backend.jvm.BTypes.InternalName
 import scala.tools.nsc.backend.jvm.analysis._
 import scala.tools.nsc.backend.jvm.opt.BytecodeUtils._
 
-class CopyProp[BT <: BTypes](val btypes: BT) {
-  import btypes._
+abstract class CopyProp {
+  val postProcessor: PostProcessor
+
+  import postProcessor.{backendUtils, callGraph}
   import backendUtils._
 
 
@@ -44,7 +53,7 @@ class CopyProp[BT <: BTypes](val btypes: BT) {
       //
       // In this example, we should change the second load from 1 to 3, which might render the
       // local variable 1 unused.
-      val knownUsed = new Array[Boolean](method.maxLocals)
+      val knownUsed = new Array[Boolean](backendUtils.maxLocals(method))
 
       def usedOrMinAlias(it: IntIterator, init: Int): Int = {
         if (knownUsed(init)) init
@@ -85,7 +94,7 @@ class CopyProp[BT <: BTypes](val btypes: BT) {
    * eliminated, it is replaced by a POP. The [[eliminatePushPop]] cleans up unnecessary POPs.
    *
    * Note that an `ASOTRE` can not always be eliminated: it removes a reference to the object that
-   * is currently stored in that local, which potentially frees it for GC (SI-5313). Therefore
+   * is currently stored in that local, which potentially frees it for GC (scala/bug#5313). Therefore
    * we replace such stores by `POP; ACONST_NULL; ASTORE x`.
    */
   def eliminateStaleStores(method: MethodNode, owner: InternalName): Boolean = {
@@ -106,7 +115,7 @@ class CopyProp[BT <: BTypes](val btypes: BT) {
       val toNullOut = mutable.ArrayBuffer.empty[(VarInsnNode, Boolean)]
 
       // `true` for variables that are known to be live
-      val liveVars = new Array[Boolean](method.maxLocals)
+      val liveVars = new Array[Boolean](backendUtils.maxLocals(method))
 
       val it = method.instructions.iterator
       while (it.hasNext) it.next() match {
@@ -273,7 +282,7 @@ class CopyProp[BT <: BTypes](val btypes: BT) {
       }
 
       /**
-       * Eliminate the `numArgs` inputs of the instruction `prod` (which was eliminated). Fo
+       * Eliminate the `numArgs` inputs of the instruction `prod` (which was eliminated). For
        * each input value
        *   - if the `prod` instruction is the single consumer, enqueue the producers of the input
        *   - otherwise, insert a POP instruction to POP the input value
@@ -295,18 +304,12 @@ class CopyProp[BT <: BTypes](val btypes: BT) {
       }
 
       /**
-       * Eliminate the closure value produced by `indy`. If the SAM type is known to construct
-       * without side-effects (e.g. scala/FunctionN), the `indy` and its inputs
-       * are eliminated, otherwise a POP is inserted.
+       * Eliminate LMF `indy` and its inputs.
        */
       def handleClosureInst(indy: InvokeDynamicInsnNode): Unit = {
-        if (isBuiltinFunctionType(Type.getReturnType(indy.desc).getInternalName)) {
-          toRemove += indy
-          callGraph.removeClosureInstantiation(indy, method)
-          handleInputs(indy, Type.getArgumentTypes(indy.desc).length)
-        } else {
-          toInsertAfter(indy) = getPop(1)
-        }
+        toRemove += indy
+        callGraph.removeClosureInstantiation(indy, method)
+        handleInputs(indy, Type.getArgumentTypes(indy.desc).length)
       }
 
       def runQueue(): Unit = while (queue.nonEmpty) {
@@ -471,7 +474,7 @@ class CopyProp[BT <: BTypes](val btypes: BT) {
   }
 
   /**
-   * Remove `xSTORE n; xLOAD n` paris if
+   * Remove `xSTORE n; xLOAD n` pairs if
    *   - the local variable n is not used anywhere else in the method (1), and
    *   - there are no executable instructions and no live labels (jump targets) between the two (2)
    *
@@ -480,7 +483,7 @@ class CopyProp[BT <: BTypes](val btypes: BT) {
    *
    * (1) This could be made more precise by running a prodCons analysis and checking that the load
    * is the only user of the store. Then we could eliminate the pair even if the variable is live
-   * (except for ASTORE, SI-5313). Not needing an analyzer is more efficient, and catches most
+   * (except for ASTORE, scala/bug#5313). Not needing an analyzer is more efficient, and catches most
    * cases.
    *
    * (2) The implementation uses a conservative estimation for liveness (if some instruction uses
@@ -496,7 +499,7 @@ class CopyProp[BT <: BTypes](val btypes: BT) {
    */
   def eliminateStoreLoad(method: MethodNode): Boolean = {
     val removePairs = mutable.Set.empty[RemovePair]
-    val liveVars = new Array[Boolean](method.maxLocals)
+    val liveVars = new Array[Boolean](backendUtils.maxLocals(method))
     val liveLabels = mutable.Set.empty[LabelNode]
 
     def mkRemovePair(store: VarInsnNode, other: AbstractInsnNode, depends: List[RemovePairDependency]): RemovePair = {

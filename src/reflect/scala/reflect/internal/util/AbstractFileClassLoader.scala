@@ -1,5 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala
@@ -11,6 +19,20 @@ import java.net.{ URL, URLConnection, URLStreamHandler }
 import java.security.cert.Certificate
 import java.security.{ ProtectionDomain, CodeSource }
 import java.util.{ Collections => JCollections, Enumeration => JEnumeration }
+
+object AbstractFileClassLoader {
+  // should be a method on AbstractFile, but adding in `internal.util._` for now as we're in a minor release
+  private[scala] final def lookupPath(base: AbstractFile)(pathParts: Seq[String], directory: Boolean): AbstractFile = {
+    var file: AbstractFile = base
+    for (dirPart <- pathParts.init) {
+      file = file.lookupName(dirPart, directory = true)
+      if (file == null)
+        return null
+    }
+
+    file.lookupName(pathParts.last, directory = directory)
+  }
+}
 
 /** A class loader that loads files from a [[scala.reflect.io.AbstractFile]].
  *
@@ -25,19 +47,7 @@ class AbstractFileClassLoader(val root: AbstractFile, parent: ClassLoader)
     else s"${name.replace('.', '/')}.class"
 
   protected def findAbstractFile(name: String): AbstractFile = {
-    var file: AbstractFile = root
-    val pathParts          = name split '/'
-
-    for (dirPart <- pathParts.init) {
-      file = file.lookupName(dirPart, directory = true)
-      if (file == null)
-        return null
-    }
-
-    file.lookupName(pathParts.last, directory = false) match {
-      case null   => null
-      case file   => file
-    }
+    AbstractFileClassLoader.lookupPath(root)(name split '/', directory = false)
   }
 
   protected def dirNameToPath(name: String): String =
@@ -90,7 +100,7 @@ class AbstractFileClassLoader(val root: AbstractFile, parent: ClassLoader)
     }
   }
 
-  private val packages = mutable.Map[String, Package]()
+  private[this] val packages = mutable.Map[String, Package]()
 
   override def definePackage(name: String, specTitle: String, specVersion: String, specVendor: String, implTitle: String, implVersion: String, implVendor: String, sealBase: URL): Package = {
     throw new UnsupportedOperationException()

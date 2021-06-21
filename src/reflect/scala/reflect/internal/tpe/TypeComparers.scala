@@ -1,16 +1,29 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala
 package reflect
 package internal
 package tpe
 
 import scala.collection.{ mutable }
-import util.{ Statistics, TriState }
+import util.TriState
 import scala.annotation.tailrec
 
 trait TypeComparers {
   self: SymbolTable =>
+
   import definitions._
-  import TypesStats._
+  import statistics._
 
   private final val LogPendingSubTypesThreshold = TypeConstants.DefaultLogThreshhold
 
@@ -18,7 +31,7 @@ trait TypeComparers {
   def pendingSubTypes = _pendingSubTypes
 
   final case class SubTypePair(tp1: Type, tp2: Type) {
-    // SI-8146 we used to implement equality here in terms of pairwise =:=.
+    // scala/bug#8146 we used to implement equality here in terms of pairwise =:=.
     //         But, this was inconsistent with hashCode, which was based on the
     //         Type#hashCode, based on the structure of types, not the meaning.
     //         Now, we use `Type#{equals,hashCode}` as the (consistent) basis for
@@ -52,7 +65,7 @@ trait TypeComparers {
 
   private def isSubPre(pre1: Type, pre2: Type, sym: Symbol) =
     if ((pre1 ne pre2) && (pre1 ne NoPrefix) && (pre2 ne NoPrefix) && pre1 <:< pre2) {
-      if (settings.debug) println(s"new isSubPre $sym: $pre1 <:< $pre2")
+      if (settings.isDebug) println(s"new isSubPre $sym: $pre1 <:< $pre2")
       true
     } else
       false
@@ -90,7 +103,7 @@ trait TypeComparers {
 
   /** Do `tp1` and `tp2` denote equivalent types? */
   def isSameType(tp1: Type, tp2: Type): Boolean = try {
-    if (Statistics.canEnable) Statistics.incCounter(sametypeCount)
+    if (settings.areStatisticsEnabled) statistics.incCounter(sametypeCount)
     subsametypeRecursions += 1
     //OPT cutdown on Function0 allocation
     //was:
@@ -124,9 +137,9 @@ trait TypeComparers {
   // combination of { tp1, tp2 } { is, is not } an AnnotatedType - this because the
   // logic of "annotationsConform" is arbitrary and unknown.
   private def isSameType1(tp1: Type, tp2: Type): Boolean = typeRelationPreCheck(tp1, tp2) match {
-    case state if state.isKnown                                  => state.booleanValue
-    case _ if typeHasAnnotations(tp1) || typeHasAnnotations(tp2) => sameAnnotatedTypes(tp1, tp2)
-    case _                                                       => isSameType2(tp1, tp2)
+    case state if state.isKnown                                                  => state.booleanValue
+    case _ if tp1.isInstanceOf[AnnotatedType] || tp2.isInstanceOf[AnnotatedType] => sameAnnotatedTypes(tp1, tp2)
+    case _                                                                       => isSameType2(tp1, tp2)
   }
 
   private def isSameHKTypes(tp1: Type, tp2: Type) = (
@@ -163,14 +176,14 @@ trait TypeComparers {
   private def equalTypeParamsAndResult(tparams1: List[Symbol], res1: Type, tparams2: List[Symbol], res2: Type) = {
     def subst(info: Type) = info.substSym(tparams2, tparams1)
     // corresponds does not check length of two sequences before checking the predicate,
-    // but SubstMap assumes it has been checked (SI-2956)
+    // but SubstMap assumes it has been checked (scala/bug#2956)
     (     sameLength(tparams1, tparams2)
       && (tparams1 corresponds tparams2)((p1, p2) => methodHigherOrderTypeParamsSameVariance(p1, p2) && p1.info =:= subst(p2.info))
       && (res1 =:= subst(res2))
     )
   }
 
-  // SI-2066 This prevents overrides with incompatible variance in higher order type parameters.
+  // scala/bug#2066 This prevents overrides with incompatible variance in higher order type parameters.
   private def methodHigherOrderTypeParamsSameVariance(sym1: Symbol, sym2: Symbol) = {
     def ignoreVariance(sym: Symbol) = !(sym.isHigherOrderTypeParameter && sym.logicallyEnclosingMember.isMethod)
     !settings.isScala211 || ignoreVariance(sym1) || ignoreVariance(sym2) || sym1.variance == sym2.variance
@@ -180,7 +193,17 @@ trait TypeComparers {
     !settings.isScala211 || methodHigherOrderTypeParamsSameVariance(low, high) || low.variance.isInvariant
 
   def isSameType2(tp1: Type, tp2: Type): Boolean = {
-    def retry(lhs: Type, rhs: Type) = ((lhs ne tp1) || (rhs ne tp2)) && isSameType(lhs, rhs)
+    def retry() = {
+      // OPT no need to compare eta-expansions of a pair of distinct class type refs, we'd get the same result (false).
+      // e.g. we know that TypeRef(..., Some, Nil) is not the same as TypeRef(..., Option, Nil) without needing to compare
+      // [+A]Option[A] and [+A]Some[A].
+      val skip = isNoArgStaticClassTypeRef(tp1) && isNoArgStaticClassTypeRef(tp2)
+      !skip && {
+        val lhs = normalizePlus(tp1)
+        val rhs = normalizePlus(tp2)
+        ((lhs ne tp1) || (rhs ne tp2)) && isSameType(lhs, rhs)
+      }
+    }
 
     /*  Here we highlight those unfortunate type-like constructs which
      *  are hidden bundles of mutable state, cruising the type system picking
@@ -233,7 +256,7 @@ trait TypeComparers {
       || sameSingletonType
       || mutateNonTypeConstructs(tp1, tp2)
       || mutateNonTypeConstructs(tp2, tp1)
-      || retry(normalizePlus(tp1), normalizePlus(tp2))
+      || retry()
     )
   }
 
@@ -315,9 +338,9 @@ trait TypeComparers {
   }
 
   private def isSubType1(tp1: Type, tp2: Type, depth: Depth): Boolean = typeRelationPreCheck(tp1, tp2) match {
-    case state if state.isKnown                                  => state.booleanValue
-    case _ if typeHasAnnotations(tp1) || typeHasAnnotations(tp2) => annotationsConform(tp1, tp2) && (tp1.withoutAnnotations <:< tp2.withoutAnnotations)
-    case _                                                       => isSubType2(tp1, tp2, depth)
+    case state if state.isKnown                                                  => state.booleanValue
+    case _ if tp1.isInstanceOf[AnnotatedType] || tp2.isInstanceOf[AnnotatedType] => annotationsConform(tp1, tp2) && (tp1.withoutAnnotations <:< tp2.withoutAnnotations)
+    case _                                                                       => isSubType2(tp1, tp2, depth)
   }
 
   private def isPolySubType(tp1: PolyType, tp2: PolyType): Boolean = {
@@ -347,10 +370,40 @@ trait TypeComparers {
     case (SingleType(ThisType(lpre), v1), SingleType(SuperType(ThisType(rpre), _), v2)) => (lpre eq rpre) && (v1.overrideChain contains v2)
     case _                                                                              => false
   }
+  private def isNoArgStaticClassTypeRef(tp: Type) = tp match {
+    // isStatic to allow prefixes with type vars to accumulate constraints in the slow path in isHKSubType
+    case TypeRef(_, sym, Nil) if sym.isClass && sym.isStatic => true
+    case _ => false
+  }
 
   // @assume tp1.isHigherKinded || tp2.isHigherKinded
   def isHKSubType(tp1: Type, tp2: Type, depth: Depth): Boolean = {
-    def isSub(ntp1: Type, ntp2: Type) = (ntp1.withoutAnnotations, ntp2.withoutAnnotations) match {
+
+    def isSubHKTypeVar(tp1: Type, tp2: Type) = (tp1, tp2) match {
+      case (tv1 @ TypeVar(_, _), tv2 @ TypeVar(_, _)) =>
+        reporter.warning(tv1.typeSymbol.pos,
+          sm"""|compiler bug: Unexpected code path: testing two type variables for subtype relation:
+               |  ${tv1} <:< ${tv2}
+               |Please report bug at https://github.com/scala/bug/issues
+            """.trim)
+        false
+      case (tp1, tv2 @ TypeVar(_, _)) =>
+        val ntp1 = tp1.normalize
+        (tv2.params corresponds ntp1.typeParams)(methodHigherOrderTypeParamsSubVariance) &&
+        { tv2.addLoBound(ntp1); true }
+      case (tv1 @ TypeVar(_, _), tp2) =>
+        val ntp2 = tp2.normalize
+        (ntp2.typeParams corresponds tv1.params)(methodHigherOrderTypeParamsSubVariance) &&
+        { tv1.addHiBound(ntp2); true }
+      case _ =>
+        false
+    }
+
+    def isSub(tp1: Type, tp2: Type) =
+      settings.isScala213 && isSubHKTypeVar(tp1, tp2) ||
+        isSub2(tp1.normalize, tp2.normalize)  // @M! normalize reduces higher-kinded case to PolyType's
+
+    def isSub2(ntp1: Type, ntp2: Type) = (ntp1, ntp2) match {
       case (TypeRef(_, AnyClass, _), _)                                     => false                    // avoid some warnings when Nothing/Any are on the other side
       case (_, TypeRef(_, NothingClass, _))                                 => false
       case (pt1: PolyType, pt2: PolyType)                                   => isPolySubType(pt1, pt2)  // @assume both .isHigherKinded (both normalized to PolyType)
@@ -363,7 +416,11 @@ trait TypeComparers {
 
     (    (tp1.typeSymbol eq NothingClass)       // @M Nothing is subtype of every well-kinded type
       || (tp2.typeSymbol eq AnyClass)           // @M Any is supertype of every well-kinded type (@PP: is it? What about continuations plugin?)
-      || isSub(tp1.normalize, tp2.normalize) && annotationsConform(tp1, tp2)  // @M! normalize reduces higher-kinded case to PolyType's
+      || (if (isNoArgStaticClassTypeRef(tp1) && isNoArgStaticClassTypeRef(tp2))
+            tp1.typeSymbolDirect.isNonBottomSubClass(tp2.typeSymbolDirect) // OPT faster than comparing eta-expanded types
+          else
+            isSub(tp1.withoutAnnotations, tp2.withoutAnnotations) && annotationsConform(tp1, tp2)
+         )
     )
   }
 
@@ -394,7 +451,7 @@ trait TypeComparers {
             val sym2 = tr2.sym
             val pre1 = tr1.pre
             val pre2 = tr2.pre
-            (((if (sym1 eq sym2) phase.erasedTypes || sym1.owner.hasPackageFlag || isSubType(pre1, pre2, depth)
+            (((if (sym1 eq sym2) phase.erasedTypes || sym1.rawowner.hasPackageFlag || isSubType(pre1, pre2, depth)
             else (sym1.name == sym2.name && !sym1.isModuleClass && !sym2.isModuleClass &&
               (isUnifiable(pre1, pre2) ||
                 isSameSpecializedSkolem(sym1, sym2, pre1, pre2) ||
@@ -404,7 +461,7 @@ trait TypeComparers {
               sym2.isClass && {
                 val base = tr1 baseType sym2
                 // During bootstrap, `base eq NoType` occurs about 2.5 times as often as `base ne NoType`.
-                // The extra check seems like a worthwhile optimization (about 2.5M useless calls to isSubtype saved during that run).
+                // The extra check seems like a worthwhile optimization (about 2.5M useless calls to isSubType saved during that run).
                 (base ne tr1) && (base ne NoType) && isSubType(base, tr2, depth)
               }
               ||
@@ -438,7 +495,7 @@ trait TypeComparers {
         isSubType(tp1.withoutAnnotations, tp2.withoutAnnotations, depth) &&
           annotationsConform(tp1, tp2)
       case BoundedWildcardType(bounds) =>
-        isSubType(tp1.bounds.lo, tp2, depth)
+        isSubType(tp1.lowerBound, tp2, depth)
       case tv @ TypeVar(_,_) =>
         tv.registerBound(tp2, isLowerBound = false)
       case ExistentialType(_, _) =>
@@ -464,7 +521,7 @@ trait TypeComparers {
       sym2 match {
         case SingletonClass                   => tp1.isStable || fourthTry
         case _: ClassSymbol                   => classOnRight
-        case _: TypeSymbol if sym2.isDeferred => abstractTypeOnRight(tp2.bounds.lo) || fourthTry
+        case _: TypeSymbol if sym2.isDeferred => abstractTypeOnRight(tp2.lowerBound) || fourthTry
         case _: TypeSymbol                    => retry(normalizePlus(tp1), normalizePlus(tp2))
         case _                                => fourthTry
       }
@@ -535,7 +592,7 @@ trait TypeComparers {
             case _: ClassSymbol if isRawType(tp1)         => retry(normalizePlus(tp1), normalizePlus(tp2))
             case _: ClassSymbol if sym1.isModuleClass     => retry(normalizePlus(tp1), normalizePlus(tp2))
             case _: ClassSymbol if sym1.isRefinementClass => retry(sym1.info, tp2)
-            case _: TypeSymbol if sym1.isDeferred         => abstractTypeOnLeft(tp1.bounds.hi)
+            case _: TypeSymbol if sym1.isDeferred         => abstractTypeOnLeft(tp1.upperBound)
             case _: TypeSymbol                            => retry(normalizePlus(tp1), normalizePlus(tp2))
             case _                                        => false
           }

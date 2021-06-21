@@ -17,18 +17,24 @@ class InlinerIllegalAccessTest extends BytecodeTesting {
   override def compilerArgs = "-opt:l:none"
 
   import compiler._
+  import global.genBCode.postProcessor.{bTypesFromClassfile, byteCodeRepository, inliner}
+  import bTypesFromClassfile._
   import global.genBCode.bTypes._
 
   def addToRepo(cls: List[ClassNode]): Unit = for (c <- cls) byteCodeRepository.add(c, None)
-  def assertEmpty(ins: Option[AbstractInsnNode]) = for (i <- ins)
+  def assertEmpty(ins: List[AbstractInsnNode]) = for (i <- ins)
     throw new AssertionError(textify(i))
+
+  def clearClassBTypeCaches(): Unit = {
+    classBTypeCache.clear()
+  }
 
   @Test
   def typeAccessible(): Unit = {
     val code =
       """package a {
         |  private class C {            // the Scala compiler makes all classes public
-        |    def f1 = new C                   // NEW a/C
+        |    def f1 = new C                   // NEW a/C, INVOKESPECIAL a/C.<init> ()V
         |    def f2 = new Array[C](0)         // ANEWARRAY a/C
         |    def f3 = new Array[Array[C]](0)  // ANEWARRAY [La/C;
         |  }
@@ -46,9 +52,9 @@ class InlinerIllegalAccessTest extends BytecodeTesting {
 
     val methods = cClass.methods.asScala.filter(_.name(0) == 'f').toList
 
-    def check(classNode: ClassNode, test: Option[AbstractInsnNode] => Unit) = {
+    def check(classNode: ClassNode, test: List[AbstractInsnNode] => Unit) = {
       for (m <- methods)
-        test(inliner.findIllegalAccess(m.instructions, classBTypeFromParsedClassfile(cClass.name), classBTypeFromParsedClassfile(classNode.name)).map(_._1))
+        test(inliner.findIllegalAccess(m.instructions, classBTypeFromParsedClassfile(cClass.name), classBTypeFromParsedClassfile(classNode.name)).right.get)
     }
 
     check(cClass, assertEmpty)
@@ -56,7 +62,7 @@ class InlinerIllegalAccessTest extends BytecodeTesting {
     check(eClass, assertEmpty) // C is public, so accessible in E
 
     byteCodeRepository.parsedClasses.clear()
-    classBTypeFromInternalName.clear()
+    clearClassBTypeCaches()
 
     cClass.access &= ~ACC_PUBLIC // ftw
     addToRepo(allClasses)
@@ -65,9 +71,18 @@ class InlinerIllegalAccessTest extends BytecodeTesting {
     check(cClass, assertEmpty)
     check(dClass, assertEmpty) // accessing a private class in the same package is OK
     check(eClass, {
-      case Some(ti: TypeInsnNode) if Set("a/C", "[La/C;")(ti.desc) => ()
+      case (ti: TypeInsnNode) :: is if Set("a/C", "[La/C;")(ti.desc) =>
+        is match {
+          case List(mi: MethodInsnNode) => assert(mi.owner == "a/C" && mi.name == "<init>")
+          case Nil =>
+        }
       // MatchError otherwise
     })
+
+    // ensure the caches are empty at the end for the next test to run (`check` caches types by
+    // calling `classBTypeFromParsedClassfile`). note that per-run caches are cleared at the end
+    // of a compilation, not the beginning.
+    clearClassBTypeCaches()
   }
 
   @Test
@@ -141,12 +156,12 @@ class InlinerIllegalAccessTest extends BytecodeTesting {
 
     val List(rbD, rcD, rfD, rgD) = dCl.methods.asScala.toList.filter(_.name(0) == 'r').sortBy(_.name)
 
-    def check(method: MethodNode, decl: ClassNode, dest: ClassNode, test: Option[AbstractInsnNode] => Unit): Unit = {
-      test(inliner.findIllegalAccess(method.instructions, classBTypeFromParsedClassfile(decl.name), classBTypeFromParsedClassfile(dest.name)).map(_._1))
+    def check(method: MethodNode, decl: ClassNode, dest: ClassNode, test: List[AbstractInsnNode] => Unit): Unit = {
+      test(inliner.findIllegalAccess(method.instructions, classBTypeFromParsedClassfile(decl.name), classBTypeFromParsedClassfile(dest.name)).right.get)
     }
 
-    val cOrDOwner = (_: Option[AbstractInsnNode] @unchecked) match {
-      case Some(mi: MethodInsnNode) if Set("a/C", "a/D")(mi.owner) => ()
+    val cOrDOwner = (_: List[AbstractInsnNode] @unchecked) match {
+      case List(mi: MethodInsnNode) if Set("a/C", "a/D")(mi.owner) => ()
       // MatchError otherwise
     }
 
@@ -186,5 +201,10 @@ class InlinerIllegalAccessTest extends BytecodeTesting {
     // privated method accesses can only be inlined in the same class
     for (m <- Set(rdC, rhC)) check(m, cCl, cCl, assertEmpty)
     for (m <- Set(rdC, rhC); c <- allClasses.tail) check(m, cCl, c, cOrDOwner)
+
+    // ensure the caches are empty at the end for the next test to run (`check` caches types by
+    // calling `classBTypeFromParsedClassfile`). note that per-run caches are cleared at the end
+    // of a compilation, not the beginning.
+    clearClassBTypeCaches()
   }
 }

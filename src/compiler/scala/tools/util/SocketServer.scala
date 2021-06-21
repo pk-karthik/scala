@@ -1,25 +1,35 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2002-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package tools.util
 
-import java.net.{ ServerSocket, SocketException, SocketTimeoutException }
-import java.io.{ PrintWriter, BufferedReader }
+import java.net.{ServerSocket, SocketException, SocketTimeoutException}
+import java.io.{BufferedReader, PrintStream, PrintWriter}
+
 import scala.tools.nsc.io.Socket
 
 trait CompileOutputCommon {
   def verbose: Boolean
 
   def info(msg: String)  = if (verbose) echo(msg)
-  def echo(msg: String)  = {Console println msg; Console.flush()}
-  def warn(msg: String)  = {Console.err println msg; Console.flush()}
-  def fatal(msg: String) = { warn(msg) ; sys.exit(1) }
+  def echo(msg: String)  = printlnFlush(msg, Console.out)
+  def warn(msg: String)  = printlnFlush(msg, Console.err)
+  def fatal(msg: String) = { warn(msg) ; throw SystemExit(1) }
+
+  private def printlnFlush(msg: String, out: PrintStream) = {
+    out.println(msg)
+    out.flush()
+  }
 }
 
 /** The abstract class SocketServer implements the server

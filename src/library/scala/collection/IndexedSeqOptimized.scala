@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2006-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -199,7 +203,7 @@ trait IndexedSeqOptimized[+A, +Repr] extends Any with IndexedSeqLike[A, Repr] { 
 
   override /*SeqLike*/
   def indexWhere(p: A => Boolean, from: Int): Int = {
-    val start = from max 0
+    val start = math.max(from, 0)
     negLength(start + segmentLength(!p(_), start))
   }
 
@@ -275,6 +279,16 @@ trait IndexedSeqOptimized[+A, +Repr] extends Any with IndexedSeqLike[A, Repr] { 
       }
     case _ =>
       super.endsWith(that)
+  }
+
+  override def toList: List[A] = {
+    var i = length - 1
+    var result: List[A] = Nil
+    while (i >= 0) {
+      result ::= apply(i)
+      i -= 1
+    }
+    result
   }
 }
 

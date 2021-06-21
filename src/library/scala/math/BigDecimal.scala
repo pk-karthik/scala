@@ -1,11 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2007-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
-
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package math
@@ -18,7 +21,6 @@ import scala.collection.immutable.NumericRange
 /**
  *  @author  Stephane Micheloud
  *  @author  Rex Kerr
- *  @version 1.1
  *  @since 2.7
  */
 object BigDecimal {
@@ -394,7 +396,6 @@ object BigDecimal {
  *
  *  @author  Stephane Micheloud
  *  @author  Rex Kerr
- *  @version 1.1
  */
 final class BigDecimal(val bigDecimal: BigDec, val mc: MathContext)
 extends ScalaNumber with ScalaNumericConversions with Serializable with Ordered[BigDecimal] {

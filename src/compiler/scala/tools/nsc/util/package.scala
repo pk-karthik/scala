@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author Paul Phillips
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala
@@ -57,7 +64,7 @@ package object util {
     writer.toString()
   }
 
-  /** Generate a string using a routine that wants to write on a stream. */
+  /** Generate a string using a routine that wants to write on a writer. */
   def stringFromWriter(writer: PrintWriter => Unit): String = {
     val stringWriter = new StringWriter()
     val stream = new NewLinePrintWriter(stringWriter)
@@ -65,23 +72,25 @@ package object util {
     stream.close()
     stringWriter.toString
   }
+  /** Generate a string using a routine that wants to write on a stream. */
   def stringFromStream(stream: OutputStream => Unit): String = {
+    val utf8 = java.nio.charset.StandardCharsets.UTF_8
     val bs = new ByteArrayOutputStream()
-    val ps = new PrintStream(bs)
+    val ps = new PrintStream(bs, /*autoflush=*/ false, utf8.name)    // use Charset directly in jdk10
     stream(ps)
     ps.close()
-    bs.toString()
+    bs.toString(utf8.name)
   }
-  def stackTraceString(ex: Throwable): String = stringFromWriter(ex printStackTrace _)
+  def stackTraceString(t: Throwable): String = stringFromWriter(t.printStackTrace(_))
 
   /** A one line string which contains the class of the exception, the
    *  message if any, and the first non-Predef location in the stack trace
    *  (to exclude assert, require, etc.)
    */
-  def stackTraceHeadString(ex: Throwable): String = {
-    val frame = ex.getStackTrace.dropWhile(_.getClassName contains "Predef") take 1 mkString ""
-    val msg   = ex.getMessage match { case null | "" => "" ; case s => s"""("$s")""" }
-    val clazz = ex.getClass.getName.split('.').last
+  def stackTraceHeadString(t: Throwable): String = {
+    val frame = t.getStackTrace.dropWhile(_.getClassName contains "Predef").take(1).mkString("")
+    val msg   = t.getMessage match { case null | "" => "" ; case s => s"""("$s")""" }
+    val clazz = t.getClass.getName.split('.').last
 
     s"$clazz$msg @ $frame"
   }
@@ -89,7 +98,7 @@ package object util {
   implicit class StackTraceOps(private val e: Throwable) extends AnyVal with StackTracing {
     /** Format the stack trace, returning the prefix consisting of frames that satisfy
      *  a given predicate.
-     *  The format is similar to the typical case described in the JavaDoc
+     *  The format is similar to the typical case described in the Javadoc
      *  for [[java.lang.Throwable#printStackTrace]].
      *  If a stack trace is truncated, it will be followed by a line of the form
      *  `... 3 elided`, by analogy to the lines `... 3 more` which indicate

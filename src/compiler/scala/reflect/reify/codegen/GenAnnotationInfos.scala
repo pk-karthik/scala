@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala.reflect.reify
 package codegen
 
@@ -10,7 +22,7 @@ trait GenAnnotationInfos {
   // however, when reifying free and tough types, we're forced to reify annotation infos as is
   // why is that bad? take a look inside
   def reifyAnnotationInfo(ann: AnnotationInfo): Tree = {
-    val reifiedArgs = ann.args map { arg =>
+    ann.args.foreach { arg =>
       val saved1 = reifyTreeSymbols
       val saved2 = reifyTreeTypes
 

@@ -1,90 +1,35 @@
-/* NSC -- new Scala compiler
- * Copyright 2002-2013 LAMP/EPFL
- * @author Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala
 package tools.nsc
 package reporters
 
-import java.io.{ BufferedReader, PrintWriter }
-import scala.reflect.internal.util._
-import StringOps._
+import java.io.{BufferedReader, PrintWriter}
+import scala.reflect.internal.util.Position
 
-/** This class implements a Reporter that displays messages on a text console.
- */
-class ConsoleReporter(val settings: Settings, reader: BufferedReader, writer: PrintWriter) extends AbstractReporter {
-  def this(settings: Settings) = this(settings, Console.in, new PrintWriter(Console.err, true))
+/** This class implements a Reporter that displays messages on a text console. */
+class ConsoleReporter(val settings: Settings, val reader: BufferedReader, val writer: PrintWriter, val echoWriter: PrintWriter) extends FilteringReporter with PrintReporter {
+  def this(settings: Settings) = this(settings, Console.in, new PrintWriter(Console.err, true), new PrintWriter(Console.out, true))
+  def this(settings: Settings, reader: BufferedReader, writer: PrintWriter) = this(settings, reader, writer, writer)
 
-  /** Whether a short file name should be displayed before errors */
-  var shortname: Boolean = false
+  def doReport(pos: Position, msg: String, severity: Severity): Unit = display(pos, msg, severity)
 
-  /** maximal number of error messages to be printed */
-  final val ERROR_LIMIT = 100
-
-  private def label(severity: Severity): String = severity match {
-    case ERROR   => "error"
-    case WARNING => "warning"
-    case INFO    => null
+  override def finish(): Unit = {
+    import reflect.internal.util.StringOps.{countElementsAsString => countAs}
+    if (!settings.nowarn && hasWarnings)
+      echo(s"${countAs(warningCount, WARNING.toString.toLowerCase)} found")
+    if (hasErrors)
+      echo(s"${countAs(errorCount, ERROR.toString.toLowerCase)} found")
+    super.finish()
   }
-
-  protected def clabel(severity: Severity): String = {
-    val label0 = label(severity)
-    if (label0 eq null) "" else label0 + ": "
-  }
-
-  /** Returns the number of errors issued totally as a string.
-   */
-  private def getCountString(severity: Severity): String =
-    StringOps.countElementsAsString((severity).count, label(severity))
-
-  /** Prints the message. */
-  def printMessage(msg: String) {
-    writer print trimAllTrailingSpace(msg) + "\n"
-    writer.flush()
-  }
-
-  /** Prints the message with the given position indication. */
-  def printMessage(posIn: Position, msg: String) {
-    printMessage(Position.formatMessage(posIn, msg, shortname))
-  }
-  def print(pos: Position, msg: String, severity: Severity) {
-    printMessage(pos, clabel(severity) + msg)
-  }
-
-  /** Prints the column marker of the given position.
-   */
-  def printColumnMarker(pos: Position) =
-    if (pos.isDefined) { printMessage(" " * (pos.column - 1) + "^") }
-
-  /** Prints the number of errors and warnings if their are non-zero. */
-  def printSummary() {
-    if (WARNING.count > 0) printMessage(getCountString(WARNING) + " found")
-    if (  ERROR.count > 0) printMessage(getCountString(ERROR  ) + " found")
-  }
-
-  def display(pos: Position, msg: String, severity: Severity) {
-    if (severity != ERROR || severity.count <= ERROR_LIMIT)
-      print(pos, msg, severity)
-  }
-
-  def displayPrompt(): Unit = {
-    writer.print("\na)bort, s)tack, r)esume: ")
-    writer.flush()
-    if (reader != null) {
-      val response = reader.read().asInstanceOf[Char].toLower
-      if (response == 'a' || response == 's') {
-        (new Exception).printStackTrace()
-        if (response == 'a')
-          sys exit 1
-
-        writer.print("\n")
-        writer.flush()
-      }
-    }
-  }
-
-  override def flush() = writer.flush()
-
-  override def finish() = printSummary()
 }

@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Paul Phillips
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
@@ -158,11 +165,10 @@ object Jar {
   // See http://docs.oracle.com/javase/7/docs/api/java/nio/file/Path.html
   // for some ideas.
   private val ZipMagicNumber = List[Byte](80, 75, 3, 4)
-  private def magicNumberIsZip(f: Path) = f.isFile && (f.toFile.bytes().take(4).toList == ZipMagicNumber)
+  private def magicNumberIsZip(f: Path) = f.toFile.bytes().take(4).toList == ZipMagicNumber
 
-  def isJarOrZip(f: Path): Boolean = isJarOrZip(f, examineFile = true)
-  def isJarOrZip(f: Path, examineFile: Boolean): Boolean =
-    f.hasExtension("zip", "jar") || (examineFile && magicNumberIsZip(f))
+  // file exists and either has name.jar or magic number
+  def isJarOrZip(f: Path): Boolean = f.isFile && (Path.isExtensionJarOrZip(f.name) || magicNumberIsZip(f))
 
   def create(file: File, sourceDir: Directory, mainClass: String) {
     val writer = new Jar(file).jarWriter(Name.MAIN_CLASS -> mainClass)

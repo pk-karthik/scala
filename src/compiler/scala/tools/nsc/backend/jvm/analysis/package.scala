@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala.tools.nsc.backend.jvm
 
 /**
@@ -84,7 +96,7 @@ package scala.tools.nsc.backend.jvm
  *   val m = cn.methods.iterator.asScala.find(_.name == "f").head
  *
  *   // the value is read from the classfile, so it's 4
- *   println(s"maxLocals: ${m.maxLocals}, maxStack: ${m.maxStack}") // maxLocals: 5, maxStack: 4
+ *   println(s"maxLocals: \${m.maxLocals}, maxStack: \${m.maxStack}") // maxLocals: 5, maxStack: 4
  *
  *   // we can safely set it to 2 for running the analyzer.
  *   m.maxStack = 2
@@ -110,7 +122,7 @@ package scala.tools.nsc.backend.jvm
  *  - Use YourKit for finding hotspots (cpu profiling). when it comes to drilling down into the details
  *    of a hotspot, don't pay too much attention to the percentages / time counts.
  *  - Should also try other profilers.
- *  - Use timers. When a method showed up as a hotspot, i added a timer around that method, and a
+ *  - Use timers. When a method showed up as a hotspot, I added a timer around that method, and a
  *    second one within the method to measure specific parts. The timers slow things down, but the
  *    relative numbers show what parts of a method are slow.
  *

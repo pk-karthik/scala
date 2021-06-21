@@ -1,18 +1,24 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2012 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
-package scala
-package tools.nsc
+package scala.tools.nsc
 package backend.jvm
 
-import scala.tools.asm
 import scala.annotation.switch
 import scala.collection.mutable
-import GenBCode._
+import scala.tools.asm
 import scala.tools.asm.tree.MethodInsnNode
 import scala.tools.nsc.backend.jvm.BCodeHelpers.TestOp
+import scala.tools.nsc.backend.jvm.GenBCode._
 
 /*
  *  A high-level facade to the ASM API for bytecode generation.
@@ -21,24 +27,14 @@ import scala.tools.nsc.backend.jvm.BCodeHelpers.TestOp
  *  @version 1.0
  *
  */
-abstract class BCodeIdiomatic extends SubComponent {
-  val bTypes = new BTypesFromSymbols[global.type](global)
+abstract class BCodeIdiomatic {
+  val global: Global
+  val bTypes: BTypesFromSymbols[global.type]
 
   import global._
   import bTypes._
   import coreBTypes._
-
-  val classfileVersion: Int = settings.target.value match {
-    case "jvm-1.8"     => asm.Opcodes.V1_8
-  }
-
-  val majorVersion: Int = (classfileVersion & 0xFF)
-  val emitStackMapFrame = (majorVersion >= 50)
-
-  val extraProc: Int = GenBCode.mkFlags(
-    asm.ClassWriter.COMPUTE_MAXS,
-    if (emitStackMapFrame) asm.ClassWriter.COMPUTE_FRAMES else 0
-  )
+  import genBCode.postProcessor.callGraph.callsitePositions
 
   lazy val JavaStringBuilderClassName = jlStringBuilderRef.internalName
 
@@ -99,14 +95,14 @@ abstract class BCodeIdiomatic extends SubComponent {
 
   /* Just a namespace for utilities that encapsulate MethodVisitor idioms.
    *  In the ASM world, org.objectweb.asm.commons.InstructionAdapter plays a similar role,
-   *  but the methods here allow choosing when to transition from ICode to ASM types
+   *  but the methods here allow choosing when to transition from BType to ASM types
    *  (including not at all, e.g. for performance).
    */
   abstract class JCodeMethodN {
 
     def jmethod: asm.tree.MethodNode
 
-    import asm.Opcodes;
+    import asm.Opcodes
 
     final def emit(opc: Int) { jmethod.visitInsn(opc) }
 
@@ -127,7 +123,7 @@ abstract class BCodeIdiomatic extends SubComponent {
      */
     final def genPrimitiveLogical(op: /* LogicalOp */ Int, kind: BType) {
 
-      import scalaPrimitives.{ AND, OR, XOR }
+      import scalaPrimitives.{AND, OR, XOR}
 
       ((op, kind): @unchecked) match {
         case (AND, LONG) => emit(Opcodes.LAND)
@@ -156,7 +152,7 @@ abstract class BCodeIdiomatic extends SubComponent {
      */
     final def genPrimitiveShift(op: /* ShiftOp */ Int, kind: BType) {
 
-      import scalaPrimitives.{ LSL, ASR, LSR }
+      import scalaPrimitives.{ASR, LSL, LSR}
 
       ((op, kind): @unchecked) match {
         case (LSL, LONG) => emit(Opcodes.LSHL)
@@ -183,13 +179,15 @@ abstract class BCodeIdiomatic extends SubComponent {
     /*
      * can-multi-thread
      */
-    final def genStartConcat(pos: Position): Unit = {
+    final def genStartConcat(pos: Position, size: Int): Unit = {
       jmethod.visitTypeInsn(Opcodes.NEW, JavaStringBuilderClassName)
       jmethod.visitInsn(Opcodes.DUP)
+      jmethod.visitLdcInsn(Integer.valueOf(size))
       invokespecial(
         JavaStringBuilderClassName,
         INSTANCE_CONSTRUCTOR_NAME,
-        "()V",
+        "(I)V",
+        itf = false,
         pos
       )
     }
@@ -198,7 +196,7 @@ abstract class BCodeIdiomatic extends SubComponent {
      * can-multi-thread
      */
     def genConcat(elemType: BType, pos: Position): Unit = {
-      val paramType = elemType match {
+      val paramType: BType = elemType match {
         case ct: ClassBType if ct.isSubtypeOf(StringRef).get          => StringRef
         case ct: ClassBType if ct.isSubtypeOf(jlStringBufferRef).get  => jlStringBufferRef
         case ct: ClassBType if ct.isSubtypeOf(jlCharSequenceRef).get  => jlCharSequenceRef
@@ -263,7 +261,7 @@ abstract class BCodeIdiomatic extends SubComponent {
         case INT   => pickOne(JCodeMethodN.fromIntT2T)
 
         case FLOAT  =>
-          import asm.Opcodes.{ F2L, F2D, F2I }
+          import asm.Opcodes.{F2D, F2I, F2L}
           to match {
             case LONG    => emit(F2L)
             case DOUBLE  => emit(F2D)
@@ -271,7 +269,7 @@ abstract class BCodeIdiomatic extends SubComponent {
           }
 
         case LONG   =>
-          import asm.Opcodes.{ L2F, L2D, L2I }
+          import asm.Opcodes.{L2D, L2F, L2I}
           to match {
             case FLOAT   => emit(L2F)
             case DOUBLE  => emit(L2D)
@@ -279,7 +277,7 @@ abstract class BCodeIdiomatic extends SubComponent {
           }
 
         case DOUBLE =>
-          import asm.Opcodes.{ D2L, D2F, D2I }
+          import asm.Opcodes.{D2F, D2I, D2L}
           to match {
             case FLOAT   => emit(D2F)
             case LONG    => emit(D2L)
@@ -289,15 +287,19 @@ abstract class BCodeIdiomatic extends SubComponent {
     } // end of emitT2T()
 
     // can-multi-thread
-    final def boolconst(b: Boolean) { iconst(if (b) 1 else 0) }
+    final def boolconst(b: Boolean) {
+      if (b) emit(Opcodes.ICONST_1)
+      else emit(Opcodes.ICONST_0)
+    }
 
     // can-multi-thread
     final def iconst(cst: Int) {
-      if (cst >= -1 && cst <= 5) {
-        emit(Opcodes.ICONST_0 + cst)
-      } else if (cst >= java.lang.Byte.MIN_VALUE && cst <= java.lang.Byte.MAX_VALUE) {
-        jmethod.visitIntInsn(Opcodes.BIPUSH, cst)
-      } else if (cst >= java.lang.Short.MIN_VALUE && cst <= java.lang.Short.MAX_VALUE) {
+      if (cst.toByte == cst) {
+        if (cst >= -1 && cst <= 5) {
+          emit(Opcodes.ICONST_0 + cst)
+        } else
+          jmethod.visitIntInsn(Opcodes.BIPUSH, cst)
+      } else if (cst.toShort == cst) {
         jmethod.visitIntInsn(Opcodes.SIPUSH, cst)
       } else {
         jmethod.visitLdcInsn(new Integer(cst))
@@ -315,7 +317,7 @@ abstract class BCodeIdiomatic extends SubComponent {
 
     // can-multi-thread
     final def fconst(cst: Float) {
-      val bits: Int = java.lang.Float.floatToIntBits(cst)
+      val bits: Int = java.lang.Float.floatToRawIntBits(cst)
       if (bits == 0L || bits == 0x3f800000 || bits == 0x40000000) { // 0..2
         emit(Opcodes.FCONST_0 + cst.asInstanceOf[Int])
       } else {
@@ -325,7 +327,7 @@ abstract class BCodeIdiomatic extends SubComponent {
 
     // can-multi-thread
     final def dconst(cst: Double) {
-      val bits: Long = java.lang.Double.doubleToLongBits(cst)
+      val bits: Long = java.lang.Double.doubleToRawLongBits(cst)
       if (bits == 0L || bits == 0x3ff0000000000000L) { // +0.0d and 1.0d
         emit(Opcodes.DCONST_0 + cst.asInstanceOf[Int])
       } else {
@@ -337,7 +339,7 @@ abstract class BCodeIdiomatic extends SubComponent {
     final def newarray(elem: BType) {
       elem match {
         case c: RefBType =>
-          /* phantom type at play in `Array(null)`, SI-1513. On the other hand, Array(()) has element type `scala.runtime.BoxedUnit` which isObject. */
+          /* phantom type at play in `Array(null)`, scala/bug#1513. On the other hand, Array(()) has element type `scala.runtime.BoxedUnit` which isObject. */
           jmethod.visitTypeInsn(Opcodes.ANEWARRAY, c.classOrArrayType)
         case _ =>
           assert(elem.isNonVoidPrimitiveType)
@@ -373,29 +375,26 @@ abstract class BCodeIdiomatic extends SubComponent {
     final def rem(tk: BType) { emitPrimitive(JCodeMethodN.remOpcodes, tk) } // can-multi-thread
 
     // can-multi-thread
-    final def invokespecial(owner: String, name: String, desc: String, pos: Position) {
-      addInvoke(Opcodes.INVOKESPECIAL, owner, name, desc, false, pos)
+    final def invokespecial(owner: String, name: String, desc: String, itf: Boolean, pos: Position): Unit = {
+      emitInvoke(Opcodes.INVOKESPECIAL, owner, name, desc, itf, pos)
     }
     // can-multi-thread
-    final def invokestatic(owner: String, name: String, desc: String, pos: Position) {
-      addInvoke(Opcodes.INVOKESTATIC, owner, name, desc, false, pos)
+    final def invokestatic(owner: String, name: String, desc: String, itf: Boolean, pos: Position): Unit = {
+      emitInvoke(Opcodes.INVOKESTATIC, owner, name, desc, itf, pos)
     }
     // can-multi-thread
-    final def invokeinterface(owner: String, name: String, desc: String, pos: Position) {
-      addInvoke(Opcodes.INVOKEINTERFACE, owner, name, desc, true, pos)
+    final def invokeinterface(owner: String, name: String, desc: String, pos: Position): Unit = {
+      emitInvoke(Opcodes.INVOKEINTERFACE, owner, name, desc, itf = true, pos)
     }
     // can-multi-thread
-    final def invokevirtual(owner: String, name: String, desc: String, pos: Position) {
-      addInvoke(Opcodes.INVOKEVIRTUAL, owner, name, desc, false, pos)
+    final def invokevirtual(owner: String, name: String, desc: String, pos: Position): Unit = {
+      emitInvoke(Opcodes.INVOKEVIRTUAL, owner, name, desc, itf = false, pos)
     }
 
-    private def addInvoke(opcode: Int, owner: String, name: String, desc: String, itf: Boolean, pos: Position) = {
+    def emitInvoke(opcode: Int, owner: String, name: String, desc: String, itf: Boolean, pos: Position): Unit = {
       val node = new MethodInsnNode(opcode, owner, name, desc, itf)
       jmethod.instructions.add(node)
       if (settings.optInlinerEnabled) callsitePositions(node) = pos
-    }
-    final def invokedynamic(owner: String, name: String, desc: String) {
-      jmethod.visitMethodInsn(Opcodes.INVOKEDYNAMIC, owner, name, desc)
     }
 
     // can-multi-thread
@@ -453,11 +452,11 @@ abstract class BCodeIdiomatic extends SubComponent {
         i += 1
       }
 
-      // check for duplicate keys to avoid "VerifyError: unsorted lookupswitch" (SI-6011)
+      // check for duplicate keys to avoid "VerifyError: unsorted lookupswitch" (scala/bug#6011)
       i = 1
       while (i < keys.length) {
         if (keys(i-1) == keys(i)) {
-          abort("duplicate keys in SWITCH, can't pick arbitrarily one of them to evict, see SI-6011.")
+          abort("duplicate keys in SWITCH, can't pick arbitrarily one of them to evict, see scala/bug#6011: " + keys.sorted.toList)
         }
         i += 1
       }
@@ -481,7 +480,7 @@ abstract class BCodeIdiomatic extends SubComponent {
         var oldPos = 0
         var i = 0
         while (i < keyRange) {
-          val key = keyMin + i;
+          val key = keyMin + i
           if (keys(oldPos) == key) {
             newBranches(i) = branches(oldPos)
             oldPos += 1
@@ -642,10 +641,14 @@ abstract class BCodeIdiomatic extends SubComponent {
    * The entry-value for a LabelDef entry-key always contains the entry-key.
    *
    */
-  class LabelDefsFinder extends Traverser {
-    val result = mutable.Map.empty[Tree, List[LabelDef]]
+  class LabelDefsFinder(rhs: Tree) extends Traverser {
+    val result = mutable.AnyRefMap.empty[Tree, List[LabelDef]]
     var acc: List[LabelDef] = Nil
+    var directResult: List[LabelDef] = Nil
 
+    def apply(): Unit = {
+      traverse(rhs)
+    }
     /*
      * can-multi-thread
      */
@@ -662,6 +665,7 @@ abstract class BCodeIdiomatic extends SubComponent {
         acc = saved
       } else {
         result += (tree -> acc)
+        if (tree eq rhs) directResult = acc
         acc = acc ::: saved
       }
     }

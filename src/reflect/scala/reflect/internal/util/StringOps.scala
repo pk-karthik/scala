@@ -1,17 +1,21 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2002-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package reflect
 package internal
 package util
 
-import scala.compat.Platform.EOL
+import java.lang.System.{lineSeparator => EOL}
 
 /** This object provides utility methods to extract elements
  *  from Strings.
@@ -45,7 +49,7 @@ trait StringOps {
     else s.substring(0, end)
   }
   /** Breaks the string into lines and strips each line before reassembling. */
-  def trimAllTrailingSpace(s: String): String = s.lines map trimTrailingSpace mkString EOL
+  def trimAllTrailingSpace(s: String): String = s.linesIterator.map(trimTrailingSpace).mkString(EOL)
 
   def decompose(str: String, sep: Char): List[String] = {
     def ws(start: Int): List[String] =
@@ -69,18 +73,17 @@ trait StringOps {
     else Some((str take idx, str drop (if (doDropIndex) idx + 1 else idx)))
 
   /** Returns a string meaning "n elements".
+   *  Don't try an element such as "index" with irregular plural.
    */
-  def countElementsAsString(n: Int, elements: String): String =
+  def countElementsAsString(n: Int, element: String): String =
     n match {
-      case 0 => s"no ${elements}s"
-      case 1 => "one "   + elements
-      case 2 => "two "   + elements + "s"
-      case 3 => "three " + elements + "s"
-      case 4 => "four "  + elements + "s"
-      case _ => s"$n ${elements}s"
+      case 0 => s"no ${element}s"
+      case 1 => s"one ${element}"
+      case _ => s"${countAsString(n)} ${element}s"
     }
 
   /** Turns a count into a friendly English description if n<=4.
+   *  Otherwise, a scary math representation.
    */
   def countAsString(n: Int): String =
     n match {
@@ -89,8 +92,8 @@ trait StringOps {
       case 2 => "two"
       case 3 => "three"
       case 4 => "four"
-      case _ => "" + n
+      case _ => n.toString
     }
 }
 
-object StringOps extends StringOps { }
+object StringOps extends StringOps

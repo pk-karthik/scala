@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -23,7 +27,7 @@ import scala.language.implicitConversions
  *  import scala.math.BigInt
  *  object Main extends App {
  *
- *    val fibs: Stream[BigInt] = BigInt(0) #:: BigInt(1) #:: fibs.zip(fibs.tail).map { n => n._1 + n._2 }
+ *    lazy val fibs: Stream[BigInt] = BigInt(0) #:: BigInt(1) #:: fibs.zip(fibs.tail).map { n => n._1 + n._2 }
  *
  *    fibs take 5 foreach println
  *  }
@@ -46,7 +50,7 @@ import scala.language.implicitConversions
  *  import scala.math.BigInt
  *  object Main extends App {
  *
- *    val fibs: Stream[BigInt] = BigInt(0) #:: BigInt(1) #:: fibs.zip(
+ *    lazy val fibs: Stream[BigInt] = BigInt(0) #:: BigInt(1) #:: fibs.zip(
  *      fibs.tail).map(n => {
  *        println("Adding %d and %d".format(n._1, n._2))
  *        n._1 + n._2
@@ -162,7 +166,7 @@ import scala.language.implicitConversions
  *  // The first time we try to access the tail we're going to need more
  *  // information which will require us to recurse, which will require us to
  *  // recurse, which...
- *  val sov: Stream[Vector[Int]] = Vector(0) #:: sov.zip(sov.tail).map { n => n._1 ++ n._2 }
+ *  lazy val sov: Stream[Vector[Int]] = Vector(0) #:: sov.zip(sov.tail).map { n => n._1 ++ n._2 }
  *  }}}
  *
  *  The definition of `fibs` above creates a larger number of objects than
@@ -186,7 +190,6 @@ import scala.language.implicitConversions
  *  @tparam A    the type of the elements contained in this stream.
  *
  *  @author Martin Odersky, Matthias Zenger
- *  @version 1.1 08/08/03
  *  @since   2.8
  *  @see [[http://docs.scala-lang.org/overviews/collections/concrete-immutable-collection-classes.html#streams "Scala's Collection Library overview"]]
  *  section on `Streams` for more information.
@@ -507,7 +510,7 @@ sealed abstract class Stream[+A] extends AbstractSeq[A]
   }
 
   /** A FilterMonadic which allows GC of the head of stream during processing */
-  @noinline // Workaround SI-9137, see https://github.com/scala/scala/pull/4284#issuecomment-73180791
+  @noinline // Workaround scala/bug#9137, see https://github.com/scala/scala/pull/4284#issuecomment-73180791
   override final def withFilter(p: A => Boolean): FilterMonadic[A, Stream[A]] = new Stream.StreamWithFilter(this, p)
 
   /** A lazier Iterator than LinearSeqLike's. */
@@ -1029,6 +1032,8 @@ sealed abstract class Stream[+A] extends AbstractSeq[A]
    */
   override def stringPrefix = "Stream"
 
+  override def equals(that: Any): Boolean =
+    if (this eq that.asInstanceOf[AnyRef]) true else super.equals(that)
 }
 
 /** A specialized, extra-lazy implementation of a stream iterator, so it can
@@ -1068,7 +1073,6 @@ final class StreamIterator[+A] private() extends AbstractIterator[A] with Iterat
  * The object `Stream` provides helper functions to manipulate streams.
  *
  * @author Martin Odersky, Matthias Zenger
- * @version 1.1 08/08/03
  * @since   2.8
  */
 object Stream extends SeqFactory[Stream] {
@@ -1083,7 +1087,9 @@ object Stream extends SeqFactory[Stream] {
    */
   class StreamCanBuildFrom[A] extends GenericCanBuildFrom[A]
 
-  implicit def canBuildFrom[A]: CanBuildFrom[Coll, A, Stream[A]] = new StreamCanBuildFrom[A]
+  implicit def canBuildFrom[A]: CanBuildFrom[Coll, A, Stream[A]] =
+    ReusableCBF.asInstanceOf[CanBuildFrom[Coll, A, Stream[A]]]
+  private[this] val ReusableCBF = new StreamCanBuildFrom[Any]
 
   /** Creates a new builder for a stream */
   def newBuilder[A]: Builder[A, Stream[A]] = new StreamBuilder[A]
@@ -1117,11 +1123,11 @@ object Stream extends SeqFactory[Stream] {
     /** Construct a stream consisting of a given first element followed by elements
      *  from a lazily evaluated Stream.
      */
-    def #::(hd: A): Stream[A] = cons(hd, tl)
+    def #::[B >: A](hd: B): Stream[B] = cons(hd, tl)
     /** Construct a stream consisting of the concatenation of the given stream and
      *  a lazily evaluated Stream.
      */
-    def #:::(prefix: Stream[A]): Stream[A] = prefix append tl
+    def #:::[B >: A](prefix: Stream[B]): Stream[B] = prefix append tl
   }
 
   /** A wrapper method that adds `#::` for cons and `#:::` for concat as operations
@@ -1170,6 +1176,27 @@ object Stream extends SeqFactory[Stream] {
         }
 
       tlVal
+    }
+
+    override /*LinearSeqOptimized*/
+    def sameElements[B >: A](that: GenIterable[B]): Boolean = {
+      @tailrec def consEq(a: Cons[_], b: Cons[_]): Boolean = {
+        if (a.head != b.head) false
+        else {
+          a.tail match {
+            case at: Cons[_] =>
+              b.tail match {
+                case bt: Cons[_] => (at eq bt) || consEq(at, bt)
+                case _ => false
+              }
+            case _ => b.tail.isEmpty
+          }
+        }
+      }
+      that match {
+        case that: Cons[_] => consEq(this, that)
+        case _ =>             super.sameElements(that)
+      }
     }
   }
 
@@ -1242,7 +1269,7 @@ object Stream extends SeqFactory[Stream] {
     *
     * Because this is not an inner class of `Stream` with a reference to the original
     * head, it is now possible for GC to collect any leading and filtered-out elements
-    * which do not satisfy the filter, while the tail is still processing (see SI-8990).
+    * which do not satisfy the filter, while the tail is still processing (see scala/bug#8990).
     */
   private[immutable] final class StreamWithFilter[A](sl: => Stream[A], p: A => Boolean) extends FilterMonadic[A, Stream[A]] {
     private var s = sl                                              // set to null to allow GC after filtered

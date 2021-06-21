@@ -1,6 +1,13 @@
-/* NSC -- new scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala
@@ -10,6 +17,7 @@ package internal
 import Variance._
 import scala.collection.mutable
 import scala.annotation.tailrec
+import scala.reflect.internal.util.ReusableInstance
 
 /** See comments at scala.reflect.internal.Variance.
  */
@@ -50,11 +58,9 @@ trait Variances {
          sym.isParameter
       && !(tvar.isTypeParameterOrSkolem && sym.isTypeParameterOrSkolem && tvar.owner == sym.owner)
     )
-    // return Bivariant if `sym` is local to a term
-    // or is private[this] or protected[this]
-    def isLocalOnly(sym: Symbol) = !sym.owner.isClass || (
-         sym.isTerm // ?? shouldn't this be sym.owner.isTerm according to the comments above?
-      && (sym.isLocalToThis || sym.isSuperAccessor) // super accessors are implicitly local #4345
+    // Is `sym` is local to a term or is private[this] or protected[this]?
+    def isExemptFromVariance(sym: Symbol): Boolean = !sym.owner.isClass || (
+         (sym.isLocalToThis || sym.isSuperAccessor) // super accessors are implicitly local #4345
       && !escapedLocals(sym)
     )
 
@@ -66,20 +72,20 @@ trait Variances {
        *  Initially the state is covariant, but it might change along the search.
        *
        *  A local alias type is treated as Bivariant;
-       *  this is OK because we always expand aliases for variance checking.
+       *  this is OK because such aliases are expanded for variance checking.
        *  However, for an alias which might be externally visible, we must assume Invariant,
        *  because there may be references to the type parameter that are not checked,
-       *  leading to unsoundness (see SI-6566).
+       *  leading to unsoundness (see scala/bug#6566).
        */
       def relativeVariance(tvar: Symbol): Variance = {
         def nextVariance(sym: Symbol, v: Variance): Variance = (
           if (shouldFlip(sym, tvar)) v.flip
-          else if (isLocalOnly(sym)) Bivariant
+          else if (isExemptFromVariance(sym)) Bivariant
           else if (sym.isAliasType) (
             // Unsound pre-2.11 behavior preserved under -Xsource:2.10
             if (settings.isScala211 || sym.isOverridingSymbol) Invariant
             else {
-              currentRun.reporting.deprecationWarning(sym.pos, "Construct depends on unsound variance analysis and will not compile in scala 2.11 and beyond", "2.11.0")
+              currentRun.reporting.deprecationWarning(sym.pos, "Construct depends on unsound variance analysis and will not compile in scala 2.11 and beyond", "2.11.0", site = "", origin = "")
               Bivariant
             }
           )
@@ -126,7 +132,7 @@ trait Variances {
         tp match {
           case _ if isUncheckedVariance(tp)                    =>
           case _ if resultTypeOnly(tp)                         => this(tp.resultType)
-          case TypeRef(_, sym, _) if sym.isAliasType           => this(tp.normalize)
+          case TypeRef(_, sym, _) if shouldDealias(sym)        => this(tp.normalize)
           case TypeRef(_, sym, _) if !sym.variance.isInvariant => checkVarianceOfSymbol(sym) ; mapOver(tp)
           case RefinedType(_, _)                               => withinRefinement(mapOver(tp))
           case ClassInfoType(parents, _, _)                    => parents foreach this
@@ -137,6 +143,12 @@ trait Variances {
         // cloning during the recursion, it is important to return the input `tp`, rather
         // than the result of the pattern match above, which normalizes types.
         tp
+      }
+      private def shouldDealias(sym: Symbol): Boolean = {
+        // The RHS of (private|protected)[this] type aliases are excluded from variance checks. This is
+        // implemented in relativeVariance.
+        // As such, we need to expand references to them to retain soundness. Example: neg/t8079a.scala
+        sym.isAliasType && isExemptFromVariance(sym)
       }
       def validateDefinition(base: Symbol) {
         val saved = this.base
@@ -167,7 +179,9 @@ trait Variances {
         case ClassDef(_, _, _, _) | TypeDef(_, _, _, _) =>
           validateVariance(sym)
           super.traverse(tree)
-        // ModuleDefs need not be considered because they have been eliminated already
+        case ModuleDef(_, _, _) =>
+          validateVariance(sym.moduleClass)
+          super.traverse(tree)
         case ValDef(_, _, _, _) =>
           validateVariance(sym)
         case DefDef(_, _, tparams, vparamss, _, _) =>
@@ -179,7 +193,7 @@ trait Variances {
         case CompoundTypeTree(templ) =>
           super.traverse(tree)
 
-        // SI-7872 These two cases make sure we don't miss variance exploits
+        // scala/bug#7872 These two cases make sure we don't miss variance exploits
         // in originals, e.g. in `foo[({type l[+a] = List[a]})#l]`
         case tt @ TypeTree() if tt.original != null =>
           super.traverse(tt.original)
@@ -192,33 +206,55 @@ trait Variances {
   }
 
   /** Compute variance of type parameter `tparam` in all types `tps`. */
-  def varianceInTypes(tps: List[Type])(tparam: Symbol): Variance =
-    fold(tps map (tp => varianceInType(tp)(tparam)))
+  final def varianceInTypes(tps: List[Type])(tparam: Symbol): Variance =
+    Variance.foldExtract(tps)(t => varianceInType(t)(tparam))
 
   /** Compute variance of type parameter `tparam` in type `tp`. */
-  def varianceInType(tp: Type)(tparam: Symbol): Variance = {
-    def inArgs(sym: Symbol, args: List[Type]): Variance = fold(map2(args, sym.typeParams)((a, p) => inType(a) * p.variance))
-    def inSyms(syms: List[Symbol]): Variance            = fold(syms map inSym)
-    def inTypes(tps: List[Type]): Variance              = fold(tps map inType)
+  final def varianceInType(tp: Type)(tparam: Symbol): Variance = {
+    varianceInTypeCache.using(_.apply(tp, tparam))
+  }
+  private[this] val varianceInTypeCache = new ReusableInstance[varianceInType](() => new varianceInType, enabled = isCompilerUniverse)
 
-    def inSym(sym: Symbol): Variance = if (sym.isAliasType) inType(sym.info).cut else inType(sym.info)
-    def inType(tp: Type): Variance   = tp match {
-      case ErrorType | WildcardType | NoType | NoPrefix => Bivariant
-      case ThisType(_) | ConstantType(_)                => Bivariant
-      case TypeRef(_, `tparam`, _)                      => Covariant
-      case BoundedWildcardType(bounds)                  => inType(bounds)
-      case NullaryMethodType(restpe)                    => inType(restpe)
-      case SingleType(pre, sym)                         => inType(pre)
-      case TypeRef(pre, _, _) if tp.isHigherKinded      => inType(pre)                 // a type constructor cannot occur in tp's args
-      case TypeRef(pre, sym, args)                      => inType(pre)                 & inArgs(sym, args)
-      case TypeBounds(lo, hi)                           => inType(lo).flip             & inType(hi)
-      case RefinedType(parents, defs)                   => inTypes(parents)            & inSyms(defs.toList)
-      case MethodType(params, restpe)                   => inSyms(params).flip         & inType(restpe)
-      case PolyType(tparams, restpe)                    => inSyms(tparams).flip        & inType(restpe)
-      case ExistentialType(tparams, restpe)             => inSyms(tparams)             & inType(restpe)
-      case AnnotatedType(annots, tp)                    => inTypes(annots map (_.atp)) & inType(tp)
+  private final class varianceInType {
+    private[this] var tp: Type = _
+    private[this] var tparam: Symbol = _
+
+    import Variance._
+    private def inArgs(sym: Symbol, args: List[Type]): Variance = foldExtract2(args, sym.typeParams)(inArgParam)
+    private def inSyms(syms: List[Symbol]): Variance            = foldExtract(syms)(inSym)
+    private def inTypes(tps: List[Type]): Variance              = foldExtract(tps)(inType)
+    private def inAnnots(anns: List[AnnotationInfo]): Variance  = foldExtract(anns)(inAnnotationAtp)
+
+    // OPT these extractors are hoisted to fields to reduce allocation. We're also avoiding Function1[_, Variance] to
+    //     avoid value class boxing.
+    private[this] lazy val inAnnotationAtp: Extractor[AnnotationInfo] = (a: AnnotationInfo) => inType(a.atp)
+    private[this] lazy val inArgParam: Extractor2[Type, Symbol]       = (a, b) => inType(a) * b.variance
+    private[this] lazy val inSym: Extractor[Symbol]                   = (sym: Symbol) => if (sym.isAliasType) inType(sym.info).cut else inType(sym.info)
+    private[this] val inType: Extractor[Type] = {
+      case ErrorType | WildcardType | NoType | NoPrefix    => Bivariant
+      case ThisType(_) | ConstantType(_)                   => Bivariant
+      case TypeRef(_, tparam, _) if tparam eq this.tparam  => Covariant
+      case BoundedWildcardType(bounds)                     => inType(bounds)
+      case NullaryMethodType(restpe)                       => inType(restpe)
+      case SingleType(pre, sym)                            => inType(pre)
+      case TypeRef(pre, _, _) if tp.isHigherKinded         => inType(pre)          // a type constructor cannot occur in tp's args
+      case TypeRef(pre, sym, args)                         => inType(pre)          & inArgs(sym, args)
+      case TypeBounds(lo, hi)                              => inType(lo).flip      & inType(hi)
+      case RefinedType(parents, defs)                      => inTypes(parents)     & inSyms(defs.toList)
+      case MethodType(params, restpe)                      => inSyms(params).flip  & inType(restpe)
+      case PolyType(tparams, restpe)                       => inSyms(tparams).flip & inType(restpe)
+      case ExistentialType(tparams, restpe)                => inSyms(tparams)      & inType(restpe)
+      case AnnotatedType(annots, tp)                       => inAnnots(annots)     & inType(tp)
     }
 
-    inType(tp)
+    def apply(tp: Type, tparam: Symbol): Variance = {
+      this.tp = tp
+      this.tparam = tparam
+      try inType(tp)
+      finally {
+        this.tp = null
+        this.tparam = null
+      }
+    }
   }
 }

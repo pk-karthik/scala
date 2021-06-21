@@ -8,8 +8,8 @@ import org.junit.runner.RunWith
 import org.junit.runners.JUnit4
 
 import scala.collection.JavaConverters._
-import scala.collection.generic.Clearable
 import scala.collection.immutable.IntMap
+import scala.reflect.internal.util.JavaClearable
 import scala.tools.asm.tree._
 import scala.tools.nsc.backend.jvm.BackendReporting._
 import scala.tools.nsc.reporters.StoreReporter
@@ -18,23 +18,21 @@ import scala.tools.testing.BytecodeTesting._
 
 @RunWith(classOf[JUnit4])
 class CallGraphTest extends BytecodeTesting {
-  override def compilerArgs = "-opt:inline-global -opt-warnings"
+  override def compilerArgs = "-opt:inline -opt-inline-from:** -opt-warnings"
   import compiler._
-  import global.genBCode.bTypes
-  val notPerRun: List[Clearable] = List(
-    bTypes.classBTypeFromInternalName,
-    bTypes.byteCodeRepository.compilingClasses,
-    bTypes.byteCodeRepository.parsedClasses,
-    bTypes.callGraph.callsites)
-  notPerRun foreach global.perRunCaches.unrecordCache
+  import global.genBCode.{bTypes, postProcessor}
+  import postProcessor.{byteCodeRepository, callGraph}
 
-  import global.genBCode.bTypes._
+
+  compiler.keepPerRunCachesAfterRun(List(
+    JavaClearable.forMap(bTypes.classBTypeCache),
+    postProcessor.byteCodeRepository.compilingClasses,
+    postProcessor.byteCodeRepository.parsedClasses,
+    postProcessor.callGraph.callsites))
+
   import callGraph._
-
-  def compile(code: String, allowMessage: StoreReporter#Info => Boolean = _ => false): List[ClassNode] = {
-    notPerRun.foreach(_.clear())
-    compileClasses(code, allowMessage = allowMessage).map(c => byteCodeRepository.classNode(c.name).get)
-  }
+  import global.genBCode.bTypes._
+  import postProcessor.bTypesFromClassfile._
 
   def callsInMethod(methodNode: MethodNode): List[MethodInsnNode] = methodNode.instructions.iterator.asScala.collect({
     case call: MethodInsnNode => call
@@ -72,7 +70,7 @@ class CallGraphTest extends BytecodeTesting {
         |  @noinline def f5         = try { 0 } catch { case _: Throwable => 1 }
         |  @noinline final def f6   = try { 0 } catch { case _: Throwable => 1 }
         |
-        |  @inline @noinline def f7 = try { 0 } catch { case _: Throwable => 1 }
+        |  @inline @noinline def f7 = try { 0 } catch { case _: Throwable => 1 } // no warning, @noinline takes precedence
         |}
         |class D extends C {
         |  @inline override def f1  = try { 0 } catch { case _: Throwable => 1 }
@@ -91,18 +89,17 @@ class CallGraphTest extends BytecodeTesting {
     // The callGraph.callsites map is indexed by instructions of those ClassNodes.
 
     val ok = Set(
-      "D::f1()I is annotated @inline but cannot be inlined: the method is not final and may be overridden", // only one warning for D.f1: C.f1 is not annotated @inline
-      "C::f3()I is annotated @inline but cannot be inlined: the method is not final and may be overridden", // only one warning for C.f3: D.f3 does not have @inline (and it would also be safe to inline)
-      "C::f7()I is annotated @inline but cannot be inlined: the method is not final and may be overridden", // two warnings (the error message mentions C.f7 even if the receiver type is D, because f7 is inherited from C)
-      "operand stack at the callsite in Test::t1(LC;)I contains more values",
-      "operand stack at the callsite in Test::t2(LD;)I contains more values")
+      "D::f1()I is annotated @inline but could not be inlined:\nThe method is not final and may be overridden.", // only one warning for D.f1: C.f1 is not annotated @inline
+      "C::f3()I is annotated @inline but could not be inlined:\nThe method is not final and may be overridden.", // only one warning for C.f3: D.f3 does not have @inline (and it would also be safe to inline)
+      "C::f4()I is annotated @inline but could not be inlined:\nThe operand stack at the callsite in Test::t1(LC;)I contains more values",
+      "C::f4()I is annotated @inline but could not be inlined:\nThe operand stack at the callsite in Test::t2(LD;)I contains more values")
     var msgCount = 0
-    val checkMsg = (m: StoreReporter#Info) => {
+    val checkMsg = (m: StoreReporter.Info) => {
       msgCount += 1
       ok exists (m.msg contains _)
     }
-    val List(cCls, cMod, dCls, testCls) = compile(code, checkMsg)
-    assert(msgCount == 6, msgCount)
+    val List(cCls, cMod, dCls, testCls) = { compileClasses(code, allowMessage = checkMsg); compiledClassesFromCache }
+    assert(msgCount == 4, msgCount)
 
     val List(cf1, cf2, cf3, cf4, cf5, cf6, cf7) = getAsmMethods(cCls, _.startsWith("f"))
     val List(df1, df3) = getAsmMethods(dCls, _.startsWith("f"))
@@ -142,11 +139,11 @@ class CallGraphTest extends BytecodeTesting {
         |  def m = java.lang.Class.forName("C")
         |}
       """.stripMargin
-    val List(c) = compile(code)
+    val List(c) = { compileClasses(code); compiledClassesFromCache }
     val m = getAsmMethod(c, "m")
     val List(fn) = callsInMethod(m)
     val forNameMeth = byteCodeRepository.methodNode("java/lang/Class", "forName", "(Ljava/lang/String;)Ljava/lang/Class;").get._1
-    val classTp = classBTypeFromInternalName("java/lang/Class")
+    val classTp = cachedClassBType("java/lang/Class")
     val r = callGraph.callsites(m)(fn)
     checkCallsite(fn, m, forNameMeth, classTp, safeToInline = false, atInline = false, atNoInline = false)
   }
@@ -160,12 +157,16 @@ class CallGraphTest extends BytecodeTesting {
         |  def t2(i: Int, f: Int => Int, z: Int) = h(f) + i - z
         |  def t3(f: Int => Int) = h(x => f(x + 1))
         |}
-        |trait D {
-        |  def iAmASam(x: Int): Int
-        |  def selfSamCall = iAmASam(10)
+        |@FunctionalInterface trait D {
+        |  def iAmASamD(x: Int): Int
+        |  def selfSamCallD = iAmASamD(10)
+        |}
+        |trait E {
+        |  def iAmASamE(x: Int): Int
+        |  def selfSamCallE = iAmASamE(10)
         |}
         |""".stripMargin
-    val List(c, d) = compile(code)
+    val List(c, d, e) = compileClasses(code)
 
     def callIn(m: String) = callGraph.callsites.find(_._1.name == m).get._2.values.head
     val t1h = callIn("t1")
@@ -177,8 +178,11 @@ class CallGraphTest extends BytecodeTesting {
     val t3h = callIn("t3")
     assertEquals(t3h.argInfos.toList, List((1, FunctionLiteral)))
 
-    val selfSamCall = callIn("selfSamCall")
-    assertEquals(selfSamCall.argInfos.toList, List((0,ForwardedParam(0))))
+    val selfSamCallD = callIn("selfSamCallD")
+    assertEquals(selfSamCallD.argInfos.toList, List((0,ForwardedParam(0))))
+
+    val selfSamCallE = callIn("selfSamCallE")
+    assertEquals(selfSamCallE.argInfos.toList, List())
   }
 
   @Test
@@ -197,7 +201,7 @@ class CallGraphTest extends BytecodeTesting {
         |}
       """.stripMargin
 
-    compile(code)
+    compileClasses(code)
     def callIn(m: String) = callGraph.callsites.find(_._1.name == m).get._2.values.head
     assertEquals(callIn("t1").argInfos.toList, List((1, FunctionLiteral)))
     assertEquals(callIn("t2").argInfos.toList, List((1, ForwardedParam(2))))

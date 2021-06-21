@@ -1,15 +1,20 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2016 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala
 package tools.nsc
 package interpreter
 
-import PartialFunction.cond
 import scala.language.implicitConversions
-import scala.beans.BeanProperty
 import scala.collection.mutable
 import scala.concurrent.{ExecutionContext, Future}
 import scala.reflect.runtime.{universe => ru}
@@ -21,7 +26,9 @@ import scala.tools.nsc.util._
 import ScalaClassLoader.URLClassLoader
 import scala.tools.nsc.util.Exceptional.unwrap
 import java.net.URL
+import java.io.Closeable
 import scala.tools.util.PathResolver
+import scala.util.{Try => Trying}
 
 /** An interpreter for Scala code.
  *
@@ -55,7 +62,7 @@ import scala.tools.util.PathResolver
  *  @author Moez A. Abdel-Gawad
  *  @author Lex Spoon
  */
-class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends Imports with PresentationCompilation {
+class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends Imports with PresentationCompilation with Closeable {
   imain =>
 
   def this(initialSettings: Settings) = this(initialSettings, IMain.defaultOut)
@@ -68,6 +75,7 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
   def showDirectory() = replOutput.show(out)
 
   lazy val isClassBased: Boolean = settings.Yreplclassbased.value
+  private[interpreter] lazy val useMagicImport: Boolean = settings.YreplMagicImport.value
 
   private[nsc] var printResults               = true        // whether to print result lines
   private[nsc] var totalSilence               = false       // whether to print anything
@@ -92,18 +100,10 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
 
   def compilerClasspath: Seq[java.net.URL] = (
     if (isInitializeComplete) global.classPath.asURLs
-    else new PathResolver(settings).resultAsURLs  // the compiler's classpath
+    else new PathResolver(settings, global.closeableRegistry).resultAsURLs  // the compiler's classpath
   )
   def settings = initialSettings
-  // Run the code body with the given boolean settings flipped to true.
-  def withoutWarnings[T](body: => T): T = beQuietDuring {
-    val saved = settings.nowarn.value
-    if (!saved)
-      settings.nowarn.value = true
-
-    try body
-    finally if (!saved) settings.nowarn.value = false
-  }
+  def withoutWarnings[T](body: => T): T = beQuietDuring(IMain.withSuppressedSettings(settings, global)(body))
   // Apply a temporary label for compilation (for example, script name)
   def withLabel[A](temp: String)(body: => A): A = {
     val saved = label
@@ -111,11 +111,8 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
     try body finally label = saved
   }
 
-  // the expanded prompt but without color escapes and without leading newline, for purposes of indenting
-  lazy val formatting = Formatting.forPrompt(replProps.promptText)
   lazy val reporter: ReplReporter = new ReplReporter(this)
 
-  import formatting.indentCode
   import reporter.{ printMessage, printUntruncatedMessage }
 
   // This exists mostly because using the reporter too early leads to deadlock.
@@ -133,7 +130,7 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
     catch AbstractOrMissingHandler()
   }
   private val logScope = scala.sys.props contains "scala.repl.scope"
-  private def scopelog(msg: String) = if (logScope) Console.err.println(msg)
+  private def scopelog(msg: => String) = if (logScope) Console.err.println(msg)
 
   // argument is a thunk to execute after init is done
   def initialize(postInitSignal: => Unit) {
@@ -158,9 +155,9 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
   }
 
   import global._
-  import definitions.{ ObjectClass, termMember, dropNullaryMethod}
+  import definitions.{ObjectClass, termMember, dropNullaryMethod}
 
-  lazy val runtimeMirror = ru.runtimeMirror(classLoader)
+  def runtimeMirror = ru.runtimeMirror(classLoader)
 
   private def noFatal(body: => Symbol): Symbol = try body catch { case _: FatalError => NoSymbol }
 
@@ -239,7 +236,10 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
   protected def newCompiler(settings: Settings, reporter: reporters.Reporter): ReplGlobal = {
     settings.outputDirs setSingleOutput replOutput.dir
     settings.exposeEmptyPackage.value = true
-    new Global(settings, reporter) with ReplGlobal { override def toString: String = "<global>" }
+    new Global(settings, reporter) with ReplGlobal {
+      def sessionNames = naming.sessionNames
+      override def toString: String = "<global>"
+    }
   }
 
   /**
@@ -255,8 +255,10 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
   }
 
   /** Parent classloader.  Overridable. */
-  protected def parentClassLoader: ClassLoader =
-    settings.explicitParentLoader.getOrElse( this.getClass.getClassLoader() )
+  protected def parentClassLoader: ClassLoader = {
+    val replClassLoader = this.getClass.getClassLoader() // might be null if we're on the boot classpath
+    settings.explicitParentLoader.orElse(Option(replClassLoader)).getOrElse(ClassLoader.getSystemClassLoader)
+  }
 
   /* A single class loader is used for all commands interpreted by this Interpreter.
      It would also be possible to create a new class loader for each command
@@ -287,7 +289,7 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
 
   def backticked(s: String): String = (
     (s split '.').toList map {
-      case "_"                               => "_"
+      case "_"                               => "`_`"
       case s if nme.keywords(newTermName(s)) => s"`$s`"
       case s                                 => s
     } mkString "."
@@ -311,13 +313,15 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
   def originalPath(name: String): String = originalPath(TermName(name))
   def originalPath(name: Name): String   = translateOriginalPath(typerOp path name)
   def originalPath(sym: Symbol): String  = translateOriginalPath(typerOp path sym)
-  /** For class based repl mode we use an .INSTANCE accessor. */
-  val readInstanceName = if(isClassBased) ".INSTANCE" else ""
+
+  val readInstanceName = ".INSTANCE"
   def translateOriginalPath(p: String): String = {
-    val readName = java.util.regex.Matcher.quoteReplacement(sessionNames.read)
-    p.replaceFirst(readName, readName + readInstanceName)
+    p.replace(sessionNames.read, sessionNames.read + readInstanceName)
   }
-  def flatPath(sym: Symbol): String      = flatOp shift sym.javaClassName
+  def flatPath(sym: Symbol): String = {
+    val sym1 = if (sym.isModule) sym.moduleClass else sym
+    flatOp shift sym1.javaClassName
+  }
 
   def translatePath(path: String) = {
     val sym = if (path endsWith "$") symbolOfTerm(path.init) else symbolOfIdent(path)
@@ -326,7 +330,7 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
 
   /** If path represents a class resource in the default package,
    *  see if the corresponding symbol has a class file that is a REPL artifact
-   *  residing at a different resource path. Translate X.class to $line3/$read$$iw$$iw$X.class.
+   *  residing at a different resource path. Translate X.class to $line3/$read$iw$X.class.
    */
   def translateSimpleResource(path: String): Option[String] = {
     if (!(path contains '/') && (path endsWith ".class")) {
@@ -357,8 +361,8 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
       _runtimeClassLoader
     })
 
-  // Set the current Java "context" class loader to this interpreter's class loader
-  def setContextClassLoader() = classLoader.setAsContext()
+  @deprecated("The thread context classloader is now set and restored around execution of REPL line, this method is now a no-op.", since = "2.12.0")
+  def setContextClassLoader() = () // Called from sbt-interface/0.12.4/src/ConsoleInterface.scala:39
 
   def allDefinedNames: List[Name]  = exitingTyper(replScope.toList.map(_.name).sorted)
   def unqualifiedIds: List[String] = allDefinedNames map (_.decode) sorted
@@ -374,24 +378,25 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
     None
   }
 
-  private def updateReplScope(sym: Symbol, isDefined: Boolean) {
-    def log(what: String) {
+  private def updateReplScope(sym: Symbol, isDefined: Boolean): Unit = {
+    def log(what: String) = scopelog {
       val mark = if (sym.isType) "t " else "v "
       val name = exitingTyper(sym.nameString)
       val info = cleanTypeAfterTyper(sym)
       val defn = sym defStringSeenAs info
 
-      scopelog(f"[$mark$what%6s] $name%-25s $defn%s")
+      f"[$mark$what%6s] $name%-25s $defn%s"
     }
-    if (ObjectClass isSubClass sym.owner) return
-    // unlink previous
-    replScope lookupAll sym.name foreach { sym =>
-      log("unlink")
-      replScope unlink sym
+    if (!ObjectClass.isSubClass(sym.owner)) {
+      // unlink previous
+      replScope.lookupAll(sym.name) foreach { sym =>
+        log("unlink")
+        replScope unlink sym
+      }
+      val what = if (isDefined) "define" else "import"
+      log(what)
+      replScope enter sym
     }
-    val what = if (isDefined) "define" else "import"
-    log(what)
-    replScope enter sym
   }
 
   def recordRequest(req: Request) {
@@ -426,7 +431,6 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
   def compileSourcesKeepingRun(sources: SourceFile*) = {
     val run = new Run()
     assert(run.typerPhase != NoPhase, "REPL requires a typer phase.")
-    reporter.reset()
     run compileSources sources.toList
     (!reporter.hasErrors, run)
   }
@@ -571,7 +575,7 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
         if (printResults && result != "")
           printMessage(result stripSuffix "\n")
         else if (isReplDebug) // show quiet-mode activity
-          printMessage(result.trim.lines map ("[quiet] " + _) mkString "\n")
+          printMessage(result.trim.linesIterator.map("[quiet] " + _).mkString("\n"))
 
         // Book-keeping.  Have to record synthetic requests too,
         // as they may have been issued for information, e.g. :type
@@ -585,13 +589,22 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
       }
     }
 
-    compile(line, synthetic) match {
+    val res = compile(line, synthetic) match {
       case Left(result) => result
       case Right(req)   => loadAndRunReq(req)
     }
+
+    // besides regular errors, clear deprecation and feature warnings
+    // so they don't leak from last compilation run into next provisional parse
+    if (res != IR.Incomplete) {
+      reporter.reset()
+      currentRun.reporting.clearAllConditionalWarnings()
+    }
+
+    res
   }
 
-  // create a Request and compile it
+  // create a Request and compile it if input is complete
   private[interpreter] def compile(line: String, synthetic: Boolean): Either[IR.Result, Request] = {
     if (global == null) Left(IR.Error)
     else requestFromLine(line, synthetic) match {
@@ -673,6 +686,9 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
    */
   def close() {
     reporter.flush()
+    if (isInitializeComplete) {
+      global.close()
+    }
   }
 
   /** Here is where we:
@@ -686,7 +702,7 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
   class ReadEvalPrint(val lineId: Int) {
     def this() = this(freshLineId())
 
-    val packageName = sessionNames.line + lineId
+    val packageName = sessionNames.packageName(lineId)
     val readName    = sessionNames.read
     val evalName    = sessionNames.eval
     val printName   = sessionNames.print
@@ -698,11 +714,10 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
 
       val unwrapped = unwrap(t)
 
-      // Example input: $line3.$read$$iw$$iw$
-      val classNameRegex = (naming.lineRegex + ".*").r
-      def isWrapperInit(x: StackTraceElement) = cond(x.getClassName) {
-        case classNameRegex() if x.getMethodName == nme.CONSTRUCTOR.decoded => true
-      }
+      // Example input: $line3.$read$$iw$
+      val classNameRegex = naming.lineRegex
+      def isWrapperInit(x: StackTraceElement) =
+        x.getMethodName == nme.CONSTRUCTOR.decoded && classNameRegex.pattern.matcher(x.getClassName).find()
       val stackTrace = unwrapped stackTracePrefixString (!isWrapperInit(_))
 
       withLastExceptionLock[String]({
@@ -749,11 +764,9 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
     lazy val evalClass = load(evalPath)
 
     def evalEither = callEither(resultName) match {
-      case Left(ex) => ex match {
-          case ex: NullPointerException => Right(null)
-          case ex => Left(unwrap(ex))
-      }
-      case Right(result) => Right(result)
+      case Right(result)                 => Right(result)
+      case Left(_: NullPointerException) => Right(null)
+      case Left(e)                       => Left(unwrap(e))
     }
 
     def compile(source: String): Boolean = compileAndSaveRun(label, source)
@@ -787,7 +800,7 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
           }
           ((pos, msg)) :: loop(filtered)
       }
-      val warnings = loop(run.reporting.allConditionalWarnings.map{case (pos, (msg, since)) => (pos, msg)})
+      val warnings = loop(run.reporting.allConditionalWarnings)
       if (warnings.nonEmpty)
         mostRecentWarnings = warnings
     }
@@ -817,10 +830,7 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
 
     /** handlers for each tree in this request */
     val handlers: List[MemberHandler] = trees map (memberHandlers chooseHandler _)
-    val definesClass = handlers.exists {
-      case _: ClassHandler => true
-      case _ => false
-    }
+    val definesValueClass = handlers.exists(_.definesValueClass)
 
     def defHandlers = handlers collect { case x: MemberDefHandler => x }
 
@@ -839,7 +849,7 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
       * append to objectName to access anything bound by request.
       */
     lazy val ComputedImports(headerPreamble, importsPreamble, importsTrailer, accessPath) =
-      exitingTyper(importsCode(referencedNames.toSet, ObjectSourceCode, definesClass, generousImports))
+      exitingTyper(importsCode(referencedNames.toSet, ObjectSourceCode, generousImports))
 
     /** the line of code to compute */
     def toCompute = line
@@ -852,12 +862,11 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
 
     /** generate the source code for the object that computes this request */
     abstract class Wrapper extends IMain.CodeAssembler[MemberHandler] {
-      def path = originalPath("$intp")
       def envLines = {
         if (!isReplPower) Nil // power mode only for now
         else {
-          val escapedLine = Constant(originalLine).escapedStringValue
-          List(s"""def $$line = $escapedLine """, """def $trees = _root_.scala.Nil""")
+          val escapedLine = Constant(originalLine).escapedStringValue.replaceAllLiterally("$", "\"+\"$\"+\"")
+          List(s"""def $$line = $escapedLine""", s"""def $$trees = _root_.scala.Nil""")
         }
       }
       def preamble = s"""
@@ -865,13 +874,15 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
         |${preambleHeader format lineRep.readName}
         |${envLines mkString ("  ", ";\n  ", ";\n")}
         |$importsPreamble
-        |${indentCode(toCompute)}""".stripMargin
-      def preambleLength = preamble.length - toCompute.length - 1
+        |${toCompute}""".stripMargin
+      def preambleLength = preamble.length - toCompute.length
 
       val generate = (m: MemberHandler) => m extraCodeToEvaluate Request.this
 
       /** A format string with %s for $read, specifying the wrapper definition. */
       def preambleHeader: String
+
+      def postamble: String
 
       /** Like preambleHeader for an import wrapper. */
       def prewrap: String = preambleHeader + "\n"
@@ -883,13 +894,14 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
     class ObjectBasedWrapper extends Wrapper {
       def preambleHeader = "object %s {"
 
-      def postamble = importsTrailer + "\n}"
+      /** Adds a .INSTANCE accessor to the read object, so access is identical to class-based. */
+      def postamble = importsTrailer + s"\n  val INSTANCE = this\n}"
 
       def postwrap = "}\n"
     }
 
     class ClassBasedWrapper extends Wrapper {
-      def preambleHeader = "class %s extends _root_.java.io.Serializable { "
+      def preambleHeader = "sealed class %s extends _root_.java.io.Serializable { "
 
       /** Adds an object that instantiates the outer wrapping class. */
       def postamble  = s"""
@@ -907,7 +919,7 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
     }
 
     private[interpreter] lazy val ObjectSourceCode: Wrapper =
-      if (isClassBased) new ClassBasedWrapper else new ObjectBasedWrapper
+      if (isClassBased && !definesValueClass) new ClassBasedWrapper else new ObjectBasedWrapper
 
     private object ResultObjectSourceCode extends IMain.CodeAssembler[MemberHandler] {
       /** We only want to generate this code when the result
@@ -924,18 +936,30 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
       |  %s
       |  lazy val %s: _root_.java.lang.String = %s {
       |    %s
-      |    (""
       """.stripMargin.format(
         lineRep.evalName, evalResult, lineRep.printName,
         executionWrapper, fullAccessPath
       )
 
       val postamble = """
-      |    )
       |  }
       |}
       """.stripMargin
       val generate = (m: MemberHandler) => m resultExtractionCode Request.this
+
+      override def apply(contributors: List[MemberHandler]): String = stringFromWriter { code =>
+        code println preamble
+        if (contributors.lengthCompare(1) > 0) {
+          code.println("val sb = new _root_.scala.StringBuilder")
+          contributors foreach (x => code.println(s"""sb.append("" ${generate(x)})"""))
+          code.println("sb.toString")
+        } else {
+          code.print(""""" """) // start with empty string
+          contributors foreach (x => code.print(generate(x)))
+          code.println()
+        }
+        code println postamble
+      }
     }
 
     /** Compile the object file.  Returns whether the compilation succeeded.
@@ -962,10 +986,11 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
 
         // compile the result-extraction object
         val handls = if (printResults) handlers else Nil
-        withoutWarnings(lineRep compile ResultObjectSourceCode(handls))
+        IMain.withSuppressedSettings(settings, global)(lineRep compile ResultObjectSourceCode(handls))
       }
     }
 
+    // the type symbol of the owner of the member that supplies the result value
     lazy val resultSymbol = lineRep.resolvePathToSymbol(fullAccessPath)
 
     def applyToResultMember[T](name: Name, f: Symbol => T) = exitingTyper(f(resultSymbol.info.nonPrivateDecl(name)))
@@ -979,7 +1004,9 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
     /** Types of variables defined by this request. */
     lazy val compilerTypeOf = typeMap[Type](x => x) withDefaultValue NoType
     /** String representations of same. */
-    lazy val typeOf         = typeMap[String](tp => exitingTyper(tp.toString))
+    lazy val typeOf         = typeMap[String](tp => exitingTyper {
+      tp.toString.stripPrefix("INSTANCE.")
+    })
 
     lazy val definedSymbols = (
       termNames.map(x => x -> applyToResultMember(x, x => x)) ++
@@ -1031,18 +1058,45 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
 
   def typeOfTerm(id: String): Type = symbolOfTerm(id).tpe
 
+  // Given the fullName of the symbol, reflectively drill down the path
   def valueOfTerm(id: String): Option[Any] = exitingTyper {
-    def value() = {
-      val sym0    = symbolOfTerm(id)
-      val sym     = (importToRuntime importSymbol sym0).asTerm
-      val module  = runtimeMirror.reflectModule(sym.owner.companionSymbol.asModule).instance
-      val module1 = runtimeMirror.reflect(module)
-      val invoker = module1.reflectField(sym)
+    def value(fullName: String) = {
+      val mirror = runtimeMirror
+      import mirror.universe.{Symbol, InstanceMirror, TermName}
+      val pkg :: rest = (fullName split '.').toList
+      val top = mirror.staticPackage(pkg)
+      @annotation.tailrec
+      def loop(inst: InstanceMirror, cur: Symbol, path: List[String]): Option[Any] = {
+        def mirrored =
+          if (inst != null) inst
+          else mirror.reflect((mirror reflectModule cur.asModule).instance)
 
-      invoker.get
+        path match {
+          case last :: Nil  =>
+            cur.typeSignature.decls.find(x => x.name.toString == last && x.isAccessor).map { m =>
+              mirrored.reflectMethod(m.asMethod).apply()
+            }
+          case next :: rest =>
+            val s = cur.typeSignature.member(TermName(next))
+            val i =
+              if (s.isModule) {
+                if (inst == null) null
+                else mirror.reflect((mirror reflectModule s.asModule).instance)
+              }
+              else if (s.isAccessor) {
+                mirror.reflect(mirrored.reflectMethod(s.asMethod).apply())
+              }
+              else {
+                assert(false, fullName)
+                inst
+              }
+            loop(i, s, rest)
+          case Nil => None
+        }
+      }
+      loop(null, top, rest)
     }
-
-    try Some(value()) catch { case _: Exception => None }
+    Option(symbolOfTerm(id)).filter(_.exists).flatMap(s => Trying(value(originalPath(s))).toOption.flatten)
   }
 
   /** It's a bit of a shotgun approach, but for now we will gain in
@@ -1087,6 +1141,7 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
       )
     )
   }
+  // this is harder than getting the typed trees and fixing up the string to emit that reports types
   def cleanMemberDecl(owner: Symbol, member: Name): Type =
     cleanTypeAfterTyper(owner.info nonPrivateDecl member)
 
@@ -1103,25 +1158,32 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
 
     def apply(line: String): Result = debugging(s"""parse("$line")""") {
       var isIncomplete = false
-      def parse = {
-        reporter.reset()
+      def parse = withoutWarnings {
         val trees = newUnitParser(line, label).parseStats()
+        if (!isIncomplete)
+          runReporting.summarizeErrors()
         if (reporter.hasErrors) Error(trees)
         else if (isIncomplete) Incomplete(trees)
+        else if (reporter.hasWarnings && settings.fatalWarnings) Error(trees)
         else Success(trees)
       }
-      currentRun.parsing.withIncompleteHandler((_, _) => isIncomplete = true)(parse)
+      val res = currentRun.parsing.withIncompleteHandler((_, _) => isIncomplete = true)(parse)
+      if (!isIncomplete) reporter.reset()
+      res
     }
+
     // code has a named package
     def packaged(line: String): Boolean = {
       def parses = {
         reporter.reset()
         val tree = newUnitParser(line).parse()
-        !reporter.hasErrors && {
+        val res  = !reporter.hasErrors && {
           tree match { case PackageDef(Ident(id), _) => id != nme.EMPTY_PACKAGE_NAME case _ => false }
         }
+        if (reporter.hasErrors) reporter.reset()
+        res
       }
-      beSilentDuring(parses)
+      !reporter.hasErrors && beSilentDuring(parses)
     }
   }
 
@@ -1182,7 +1244,7 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
     /** Secret bookcase entrance for repl debuggers: end the line
      *  with "// show" and see what's going on.
      */
-    def isShow = code.lines exists (_.trim endsWith "// show")
+    def isShow = code.linesIterator exists (_.trim endsWith "// show")
     if (isReplDebug || isShow) {
       beSilentDuring(parse(code)) match {
         case parse.Success(ts) =>
@@ -1203,7 +1265,7 @@ class IMain(initialSettings: Settings, protected val out: JPrintWriter) extends 
 
 /** Utility methods for the Interpreter. */
 object IMain {
-  /** Dummy identifier fragement inserted at the cursor before presentation compilation. Needed to support completion of `global.def<TAB>` */
+  /** Dummy identifier fragment inserted at the cursor before presentation compilation. Needed to support completion of `global.def<TAB>` */
   val DummyCursorFragment = "_CURSOR_"
 
   // The two name forms this is catching are the two sides of this assignment:
@@ -1212,7 +1274,39 @@ object IMain {
   //   $line3.$read$$iw$$iw$Bippy@4a6a00ca
   private def removeLineWrapper(s: String) = s.replaceAll("""\$line\d+[./]\$(read|eval|print)[$.]""", "")
   private def removeIWPackages(s: String)  = s.replaceAll("""\$(iw|read|eval|print)[$.]""", "")
+  @deprecated("Use intp.naming.unmangle.", "2.12.0-M5")
   def stripString(s: String)               = removeIWPackages(removeLineWrapper(s))
+
+  private[interpreter] def withSuppressedSettings[A](settings: Settings, global: => Global)(body: => A): A = {
+    import settings._
+    val wasWarning = !nowarn
+    val oldMaxWarn = maxwarns.value
+    val noisy = List(Xprint, Ytyperdebug, browse)
+    val current = (Xprint.value, Ytyperdebug.value, browse.value)
+    val noisesome = wasWarning || noisy.exists(!_.isDefault)
+    if (isReplDebug || !noisesome) body
+    else {
+      Xprint.value = List.empty
+      browse.value = List.empty
+      Ytyperdebug.value = false
+      if (wasWarning) nowarn.value = true
+      try body
+      finally {
+        Xprint.value       = current._1
+        Ytyperdebug.value  = current._2
+        browse.value       = current._3
+        if (wasWarning) {
+          nowarn.value = false
+          maxwarns.value = oldMaxWarn
+        }
+        // ctl-D in repl can result in no compiler
+        val g = global
+        if (g != null) {
+          g.printTypings = current._2
+        }
+      }
+    }
+  }
 
   trait CodeAssembler[T] {
     def preamble: String
@@ -1255,7 +1349,7 @@ object IMain {
     def isStripping        = isettings.unwrapStrings
     def isTruncating       = reporter.truncationOK
 
-    def stripImpl(str: String): String = naming.unmangle(str)
+    def stripImpl(str: String): String = if (isInitializeComplete) naming.unmangle(str) else str
   }
   private[interpreter] def defaultSettings = new Settings()
   private[scala] def defaultOut = new NewLinePrintWriter(new ConsoleWriter, true)
@@ -1263,4 +1357,3 @@ object IMain {
   /** construct an interpreter that reports to Console */
   def apply(initialSettings: Settings = defaultSettings, out: JPrintWriter = defaultOut) = new IMain(initialSettings, out)
 }
-

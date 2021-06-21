@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala
 package reflect
 package runtime
@@ -10,7 +22,9 @@ private[reflect] trait SynchronizedSymbols extends internal.Symbols { self: Symb
   private lazy val atomicIds = new java.util.concurrent.atomic.AtomicInteger(0)
   override protected def nextId() = atomicIds.incrementAndGet()
 
+  @deprecated("Global existential IDs no longer used", "2.12.1")
   private lazy val atomicExistentialIds = new java.util.concurrent.atomic.AtomicInteger(0)
+  @deprecated("Global existential IDs no longer used", "2.12.1")
   override protected def nextExistentialId() = atomicExistentialIds.incrementAndGet()
 
   private lazy val _recursionTable = mkThreadLocalStorage(immutable.Map.empty[Symbol, Int])
@@ -90,6 +104,18 @@ private[reflect] trait SynchronizedSymbols extends internal.Symbols { self: Symb
       else purpose.isFlagRelated && (_initializationMask & purpose.mask & TopLevelPickledFlags) == 0
     }
 
+    override final def privateWithin: Symbol = {
+      // See `getFlag` to learn more about the `isThreadsafe` call in the body of this method.
+      if (!isCompilerUniverse && !isThreadsafe(purpose = AllOps)) initialize
+      super.privateWithin
+    }
+
+    override def annotations: List[AnnotationInfo] = {
+      // See `getFlag` to learn more about the `isThreadsafe` call in the body of this method.
+      if (!isCompilerUniverse && !isThreadsafe(purpose = AllOps)) initialize
+      super.annotations
+    }
+
     /** Communicates with completers declared in scala.reflect.runtime.SymbolLoaders
      *  about the status of initialization of the underlying symbol.
      *
@@ -116,33 +142,42 @@ private[reflect] trait SynchronizedSymbols extends internal.Symbols { self: Symb
     override def markFlagsCompleted(mask: Long): this.type = { _initializationMask = _initializationMask & ~mask; this }
     override def markAllCompleted(): this.type = { _initializationMask = 0L; _initialized = true; this }
 
-    def gilSynchronizedIfNotThreadsafe[T](body: => T): T = {
+    @inline final def gilSynchronizedIfNotThreadsafe[T](body: => T): T = {
       // TODO: debug and fix the race that doesn't allow us uncomment this optimization
       // if (isCompilerUniverse || isThreadsafe(purpose = AllOps)) body
       // else gilSynchronized { body }
       gilSynchronized { body }
     }
 
+    override final def getFlag(mask: Long): Long = {
+      if (!isCompilerUniverse && !isThreadsafe(purpose = FlagOps(mask))) initialize
+      super.getFlag(mask)
+    }
+
     override def validTo = gilSynchronizedIfNotThreadsafe { super.validTo }
     override def info = gilSynchronizedIfNotThreadsafe { super.info }
     override def rawInfo: Type = gilSynchronizedIfNotThreadsafe { super.rawInfo }
+    override def exists: Boolean = gilSynchronizedIfNotThreadsafe(super.exists)
     override def typeSignature: Type = gilSynchronizedIfNotThreadsafe { super.typeSignature }
     override def typeSignatureIn(site: Type): Type = gilSynchronizedIfNotThreadsafe { super.typeSignatureIn(site) }
+    override def typeConstructor: Type = gilSynchronizedIfNotThreadsafe { super.typeConstructor }
 
     override def typeParams: List[Symbol] = gilSynchronizedIfNotThreadsafe {
       if (isCompilerUniverse) super.typeParams
       else {
-        if (isMonomorphicType) Nil
-        else {
-          // analogously to the "info" getter, here we allow for two completions:
-          //   one: sourceCompleter to LazyType, two: LazyType to completed type
-          if (validTo == NoPeriod)
+        def completeTypeParams = {
+          if (isMonomorphicType) Nil
+          else {
+            // analogously to the "info" getter, here we allow for two completions:
+            //   one: sourceCompleter to LazyType, two: LazyType to completed type
             rawInfo load this
-          if (validTo == NoPeriod)
-            rawInfo load this
+            if (validTo == NoPeriod)
+              rawInfo load this
 
-          rawInfo.typeParams
+            rawInfo.typeParams
+          }
         }
+        if (validTo != NoPeriod) rawInfo.typeParams else completeTypeParams
       }
     }
     override def unsafeTypeParams: List[Symbol] = gilSynchronizedIfNotThreadsafe {
@@ -199,12 +234,7 @@ private[reflect] trait SynchronizedSymbols extends internal.Symbols { self: Symb
 
   trait SynchronizedTermSymbol extends SynchronizedSymbol
 
-  trait SynchronizedMethodSymbol extends MethodSymbol with SynchronizedTermSymbol {
-    // we can keep this lock fine-grained, because it's just a cache over asSeenFrom, which makes deadlocks impossible
-    // unfortunately we cannot elide this lock, because the cache depends on `pre`
-    private lazy val typeAsMemberOfLock = new Object
-    override def typeAsMemberOf(pre: Type): Type = gilSynchronizedIfNotThreadsafe { typeAsMemberOfLock.synchronized { super.typeAsMemberOf(pre) } }
-  }
+  trait SynchronizedMethodSymbol extends MethodSymbol with SynchronizedTermSymbol
 
   trait SynchronizedModuleSymbol extends ModuleSymbol with SynchronizedTermSymbol
 

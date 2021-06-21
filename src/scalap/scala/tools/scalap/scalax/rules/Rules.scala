@@ -79,7 +79,7 @@ trait Rules {
 
 /** A factory for rules that apply to a particular context.
   *
-  * @requires S the context to which rules apply.
+  * @tparam S the context to which rules apply.
   *
   * @author Andrew Foggin
   *
@@ -137,7 +137,7 @@ trait StateRules {
     def rep(in: S, t: T): Result[S, T, X] = {
       if (finished(t)) Success(in, t)
       else rule(in) match {
-        case Success(out, f) => rep(out, f(t)) // SI-5189 f.asInstanceOf[T => T]
+        case Success(out, f) => rep(out, f(t)) // scala/bug#5189 f.asInstanceOf[T => T]
         case Failure => Failure
         case Error(x) => Error(x)
       }

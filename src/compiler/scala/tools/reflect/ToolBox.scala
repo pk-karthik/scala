@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala.tools
 package reflect
 
@@ -23,7 +35,7 @@ trait ToolBox[U <: scala.reflect.api.Universe] {
 
   /** Represents mode of operations of the typechecker underlying `c.typecheck` calls.
    *  Is necessary since the shape of the typechecked tree alone is not enough to guess how it should be typechecked.
-   *  Can be EXPRmode (typecheck as a term), TYPEmode (typecheck as a type) or PATTERNmode (typecheck as a pattern).
+   *  Can be TERMmode (typecheck as a term), TYPEmode (typecheck as a type) or PATTERNmode (typecheck as a pattern).
    */
   type TypecheckMode
 
@@ -47,7 +59,7 @@ trait ToolBox[U <: scala.reflect.api.Universe] {
     typecheck(tree, TERMmode, pt, silent, withImplicitViewsDisabled, withMacrosDisabled)
 
   /** Typechecks a tree against the expected type `pt`
-   *  under typechecking mode specified in `mode` with [[EXPRmode]] being default.
+   *  under typechecking mode specified in `mode` with [[TERMmode]] being default.
    *  This populates symbols and types of the tree and possibly transforms it to reflect certain desugarings.
    *
    *  If the tree has unresolved type variables (represented as instances of `FreeTypeSymbol` symbols),
@@ -112,7 +124,7 @@ trait ToolBox[U <: scala.reflect.api.Universe] {
    *
    *  This spawns the compiler at the Namer phase, and pipelines the tree through that compiler.
    *  Currently `compile` does not accept trees that already typechecked, because typechecking isn't idempotent.
-   *  For more info, take a look at https://issues.scala-lang.org/browse/SI-5464.
+   *  For more info, take a look at https://github.com/scala/bug/issues/5464.
    */
   def compile(tree: u.Tree): () => Any
 
@@ -121,7 +133,7 @@ trait ToolBox[U <: scala.reflect.api.Universe] {
    *  For a ClassDef, a ClassSymbol is returned, and for a ModuleDef, a ModuleSymbol is returned (not a module class, but a module itself).
    *
    *  This method can be used to generate definitions that will later be re-used by subsequent calls to
-   *  `compile`, `define` or `eval`. To refer to the generated definition in a tree, use q"$sym".
+   *  `compile`, `define` or `eval`. To refer to the generated definition in a tree, use q"\$sym".
    */
   def define(tree: u.ImplDef): u.Symbol
 

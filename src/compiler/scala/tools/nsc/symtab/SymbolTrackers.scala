@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Paul Phillips
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
@@ -127,7 +134,7 @@ trait SymbolTrackers {
           else " (" + Flags.flagsToString(masked) + ")"
       }
       def symString(sym: Symbol) = (
-        if (settings.debug && sym.hasCompleteInfo) {
+        if (settings.isDebug && sym.hasCompleteInfo) {
           val s = sym.defString take 240
           if (s.length == 240) s + "..." else s
         }

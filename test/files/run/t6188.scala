@@ -1,4 +1,5 @@
-// SI-6188 Optimizer incorrectly removes method invocations containing throw expressions
+// scalac: -opt:l:inline -opt-inline-from:**
+// scala/bug#6188 Optimizer incorrectly removes method invocations containing throw expressions
 
 import scala.util.Success
 

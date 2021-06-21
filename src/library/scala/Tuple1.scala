@@ -1,10 +1,15 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2002-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 // GENERATED CODE: DO NOT EDIT. See scala.Function0 for timestamp.
 
 package scala
@@ -15,8 +20,7 @@ package scala
  *  @constructor  Create a new tuple with 1 elements.
  *  @param  _1   Element 1 of this Tuple1
  */
-@deprecatedInheritance("Tuples will be made final in a future version.", "2.11.0")
-case class Tuple1[@specialized(Int, Long, Double) +T1](_1: T1)
+final case class Tuple1[@specialized(Int, Long, Double) +T1](_1: T1)
   extends Product1[T1]
 {
   override def toString() = "(" + _1 + ")"

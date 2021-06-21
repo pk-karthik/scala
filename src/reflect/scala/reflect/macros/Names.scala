@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala
 package reflect
 package macros
@@ -15,7 +27,7 @@ package macros
  *    3) Macro-generated names that are created by concatenating names from the first, second and third categories
  *
  *  Uniqueness of fresh names across compilation runs is not guaranteed, but that's something
- *  that we would like to improve upon in future releases. See [[https://issues.scala-lang.org/browse/SI-6879]] for more information.
+ *  that we would like to improve upon in future releases. See [[https://github.com/scala/bug/issues/6879]] for more information.
  *
  *  @define freshNameNoParams
  *  Creates a string that represents a more or less unique name.

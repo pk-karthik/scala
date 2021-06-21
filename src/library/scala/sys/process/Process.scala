@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package sys
@@ -156,7 +160,7 @@ trait ProcessCreation {
     * import java.io.File
     *
     * val spde = new URL("http://technically.us/spde.html")
-    * val dispatch = new URL("http://dispatch.databinder.net/Dispatch.html")
+    * val dispatch = new URL("https://dispatchhttp.org/Dispatch.html")
     * val build = new File("project/build.properties")
     * cat(spde, dispatch, build) #| "grep -i scala" !
     * }}}

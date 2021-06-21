@@ -2,9 +2,9 @@ package scala.tools.nsc
 package interactive
 package tests.core
 
-import reporters.{Reporter => CompilerReporter}
 import scala.tools.nsc.interactive.InteractiveReporter
 import scala.reflect.internal.util.SourceFile
+import reporters.Reporter
 
 /** Deterministically interrupts typechecking of `code` when a definition named
   * `MagicInterruptionMarker` is typechecked, and then performs a targeted
@@ -16,7 +16,7 @@ abstract class IdempotencyTest { self =>
 
   private object Break extends scala.util.control.ControlThrowable
 
-  private val compilerReporter: CompilerReporter = new InteractiveReporter {
+  private val compilerReporter: reporters.Reporter = new InteractiveReporter {
     override def compiler = self.compiler
   }
 
@@ -25,7 +25,7 @@ abstract class IdempotencyTest { self =>
     }
     override def signalDone(context: Context, old: Tree, result: Tree) {
       // println("signalDone: " + old.toString.take(50).replaceAll("\n", "\\n"))
-      if (!interrupted && analyzer.lockedCount == 0 && interruptsEnabled && shouldInterrupt(result)) {
+      if (!interrupted && lockedCount == 0 && interruptsEnabled && shouldInterrupt(result)) {
         interrupted = true
         val typed = typedTreeAt(markerPosition)
         checkTypedTree(typed)

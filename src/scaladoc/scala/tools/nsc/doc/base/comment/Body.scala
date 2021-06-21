@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2007-2013 LAMP/EPFL
- * @author  Manohar Jonnalagedda
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
@@ -11,8 +18,9 @@ package comment
 import scala.collection._
 
 /** A body of text. A comment has a single body, which is composed of
-  * at least one block. Inside every body is exactly one summary (see
-  * [[scala.tools.nsc.doc.model.comment.Summary]]). */
+  * at least one block. Inside every body is exactly one summary.
+  * @see [[Summary]]
+  */
 final case class Body(blocks: Seq[Block]) {
 
   /** The summary text of the comment body. */
@@ -54,6 +62,15 @@ final case class UnorderedList(items: Seq[Block]) extends Block
 final case class OrderedList(items: Seq[Block], style: String) extends Block
 final case class DefinitionList(items: SortedMap[Inline, Block]) extends Block
 final case class HorizontalRule() extends Block
+final case class Table(header: Row, columnOptions: Seq[ColumnOption], rows: Seq[Row]) extends Block
+final case class ColumnOption(option: Char) { require(option == 'L' || option == 'C' || option == 'R') }
+object ColumnOption {
+  val ColumnOptionLeft = ColumnOption('L')
+  val ColumnOptionCenter = ColumnOption('C')
+  val ColumnOptionRight = ColumnOption('R')
+}
+final case class Row(cells: Seq[Cell])
+final case class Cell(blocks: Seq[Block])
 
 /** An section of text inside a block, possibly with formatting. */
 sealed abstract class Inline
@@ -73,9 +90,8 @@ object EntityLink {
   def unapply(el: EntityLink): Option[(Inline, LinkTo)] = Some((el.title, el.link))
 }
 final case class HtmlTag(data: String) extends Inline {
-  private val Pattern = """(?ms)\A<(/?)(.*?)[\s>].*\z""".r
   private val (isEnd, tagName) = data match {
-    case Pattern(s1, s2) =>
+    case HtmlTag.Pattern(s1, s2) =>
       (! s1.isEmpty, Some(s2.toLowerCase))
     case _ =>
       (false, None)
@@ -85,8 +101,13 @@ final case class HtmlTag(data: String) extends Inline {
     isEnd && tagName == open.tagName
   }
 
+  def close = tagName collect {
+    case name if !HtmlTag.TagsNotToClose(name) && !data.endsWith(s"</$name>") => HtmlTag(s"</$name>")
+  }
+}
+object HtmlTag {
+  private val Pattern = """(?ms)\A<(/?)(.*?)[\s>].*\z""".r
   private val TagsNotToClose = Set("br", "img")
-  def close = tagName collect { case name if !TagsNotToClose(name) => HtmlTag(s"</$name>") }
 }
 
 /** The summary of a comment, usually its first sentence. There must be exactly one summary per body. */

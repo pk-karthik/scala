@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -21,7 +25,6 @@ import scala.annotation.tailrec
  *  Linear sequences do not add any new methods to `Seq`, but promise efficient implementations
  *  of linear access patterns.
  *  @author  Martin Odersky
- *  @version 2.8
  *  @since   2.8
  *
  *  @tparam A    the element type of the $coll
@@ -38,7 +41,7 @@ trait LinearSeqLike[+A, +Repr <: LinearSeqLike[A, Repr]] extends SeqLike[A, Repr
   override def hashCode()= scala.util.hashing.MurmurHash3.seqHash(seq) // TODO - can we get faster via "linearSeqHash" ?
 
   override /*IterableLike*/
-  def iterator: Iterator[A] = new AbstractIterator[A] {
+  def iterator: Iterator[A] = if (self.isEmpty) Iterator.empty else new AbstractIterator[A] {
     var these = self
     def hasNext: Boolean = !these.isEmpty
     def next(): A =
@@ -54,7 +57,7 @@ trait LinearSeqLike[+A, +Repr <: LinearSeqLike[A, Repr]] extends SeqLike[A, Repr
        * prevents original seq from garbage collection,
        * so we use these.take(0) here.
        *
-       * Check SI-8924 for details
+       * Check scala/bug#8924 for details
        */
       val xs = these.toList
       these = these.take(0)

@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2007-2013 LAMP/EPFL
- * @author  David Bernard, Manohar Jonnalagedda
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala
@@ -19,6 +26,7 @@ import scala.xml.Elem
 import scala.xml.dtd.DocType
 import scala.collection._
 import java.io.Writer
+import java.net.URI
 
 /** An html page that is part of a Scaladoc site.
   * @author David Bernard
@@ -103,6 +111,7 @@ abstract class HtmlPage extends Page { thisPage =>
       <dl>{items map { case (t, d) => <dt>{ inlineToHtml(t) }</dt><dd>{ blockToHtml(d) }</dd> } }</dl>
     case HorizontalRule() =>
       <hr/>
+    case tbl: Table => tableToHtml(tbl)
   }
 
   def listItemsToHtml(items: Seq[Block]) =
@@ -145,10 +154,44 @@ abstract class HtmlPage extends Page { thisPage =>
         <span class="extmbr" name={ mbr.qualifiedName }>{ inlineToHtml(text) }</span>
     case Tooltip(tooltip) =>
       <span class="extype" name={ tooltip }>{ inlineToHtml(text) }</span>
-    case LinkToExternal(name, url) =>
-      <a href={ url } class="extype" target="_top">{ inlineToHtml(text) }</a>
+    case LinkToExternalTpl(name, baseUrlString, dtpl: TemplateEntity) =>
+      val baseUrl = new URI(Page.makeUrl(baseUrlString, Page.templateToPath(dtpl)))
+      val url = if (name.isEmpty) baseUrl
+                else new URI(baseUrl.getScheme, baseUrl.getSchemeSpecificPart, name)
+      if (hasLinks)
+        <a href={ url.toString } class="extype" name={ dtpl.qualifiedName }>{ inlineToHtml(text) }</a>
+      else
+        <span class="extype" name={ dtpl.qualifiedName }>{ inlineToHtml(text) }</span>
     case _ =>
       inlineToHtml(text)
+  }
+
+  private def tableToHtml(table: Table): NodeSeq = {
+
+    val Table(header, columnOptions, rows) = table
+
+    val colClass = Map(
+      ColumnOption.ColumnOptionLeft -> "doctbl-left",
+      ColumnOption.ColumnOptionCenter -> "doctbl-center",
+      ColumnOption.ColumnOptionRight -> "doctbl-right"
+    )
+    val cc = columnOptions.map(colClass)
+
+    <table class="doctbl">
+      <thead>
+        <tr>{ (header.cells zip cc).map{ case (cell, cls) => <th class={ cls }>{ cell.blocks.map(blockToHtml) }</th>} }</tr>
+      </thead>
+      {
+        if (rows.nonEmpty) {
+          <tbody>{
+            rows.map {
+              row => <tr>{ (row.cells zip cc).map{ case (cell, cls) => <td class={ cls }>{ cell.blocks.map(blockToHtml) }</td>} }</tr>
+            }
+          }
+          </tbody>
+        }
+      }
+    </table>
   }
 
   def typeToHtml(tpes: List[model.TypeEntity], hasLinks: Boolean): NodeSeq = tpes match {
@@ -217,9 +260,9 @@ abstract class HtmlPage extends Page { thisPage =>
     val Trait, Class, Type, Object, Package = Value
   }
 
-  def permalink(template: Entity, isSelf: Boolean = true): Elem =
+  def permalink(template: Entity): Elem =
     <span class="permalink">
-      <a href={ memberToUrl(template, isSelf) } title="Permalink">
+      <a href={ memberToUrl(template) } title="Permalink">
         <i class="material-icons">&#xE157;</i>
       </a>
     </span>
@@ -254,16 +297,15 @@ abstract class HtmlPage extends Page { thisPage =>
       }
     }</span>
 
-  private def memberToUrl(template: Entity, isSelf: Boolean = true): String = {
+  private def memberToUrl(template: Entity): String = {
     val (signature: Option[String], containingTemplate: TemplateEntity) = template match {
-      case dte: DocTemplateEntity if (!isSelf) => (Some(dte.signature), dte.inTemplate)
       case dte: DocTemplateEntity => (None, dte)
       case me: MemberEntity => (Some(me.signature), me.inTemplate)
       case tpl => (None, tpl)
     }
 
     val templatePath = templateToPath(containingTemplate)
-    val url = "../" * (templatePath.size - 1) + templatePath.reverse.mkString("/")
+    val url = "../" * (thisPage.path.size - 1) + templatePath.reverse.mkString("/")
     url + signature.map("#" + _).getOrElse("")
   }
 }

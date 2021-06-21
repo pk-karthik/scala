@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2007-2013 LAMP/EPFL
- * @author  Gilles Dubochet
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
@@ -22,14 +29,14 @@ case class ProtectedInInstance() extends Visibility {
 }
 
 /** The visibility of `private[owner]` members. An unqualified private members
-  * is encoded with `owner` equal to the members's `inTemplate`. */
-case class PrivateInTemplate(owner: TemplateEntity) extends Visibility
+  * is encoded with `owner` equal to `None`. */
+case class PrivateInTemplate(owner: Option[TypeEntity]) extends Visibility
 
 /** The visibility of `protected[owner]` members. An unqualified protected
-  * members is encoded with `owner` equal to the members's `inTemplate`.
+  * members is encoded with `owner` equal to `None`.
   * Note that whilst the member is visible in any template owned by `owner`,
   * it is only visible in subclasses of the member's `inTemplate`. */
-case class ProtectedInTemplate(owner: TemplateEntity) extends Visibility {
+case class ProtectedInTemplate(owner: Option[TypeEntity]) extends Visibility {
   override def isProtected = true
 }
 

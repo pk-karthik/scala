@@ -1,11 +1,19 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
 package symtab
 
+import scala.tools.nsc.Reporting.WarningCategory
 import scala.tools.nsc.io.AbstractFile
 
 /** A subclass of SymbolLoaders that implements browsing behavior.
@@ -36,23 +44,27 @@ abstract class BrowsingLoaders extends GlobalSymbolLoaders {
     if (existing == NoSymbol) {
       decls enter member
       member
-    } else if (existing.sourceFile == null) {
-      decls unlink existing
-      decls enter member
-      member
     } else {
-      if (member.sourceFile != null) {
-        if (existing.sourceFile != member.sourceFile)
-          error(member+"is defined twice,"+
-                "\n in "+existing.sourceFile+
-                "\n and also in "+member.sourceFile)
+      val existingSourceFile = existing.sourceFile
+      if (existingSourceFile == null) {
+        decls unlink existing
+        decls enter member
+        member
+      } else {
+        val memberSourceFile = member.sourceFile
+        if (memberSourceFile != null) {
+          if (existingSourceFile != memberSourceFile)
+            globalError(member+"is defined twice,"+
+              "\n in "+existingSourceFile+
+              "\n and also in "+memberSourceFile)
+        }
+        existing
       }
-      existing
     }
   }
 
   /** Browse the top-level of given abstract file `src` and enter
-   *  eny encountered top-level classes and modules in `root`
+   *  any encountered top-level classes and modules in `root`
    */
   def browseTopLevel(root: Symbol, src: AbstractFile) {
 
@@ -87,16 +99,16 @@ abstract class BrowsingLoaders extends GlobalSymbolLoaders {
           if (packagePrefix == root.fullName) {
             enterClass(root, name.toString, new SourcefileLoader(src))
             entered += 1
-          } else println("prefixes differ: "+packagePrefix+","+root.fullName)
+          } else log("prefixes differ: "+packagePrefix+","+root.fullName)
         case ModuleDef(_, name, _) =>
           if (packagePrefix == root.fullName) {
             val module = enterModule(root, name.toString, new SourcefileLoader(src))
             entered += 1
             if (name == nme.PACKAGEkw) {
-              println("open package module: "+module)
+              log("open package module: "+module)
               openPackageModule(module, root)
             }
-          } else println("prefixes differ: "+packagePrefix+","+root.fullName)
+          } else log("prefixes differ: "+packagePrefix+","+root.fullName)
         case _ =>
       }
     }
@@ -108,12 +120,12 @@ abstract class BrowsingLoaders extends GlobalSymbolLoaders {
     val browser = new BrowserTraverser
     browser.traverse(body)
     if (browser.entered == 0)
-      warning("No classes or objects found in "+source+" that go in "+root)
+      runReporting.warning(NoPosition, "No classes or objects found in "+source+" that go in "+root, WarningCategory.OtherDebug, site = "")
   }
 
   /** Enter top-level symbols from a source file
    */
-  override def enterToplevelsFromSource(root: Symbol, name: String, src: AbstractFile) {
+  override def enterToplevelsFromSource(root: Symbol, name: TermName, src: AbstractFile) {
     try {
       if (root.isEffectiveRoot || !src.name.endsWith(".scala")) // RootClass or EmptyPackageClass
         super.enterToplevelsFromSource(root, name, src)
@@ -121,7 +133,7 @@ abstract class BrowsingLoaders extends GlobalSymbolLoaders {
         browseTopLevel(root, src)
     } catch {
       case ex: syntaxAnalyzer.MalformedInput =>
-        println("[%s] caught malformed input exception at offset %d: %s".format(src, ex.offset, ex.msg))
+        log(s"[$src] caught malformed input exception at offset ${ex.offset}: ${ex.msg}")
         super.enterToplevelsFromSource(root, name, src)
     }
   }

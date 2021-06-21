@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala
 package reflect
 package runtime
@@ -13,7 +25,7 @@ private[scala] trait SymbolTable extends internal.SymbolTable with JavaMirrors w
     if (settings.verbose) println("[reflect-compiler] "+msg)
 
   def debugInfo(msg: => String) =
-    if (settings.debug) info(msg)
+    if (settings.isDebug) info(msg)
 
   /** Declares that this is a runtime reflection universe.
    *

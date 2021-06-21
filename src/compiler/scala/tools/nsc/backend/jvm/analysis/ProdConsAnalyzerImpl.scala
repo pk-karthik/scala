@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2015 LAMP/EPFL
- * @author Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
@@ -94,9 +101,9 @@ trait ProdConsAnalyzerImpl {
   }
 
   def consumersOfOutputsFrom(insn: AbstractInsnNode): Set[AbstractInsnNode] = insn match {
-    case _: UninitializedLocalProducer                 => Set.empty
-    case ParameterProducer(local)                      => consumersOfValueAt(methodNode.instructions.getFirst, local)
-    case ExceptionProducer(handlerLabel, handlerFrame) => consumersOfValueAt(handlerLabel, handlerFrame.stackTop)
+    case _: UninitializedLocalProducer                      => Set.empty
+    case ParameterProducer(local)                           => consumersOfValueAt(methodNode.instructions.getFirst, local)
+    case ExceptionProducer(handlerLabel, handlerStackTop)   => consumersOfValueAt(handlerLabel, handlerStackTop)
     case _ =>
       _consumersOfOutputsFrom.get(insn).map(v => v.indices.flatMap(v.apply)(collection.breakOut): Set[AbstractInsnNode]).getOrElse(Set.empty)
   }
@@ -388,7 +395,7 @@ trait ProdConsAnalyzerImpl {
   private def outputValueSlots(insn: AbstractInsnNode): Seq[Int] = insn match {
     case ParameterProducer(local)          => Seq(local)
     case UninitializedLocalProducer(local) => Seq(local)
-    case ExceptionProducer(_, frame)       => Seq(frame.stackTop)
+    case ExceptionProducer(_, stackTop)    => Seq(stackTop)
     case _ =>
       if (insn.getOpcode == -1) return Seq.empty
       if (isStore(insn)) {
@@ -435,7 +442,7 @@ trait ProdConsAnalyzerImpl {
  * The ASM built-in SourceValue analysis yields an empty producers set for such values. This leads
  * to ambiguities. Example (in Java one can re-assign parameter):
  *
- *   void foo(int a) {
+ *   int foo(int a) {
  *     if (a == 0) a = 1;
  *     return a;
  *   }
@@ -453,20 +460,21 @@ abstract class InitialProducer extends AbstractInsnNode(-1) {
   override def accept(cv: MethodVisitor): Unit = throw new UnsupportedOperationException
 }
 
-case class ParameterProducer(local: Int)                                                  extends InitialProducer
-case class UninitializedLocalProducer(local: Int)                                         extends InitialProducer
-case class ExceptionProducer[V <: Value](handlerLabel: LabelNode, handlerFrame: Frame[V]) extends InitialProducer
+case class ParameterProducer(local: Int)                                                extends InitialProducer
+case class UninitializedLocalProducer(local: Int)                                       extends InitialProducer
+case class ExceptionProducer[V <: Value](handlerLabel: LabelNode, handlerStackTop: Int) extends InitialProducer
 
-class InitialProducerSourceInterpreter extends SourceInterpreter {
+class InitialProducerSourceInterpreter extends SourceInterpreter(scala.tools.asm.Opcodes.ASM7) {
   override def newParameterValue(isInstanceMethod: Boolean, local: Int, tp: Type): SourceValue = {
     new SourceValue(tp.getSize, ParameterProducer(local))
   }
 
-  override def newEmptyNonParameterLocalValue(local: Int): SourceValue = {
+  override def newEmptyValue(local: Int): SourceValue = {
     new SourceValue(1, UninitializedLocalProducer(local))
   }
 
-  override def newExceptionValue(tryCatchBlockNode: TryCatchBlockNode, handlerFrame: Frame[_ <: Value], exceptionType: Type): SourceValue = {
-    new SourceValue(1, ExceptionProducer(tryCatchBlockNode.handler, handlerFrame))
+  override def newExceptionValue(tryCatchBlockNode: TryCatchBlockNode, handlerFrame: Frame[SourceValue], exceptionType: Type): SourceValue = {
+    val handlerStackTop = handlerFrame.stackTop + 1 // +1 because this value is about to be pushed onto `handlerFrame`.
+    new SourceValue(1, ExceptionProducer(tryCatchBlockNode.handler, handlerStackTop))
   }
 }

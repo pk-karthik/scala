@@ -17,5 +17,11 @@ object Test extends StoreReporterDirectTest {
     // Don't crash when we find a file 'a' where package 'a' should go.
     scala.reflect.io.File(testOutput.path + "/a").writeAll("a")
     compileCode("package a { class B }")
+    val List(i) = filteredInfos
+    // for some reason, nio doesn't throw the same exception on windows and linux/mac
+    import File.separator
+    val expected = s"error writing ${testOutput.path}${separator}a${separator}B.class: Can't create directory ${testOutput.path}${separator}a" +
+      "; there is an existing (non-directory) file in its path"
+    assert(i.msg == expected, i.msg)
   }
 }

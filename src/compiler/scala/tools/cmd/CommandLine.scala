@@ -1,6 +1,13 @@
-/* NEST (New Scala Test)
- * Copyright 2007-2013 LAMP/EPFL
- * @author Paul Phillips
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools
@@ -27,7 +34,7 @@ class CommandLine(val spec: Reference, val originalArgs: List[String]) extends C
   def mapForUnary(opt: String) = Map(fromOpt(opt) -> ValueForUnaryOption)
   def errorFn(msg: String) = println(msg)
 
-  /** argMap is option -> argument (or "" if it is a unary argument)
+  /** argMap is option -> argument (or "true" if it is a unary argument)
    *  residualArgs are what is left after removing the options and their args.
    */
   lazy val (argMap, residualArgs): (Map[String, String], List[String]) = {

@@ -7,7 +7,6 @@ package scala.man1
 
 /**
  *  @author Stephane Micheloud
- *  @version 1.0
  */
 object scalap extends Command {
   import _root_.scala.tools.docutil.ManPage._
@@ -76,7 +75,7 @@ object scalap extends Command {
 
   val exitStatus = Section("EXIT STATUS",
 
-    MBold(command) & " returns a zero exist status if it succeeds to process " &
+    MBold(command) & " returns a zero exit status if it succeeds to process " &
     "the specified input files. Non zero is returned in case of failure.")
 
   override val authors = Section("AUTHOR",

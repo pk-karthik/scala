@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala.tools.nsc.doc
 package model
 package diagram
@@ -120,7 +132,7 @@ class ContentDiagramDepth(pack: ContentDiagram) extends DepthInfo {
   // seed base nodes, to minimize noise - they can't all have parents, else there would only be cycles
   seedNodes ++= pack.nodes.filter(directEdges(_).isEmpty)
 
-  while (!seedNodes.isEmpty) {
+  while (seedNodes.nonEmpty) {
     var newSeedNodes = Set[Node]()
     for (node <- seedNodes) {
       val depth = 1 + (-1 :: directEdges(node).map(_nodeDepth.getOrElse(_, -1))).max

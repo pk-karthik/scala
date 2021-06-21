@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala
@@ -108,11 +115,14 @@ abstract class TreeInfo {
       case Apply(Select(free @ Ident(_), nme.apply), _) if free.symbol.name endsWith nme.REIFY_FREE_VALUE_SUFFIX =>
         // see a detailed explanation of this trick in `GenSymbols.reifyFreeTerm`
         free.symbol.hasStableFlag && isPath(free, allowVolatile)
+      case Literal(_)      => true // scala/bug#8855
       case _               => false
     }
 
   private def symOk(sym: Symbol) = sym != null && !sym.isError && sym != NoSymbol
   private def typeOk(tp: Type)   =  tp != null && ! tp.isError
+
+  private def isUncheckedStable(sym: Symbol) = sym.isTerm && sym.hasAnnotation(uncheckedStableClass)
 
   /** Assuming `sym` is a member of `tree`, is it a "stable member"?
    *
@@ -120,13 +130,13 @@ abstract class TreeInfo {
    * by object definitions or by value definitions of non-volatile types (§3.6).
    */
   def isStableMemberOf(sym: Symbol, tree: Tree, allowVolatile: Boolean): Boolean = (
-    symOk(sym)       && (!sym.isTerm   || (sym.isStable && (allowVolatile || !sym.hasVolatileType))) &&
+    symOk(sym)       && (!sym.isTerm   || ((sym.isStable || isUncheckedStable(sym)) && (allowVolatile || !sym.hasVolatileType))) &&
     typeOk(tree.tpe) && (allowVolatile || !hasVolatileType(tree)) && !definitions.isByNameParamType(tree.tpe)
   )
 
   private def isStableIdent(tree: Ident, allowVolatile: Boolean): Boolean = (
        symOk(tree.symbol)
-    && tree.symbol.isStable
+    && (tree.symbol.isStable || isUncheckedStable(tree.symbol))
     && !definitions.isByNameParamType(tree.tpe)
     && !definitions.isByName(tree.symbol)
     && (allowVolatile || !tree.symbol.hasVolatileType) // TODO SPEC: not required by spec
@@ -135,7 +145,7 @@ abstract class TreeInfo {
   /** Is `tree`'s type volatile? (Ignored if its symbol has the @uncheckedStable annotation.)
    */
   def hasVolatileType(tree: Tree): Boolean =
-    symOk(tree.symbol) && tree.tpe.isVolatile && !tree.symbol.hasAnnotation(uncheckedStableClass)
+    symOk(tree.symbol) && tree.tpe.isVolatile && !isUncheckedStable(tree.symbol)
 
   /** Is `tree` either a non-volatile type,
    *  or a path that does not include any of:
@@ -149,11 +159,11 @@ abstract class TreeInfo {
 
   /** Is `tree` admissible as a stable identifier pattern (8.1.5 Stable Identifier Patterns)?
    *
-   * We disregard volatility, as it's irrelevant in patterns (SI-6815)
+   * We disregard volatility, as it's irrelevant in patterns (scala/bug#6815)
    */
   def isStableIdentifierPattern(tree: Tree): Boolean = isStableIdentifier(tree, allowVolatile = true)
 
-  // TODO SI-5304 tighten this up so we don't elide side effect in module loads
+  // TODO scala/bug#5304 tighten this up so we don't elide side effect in module loads
   def isQualifierSafeToElide(tree: Tree): Boolean = isExprSafeToInline(tree)
 
   /** Is tree an expression which can be inlined without affecting program semantics?
@@ -189,7 +199,7 @@ abstract class TreeInfo {
       // However, before typing, applications of nullary functional values are also
       // Apply(function, Nil) trees. To prevent them from being treated as pure,
       // we check that the callee is a method.
-      // The callee might also be a Block, which has a null symbol, so we guard against that (SI-7185)
+      // The callee might also be a Block, which has a null symbol, so we guard against that (scala/bug#7185)
       fn.symbol != null && fn.symbol.isMethod && !fn.symbol.isLazy && isExprSafeToInline(fn)
     case Typed(expr, _) =>
       isExprSafeToInline(expr)
@@ -263,11 +273,18 @@ abstract class TreeInfo {
     true
   }
 
+  def isFunctionMissingParamType(tree: Tree): Boolean = tree match {
+    case Function(vparams, _) => vparams.exists(_.tpt.isEmpty)
+    case _ => false
+  }
+
+
   /** Is symbol potentially a getter of a variable?
    */
   def mayBeVarGetter(sym: Symbol): Boolean = sym.info match {
     case NullaryMethodType(_)              => sym.owner.isClass && !sym.isStable
     case PolyType(_, NullaryMethodType(_)) => sym.owner.isClass && !sym.isStable
+    case PolyType(_, mt @ MethodType(_, _))=> mt.isImplicit && sym.owner.isClass && !sym.isStable
     case mt @ MethodType(_, _)             => mt.isImplicit && sym.owner.isClass && !sym.isStable
     case _                                 => false
   }
@@ -277,15 +294,34 @@ abstract class TreeInfo {
   def isVariableOrGetter(tree: Tree) = {
     def sym       = tree.symbol
     def isVar     = sym.isVariable
-    def isGetter  = mayBeVarGetter(sym) && sym.owner.info.member(sym.setterName) != NoSymbol
 
     tree match {
       case Ident(_)                               => isVar
-      case Select(_, _)                           => isVar || isGetter
+      case Select(qual, _)                        => isVar || mayBeVarGetter(sym) && qual.tpe.member(sym.setterName) != NoSymbol
       case Applied(Select(qual, nme.apply), _, _) => qual.tpe.member(nme.update) != NoSymbol
       case _                                      => false
     }
   }
+
+
+  // No field for these vals, which means the ValDef carries the symbol of the getter (and not the field symbol)
+  //   - abstract vals have no value we could store (until they become concrete, potentially)
+  //   - lazy vals: the ValDef carries the symbol of the lazy accessor.
+  //     The sausage factory will spew out the inner workings during the fields phase (actual bitmaps won't follow
+  //     until lazyvals & mixins, though we should move this stuff from mixins to lazyvals now that fields takes care of mixing in lazy vals)
+  //   - concrete vals in traits don't yield a field here either (their getter's RHS has the initial value)
+  //     Constructors will move the assignment to the constructor, abstracting over the field using the field setter,
+  //     and Fields will add a field to the class that mixes in the trait, implementing the accessors in terms of it
+  //
+  // The following case does receive a field symbol (until it's eliminated during the fields phase):
+  //   - a concrete val with a statically known value (ConstantType)
+  //     performs its side effect according to lazy/strict semantics, but doesn't need to store its value
+  //     each access will "evaluate" the RHS (a literal) again
+  //
+  // We would like to avoid emitting unnecessary fields, but the required knowledge isn't available until after typer.
+  // The only way to avoid emitting & suppressing, is to not emit at all until we are sure to need the field, as dotty does.
+  def noFieldFor(vd: ValDef, owner: Symbol) = vd.mods.isDeferred || vd.mods.isLazy || (owner.isTrait && !vd.mods.hasFlag(PRESUPER))
+
 
   def isDefaultGetter(tree: Tree) = {
     tree.symbol != null && tree.symbol.isDefaultGetter
@@ -294,7 +330,7 @@ abstract class TreeInfo {
   /** Is tree a self constructor call this(...)? I.e. a call to a constructor of the
    *  same object?
    */
-  def isSelfConstrCall(tree: Tree): Boolean = dissectApplied(tree).core match {
+  def isSelfConstrCall(tree: Tree): Boolean = dissectCore(tree) match {
     case Ident(nme.CONSTRUCTOR)           => true
     case Select(This(_), nme.CONSTRUCTOR) => true
     case _                                => false
@@ -302,7 +338,7 @@ abstract class TreeInfo {
 
   /** Is tree a super constructor call?
    */
-  def isSuperConstrCall(tree: Tree): Boolean = dissectApplied(tree).core match {
+  def isSuperConstrCall(tree: Tree): Boolean = dissectCore(tree) match {
     case Select(Super(_, _), nme.CONSTRUCTOR) => true
     case _                                    => false
   }
@@ -311,9 +347,9 @@ abstract class TreeInfo {
    * Named arguments can transform a constructor call into a block, e.g.
    *   <init>(b = foo, a = bar)
    * is transformed to
-   *   { val x$1 = foo
-   *     val x$2 = bar
-   *     <init>(x$2, x$1)
+   *   { val x\$1 = foo
+   *     val x\$2 = bar
+   *     <init>(x\$2, x\$1)
    *   }
    */
   def stripNamedApplyBlock(tree: Tree) = tree match {
@@ -339,7 +375,7 @@ abstract class TreeInfo {
 
   /** Is tree a self or super constructor call? */
   def isSelfOrSuperConstrCall(tree: Tree) = {
-    // stripNamedApply for SI-3584: adaptToImplicitMethod in Typers creates a special context
+    // stripNamedApply for scala/bug#3584: adaptToImplicitMethod in Typers creates a special context
     // for implicit search in constructor calls, adaptToImplicitMethod(isSelfOrConstrCall)
     val tree1 = stripNamedApplyBlock(tree)
     isSelfConstrCall(tree1) || isSuperConstrCall(tree1)
@@ -351,7 +387,7 @@ abstract class TreeInfo {
    * on information at the `parser` phase? To qualify, there
    * may be no subtree that will be interpreted as a
    * Stable Identifier Pattern, nor any type tests, even
-   * on TupleN. See SI-6968.
+   * on TupleN. See scala/bug#6968.
    *
    * For instance:
    *
@@ -411,6 +447,11 @@ abstract class TreeInfo {
     case _                  => false
   }
 
+  def isLiteralString(t: Tree): Boolean = t match {
+    case Literal(Constant(_: String)) => true
+    case _ => false
+  }
+
   /** Does the tree have a structure similar to typechecked trees? */
   private[internal] def detectTypecheckedTree(tree: Tree) =
     tree.hasExistingSymbol || tree.exists {
@@ -454,7 +495,8 @@ abstract class TreeInfo {
         } map { dd =>
           val DefDef(dmods, dname, _, _, _, drhs) = dd
           // get access flags from DefDef
-          val vdMods = (vmods &~ Flags.AccessFlags) | (dmods & Flags.AccessFlags).flags
+          val defDefMask = Flags.AccessFlags | OVERRIDE | IMPLICIT | DEFERRED
+          val vdMods = (vmods &~ defDefMask) | (dmods & defDefMask).flags
           // for most cases lazy body should be taken from accessor DefDef
           val vdRhs = if (vmods.isLazy) lazyValDefRhs(drhs) else vrhs
           copyValDef(vd)(mods = vdMods, name = dname, rhs = vdRhs)
@@ -734,7 +776,7 @@ abstract class TreeInfo {
    *      * targs = Nil
    *      * argss = List(List(arg11, arg12...), List(arg21, arg22, ...))
    */
-  class Applied(val tree: Tree) {
+  final class Applied(val tree: Tree) {
     /** The tree stripped of the possibly nested applications.
      *  The original tree if it's not an application.
      */
@@ -778,7 +820,18 @@ abstract class TreeInfo {
 
   /** Returns a wrapper that knows how to destructure and analyze applications.
    */
-  def dissectApplied(tree: Tree) = new Applied(tree)
+  final def dissectApplied(tree: Tree) = new Applied(tree)
+  /** Equivalent ot disectApplied(tree).core, but more efficient */
+  @scala.annotation.tailrec
+  final def dissectCore(tree: Tree): Tree = tree match {
+    case TypeApply(fun, _) =>
+      dissectCore(fun)
+    case Apply(fun, _) =>
+      dissectCore(fun)
+    case t =>
+      t
+  }
+
 
   /** Destructures applications into important subparts described in `Applied` class,
    *  namely into: core, targs and argss (in the specified order).
@@ -816,7 +869,7 @@ abstract class TreeInfo {
   object Unapplied {
     // Duplicated with `spliceApply`
     def unapply(tree: Tree): Option[Tree] = tree match {
-      // SI-7868 Admit Select() to account for numeric widening, e.g. <unapplySelector>.toInt
+      // scala/bug#7868 Admit Select() to account for numeric widening, e.g. <unapplySelector>.toInt
       case Apply(fun, (Ident(nme.SELECTOR_DUMMY)| Select(Ident(nme.SELECTOR_DUMMY), _)) :: Nil)
                          => Some(fun)
       case Apply(fun, _) => unapply(fun)

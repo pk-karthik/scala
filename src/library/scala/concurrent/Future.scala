@@ -1,20 +1,23 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala.concurrent
 
 import scala.language.higherKinds
-
 import java.util.concurrent.{CountDownLatch, TimeUnit}
-import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.{AtomicInteger, AtomicReference}
 
 import scala.util.control.NonFatal
-import scala.util.{Try, Success, Failure}
+import scala.util.{Failure, Success, Try}
 import scala.concurrent.duration._
 import scala.collection.generic.CanBuildFrom
 import scala.reflect.ClassTag
@@ -46,7 +49,7 @@ import scala.reflect.ClassTag
  *  executed in a particular order.
  *
  *  @define caughtThrowables
- *  The future may contain a throwable object and this means that the future failed.
+ *  This future may contain a throwable object and this means that the future failed.
  *  Futures obtained through combinators have the same exception as the future they were obtained from.
  *  The following throwable objects are not contained in the future:
  *  - `Error` - errors are not contained within futures
@@ -116,7 +119,7 @@ trait Future[+T] extends Awaitable[T] {
   @deprecated("use `foreach` or `onComplete` instead (keep in mind that they take total rather than partial functions)", "2.12.0")
   def onSuccess[U](pf: PartialFunction[T, U])(implicit executor: ExecutionContext): Unit = onComplete {
     case Success(v) =>
-      pf.applyOrElse[T, Any](v, Predef.conforms[T]) // Exploiting the cached function to avoid MatchError
+      pf.applyOrElse[T, Any](v, Predef.identity[T]) // Exploiting the cached function to avoid MatchError
     case _ =>
   }
 
@@ -141,7 +144,7 @@ trait Future[+T] extends Awaitable[T] {
   @deprecated("use `onComplete` or `failed.foreach` instead (keep in mind that they take total rather than partial functions)", "2.12.0")
   def onFailure[U](@deprecatedName('callback) pf: PartialFunction[Throwable, U])(implicit executor: ExecutionContext): Unit = onComplete {
     case Failure(t) =>
-      pf.applyOrElse[Throwable, Any](t, Predef.conforms[Throwable]) // Exploiting the cached function to avoid MatchError
+      pf.applyOrElse[Throwable, Any](t, Predef.identity[Throwable]) // Exploiting the cached function to avoid MatchError
     case _ =>
   }
 
@@ -197,6 +200,8 @@ trait Future[+T] extends Awaitable[T] {
    *  if the original `Future` fails.
    *
    *  If the original `Future` is successful, the returned `Future` is failed with a `NoSuchElementException`.
+   *
+   *  $caughtThrowables
    *
    * @return a failed projection of this `Future`.
    * @group Transformations
@@ -528,7 +533,7 @@ trait Future[+T] extends Awaitable[T] {
   def andThen[U](pf: PartialFunction[Try[T], U])(implicit executor: ExecutionContext): Future[T] =
     transform {
       result =>
-        try pf.applyOrElse[Try[T], Any](result, Predef.conforms[Try[T]])
+        try pf.applyOrElse[Try[T], Any](result, Predef.identity[Try[T]])
         catch { case NonFatal(t) => executor reportFailure t }
 
         result
@@ -573,7 +578,8 @@ object Future {
       throw new TimeoutException(s"Future timed out after [$atMost]")
     }
 
-    @throws(classOf[Exception])
+    @throws(classOf[TimeoutException])
+    @throws(classOf[InterruptedException])
     override def result(atMost: Duration)(implicit permit: CanAwait): Nothing = {
       ready(atMost)
       throw new TimeoutException(s"Future timed out after [$atMost]")
@@ -675,8 +681,13 @@ object Future {
    */
   def firstCompletedOf[T](futures: TraversableOnce[Future[T]])(implicit executor: ExecutionContext): Future[T] = {
     val p = Promise[T]()
-    val completeFirst: Try[T] => Unit = p tryComplete _
-    futures foreach { _ onComplete completeFirst }
+    val firstCompleteHandler = new AtomicReference[Promise[T]](p) with (Try[T] => Unit) {
+      override def apply(v1: Try[T]): Unit = getAndSet(null) match {
+        case null => ()
+        case some => some tryComplete v1
+      }
+    }
+    futures foreach { _ onComplete firstCompleteHandler }
     p.future
   }
 
@@ -782,7 +793,7 @@ object Future {
   }
 
   /** Initiates a non-blocking, asynchronous, fold over the supplied futures
-   *  where the fold-zero is the result value of the `Future` that's completed first.
+   *  where the fold-zero is the result value of the first `Future` in the collection.
    *
    *  Example:
    *  {{{

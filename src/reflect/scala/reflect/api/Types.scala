@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala
 package reflect
 package api
@@ -734,7 +746,7 @@ trait Types {
    */
   val MethodType: MethodTypeExtractor
 
-  /** An extractor class to create and pattern match with syntax `MethodType(params, respte)`
+  /** An extractor class to create and pattern match with syntax `MethodType(params, restpe)`
    *  Here, `params` is a potentially empty list of parameter symbols of the method,
    *  and `restpe` is the result type of the method. If the method is curried, `restpe` would
    *  be another `MethodType`.

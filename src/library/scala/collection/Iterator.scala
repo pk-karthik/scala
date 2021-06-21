@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -18,7 +22,6 @@ import immutable.Stream
  *
  *  @author  Martin Odersky
  *  @author  Matthias Zenger
- *  @version 2.8
  *  @since   2.8
  */
 object Iterator {
@@ -107,9 +110,18 @@ object Iterator {
   def range(start: Int, end: Int, step: Int): Iterator[Int] = new AbstractIterator[Int] {
     if (step == 0) throw new IllegalArgumentException("zero step")
     private var i = start
-    def hasNext: Boolean = (step <= 0 || i < end) && (step >= 0 || i > end)
+    private var hasOverflowed = false
+    def hasNext: Boolean = {
+      (step <= 0 || i < end) && (step >= 0 || i > end) && !hasOverflowed
+    }
     def next(): Int =
-      if (hasNext) { val result = i; i += step; result }
+      if (hasNext) {
+        val result = i
+        val nextValue = i + step
+        hasOverflowed = (step > 0) == nextValue < i
+        i = nextValue
+        result
+      }
       else empty.next()
   }
 
@@ -180,10 +192,11 @@ object Iterator {
       }
       else {
         current = tail.headIterator
+        if (last eq tail) last = last.tail
         tail = tail.tail
         merge()
         if (currentHasNextChecked) true
-        else if (current.hasNext) {
+        else if ((current ne null) && current.hasNext) {
           currentHasNextChecked = true
           true
         } else advance()
@@ -198,6 +211,7 @@ object Iterator {
         current = c.current
         currentHasNextChecked = c.currentHasNextChecked
         if (c.tail ne null) {
+          if (last eq null) last = c.last
           c.last.tail = tail
           tail = c.tail
         }
@@ -281,12 +295,10 @@ object Iterator {
   }
 }
 
-import Iterator.empty
-
 /** Iterators are data structures that allow to iterate over a sequence
  *  of elements. They have a `hasNext` method for checking
  *  if there is a next element available, and a `next` method
- *  which returns the next element and discards it from the iterator.
+ *  which returns the next element and advances the iterator.
  *
  *  An iterator is mutable: most operations on it change its state. While it is often used
  *  to iterate through the elements of a collection, it can also be used without
@@ -314,7 +326,6 @@ import Iterator.empty
  *  }}}
  *
  *  @author  Martin Odersky, Matthias Zenger
- *  @version 2.8
  *  @since   1
  *  @define willNotTerminateInf
  *  Note: will not terminate for infinite iterators.
@@ -347,6 +358,8 @@ import Iterator.empty
  */
 trait Iterator[+A] extends TraversableOnce[A] {
   self =>
+
+  import Iterator.empty
 
   def seq: Iterator[A] = this
 
@@ -470,7 +483,7 @@ trait Iterator[+A] extends TraversableOnce[A] {
    */
   def flatMap[B](f: A => GenTraversableOnce[B]): Iterator[B] = new AbstractIterator[B] {
     private var cur: Iterator[B] = empty
-    private def nextCur() { cur = f(self.next()).toIterator }
+    private def nextCur(): Unit = { cur = null ; cur = f(self.next()).toIterator }
     def hasNext: Boolean = {
       // Equivalent to cur.hasNext || self.hasNext && { nextCur(); hasNext }
       // but slightly shorter bytecode (better JVM inlining!)
@@ -581,7 +594,7 @@ trait Iterator[+A] extends TraversableOnce[A] {
   }
 
   /** Produces a collection containing cumulative results of applying the
-   *  operator going left to right.
+   *  operator going left to right, including the initial value.
    *
    *  $willNotTerminateInf
    *  $orderDependent
@@ -593,14 +606,20 @@ trait Iterator[+A] extends TraversableOnce[A] {
    *  @note          Reuse: $consumesAndProducesIterator
    */
   def scanLeft[B](z: B)(op: (B, A) => B): Iterator[B] = new AbstractIterator[B] {
-    var hasNext = true
-    var elem = z
-    def next() = if (hasNext) {
-      val res = elem
-      if (self.hasNext) elem = op(elem, self.next())
-      else hasNext = false
-      res
-    } else Iterator.empty.next()
+    private[this] var state = 0    // 1 consumed initial, 2 self.hasNext, 3 done
+    private[this] var accum = z
+    private[this] def gen() = { val res = op(accum, self.next()) ; accum = res ; res }
+    def hasNext = state match {
+      case 0 | 2 => true
+      case 3     => false
+      case _     => if (self.hasNext) { state = 2 ; true } else { state = 3 ; false }
+    }
+    def next() = state match {
+      case 0 => state = 1 ; accum
+      case 1 => gen()
+      case 2 => state = 1 ; gen()
+      case 3 => Iterator.empty.next()
+    }
   }
 
   /** Produces a collection containing cumulative results of applying the operator going right to left.
@@ -686,15 +705,15 @@ trait Iterator[+A] extends TraversableOnce[A] {
      * handling of structural calls. It's not what's intended here.
      */
     class Leading extends AbstractIterator[A] {
-      var lookahead: mutable.Queue[A] = null
-      var hd: A = _
+      private[this] var lookahead: mutable.Queue[A] = null
+      private[this] var hd: A = _
       /* Status is kept with magic numbers
        *   1 means next element is in hd and we're still reading into this iterator
        *   0 means we're still reading but haven't found a next element
        *   -1 means we are done reading into the iterator, so we must rely on lookahead
        *   -2 means we are done but have saved hd for the other iterator to use as its first element
        */
-      var status = 0
+      private[this] var status = 0
       private def store(a: A) {
         if (lookahead == null) lookahead = new mutable.Queue[A]
         lookahead += a
@@ -718,67 +737,59 @@ trait Iterator[+A] extends TraversableOnce[A] {
         }
         else empty.next()
       }
-      def finish(): Boolean = {
-        if (status == -1) false
-        else if (status == -2) {
+      def finish(): Boolean = status match {
+        case -2 => status = -1 ; true
+        case -1 => false
+        case  1 => store(hd) ; status = 0 ; finish()
+        case  0 => 
           status = -1
-          true
-        }
-        else {
-          if (status == 1) store(hd)
           while (self.hasNext) {
             val a = self.next()
             if (p(a)) store(a)
             else {
               hd = a
-              status = -1
               return true
             }
           }
           false
-        }
       }
+      def trailer: A = hd
     }
 
     val leading = new Leading
 
     val trailing = new AbstractIterator[A] {
       private[this] var myLeading = leading
-      /* Status flags meanings:
-       *   -1 not yet accesssed
+      /* Status flag meanings:
+       *   -1 not yet accessed
        *   0 single element waiting in leading
        *   1 defer to self
+       *   2 self.hasNext already
+       *   3 exhausted
        */
       private[this] var status = -1
-      def hasNext = {
-        if (status > 0) self.hasNext
-        else {
-          if (status == 0) true
-          else if (myLeading.finish()) {
-            status = 0
-            true
-          }
-          else {
-            status = 1
-            myLeading = null
-            self.hasNext
-          }
-        }
+      def hasNext = status match {
+        case 3 => false
+        case 2 => true
+        case 1 => if (self.hasNext) { status = 2 ; true } else { status = 3 ; false }
+        case 0 => true
+        case _ =>
+          if (myLeading.finish()) { status = 0 ; true } else { status = 1 ; myLeading = null ; hasNext }
       }
       def next() = {
         if (hasNext) {
-          if (status > 0) self.next()
-          else {
+          if (status == 0) {
             status = 1
-            val ans = myLeading.hd
+            val res = myLeading.trailer
             myLeading = null
-            ans
+            res
+          } else {
+            status = 1
+            self.next()
           }
         }
-        else Iterator.empty.next()
+        else empty.next()
       }
-
-      override def toString = "unknown-if-empty iterator"
     }
 
     (leading, trailing)
@@ -1094,7 +1105,7 @@ trait Iterator[+A] extends TraversableOnce[A] {
   extends AbstractIterator[Seq[B]]
      with Iterator[Seq[B]] {
 
-    require(size >= 1 && step >= 1, "size=%d and step=%d, but both must be positive".format(size, step))
+    require(size >= 1 && step >= 1, f"size=$size%d and step=$step%d, but both must be positive")
 
     private[this] var buffer: ArrayBuffer[B] = ArrayBuffer()  // the buffer
     private[this] var filled = false                          // whether the buffer is "hot"
@@ -1102,30 +1113,30 @@ trait Iterator[+A] extends TraversableOnce[A] {
     private[this] var pad: Option[() => B] = None             // what to pad short sequences with
 
     /** Public functions which can be used to configure the iterator before use.
-	 *
-	 *  Pads the last segment if necessary so that all segments will
-	 *  have the same size.
-	 *
-	 *  @param x The element that will be appended to the last segment, if necessary.
-	 *  @return  The same iterator, and ''not'' a new iterator.
-	 *  @note    This method mutates the iterator it is called on, which can be safely used afterwards.
-	 *  @note    This method is mutually exclusive with `withPartial(true)`.
- 	 */
+     *
+     *  Pads the last segment if necessary so that all segments will
+     *  have the same size.
+     *
+     *  @param x The element that will be appended to the last segment, if necessary.
+     *  @return  The same iterator, and ''not'' a new iterator.
+     *  @note    This method mutates the iterator it is called on, which can be safely used afterwards.
+     *  @note    This method is mutually exclusive with `withPartial(true)`.
+     */
     def withPadding(x: => B): this.type = {
       pad = Some(() => x)
       this
     }
-	/** Public functions which can be used to configure the iterator before use.
-  	 *
-	 *  Select whether the last segment may be returned with less than `size`
-	 *  elements. If not, some elements of the original iterator may not be
-	 *  returned at all.
-	 *
-	 *  @param x `true` if partial segments may be returned, `false` otherwise.
-	 *  @return  The same iterator, and ''not'' a new iterator.
-	 *  @note    This method mutates the iterator it is called on, which can be safely used afterwards.
-	 *  @note    This method is mutually exclusive with `withPadding`.
-	 */
+    /** Public functions which can be used to configure the iterator before use.
+     *
+     *  Select whether the last segment may be returned with less than `size`
+     *  elements. If not, some elements of the original iterator may not be
+     *  returned at all.
+     *
+     *  @param x `true` if partial segments may be returned, `false` otherwise.
+     *  @return  The same iterator, and ''not'' a new iterator.
+     *  @note    This method mutates the iterator it is called on, which can be safely used afterwards.
+     *  @note    This method is mutually exclusive with `withPadding`.
+     */
     def withPartial(x: Boolean): this.type = {
       _partial = x
       if (_partial == true) // reset pad since otherwise it will take precedence
@@ -1234,9 +1245,15 @@ trait Iterator[+A] extends TraversableOnce[A] {
     new GroupedIterator[B](self, size, size)
 
   /** Returns an iterator which presents a "sliding window" view of
-   *  another iterator.  The first argument is the window size, and
-   *  the second is how far to advance the window on each iteration;
-   *  defaults to `1`.  Example usages:
+   *  this iterator.  The first argument is the window size, and
+   *  the second argument `step` is how far to advance the window
+   *  on each iteration. The `step` defaults to `1`.
+   *
+   *  The default `GroupedIterator` can be configured to either
+   *  pad a partial result to size `size` or suppress the partial
+   *  result entirely.
+   *
+   *  Example usages:
    *  {{{
    *    // Returns List(List(1, 2, 3), List(2, 3, 4), List(3, 4, 5))
    *    (1 to 5).iterator.sliding(3).toList
@@ -1249,6 +1266,11 @@ trait Iterator[+A] extends TraversableOnce[A] {
    *    val it2 = Iterator.iterate(20)(_ + 5)
    *    (1 to 5).iterator.sliding(4, 3).withPadding(it2.next).toList
    *  }}}
+   *
+   *  @return An iterator producing `Seq[B]`s of size `size`, except the
+   *          last element (which may be the only element) will be truncated
+   *          if there are fewer than `size` elements remaining to be grouped.
+   *          This behavior can be configured.
    *
    *  @note Reuse: $consumesAndProducesIterator
    */
@@ -1398,11 +1420,11 @@ trait Iterator[+A] extends TraversableOnce[A] {
 
   /** Converts this iterator to a string.
    *
-   *  @return `"empty iterator"` or `"non-empty iterator"`, depending on
+   *  @return `"<iterator>"`
    *           whether or not the iterator is empty.
    *  @note    Reuse: $preservesIterator
    */
-  override def toString = (if (hasNext) "non-empty" else "empty")+" iterator"
+  override def toString = "<iterator>"
 }
 
 /** Explicit instantiation of the `Iterator` trait to reduce class file size in subclasses. */

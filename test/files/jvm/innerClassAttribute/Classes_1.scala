@@ -254,7 +254,7 @@ class SpecializedClassesAreTopLevel {
     class B[@specialized(Int) T]; new B[Int]
   }
 
-  // these crash the compiler, SI-7625
+  // these crash the compiler, scala/bug#7625
 
   // { class B[@specialized(Int) T]; new B[Int] }
 
@@ -301,5 +301,42 @@ object NestedInValueClass {
     // A$ has InnerClass entries for B, C, A, A$. Also for the closures above, because they are referenced in A$'s bytecode.
     class B // member class of A$
     def f = { class C; new C } // outer class A$, outer method f
+  }
+}
+
+object LocalAndAnonymousInLazyInitializer {
+  abstract class A
+  class C {
+    lazy val a: A = new A { }
+    lazy val b: A = {
+      class AA extends A
+      new AA
+    }
+    lazy val c: A = {
+      object AA extends A
+      AA
+    }
+  }
+  object O {
+    lazy val a: A = new A { }
+    lazy val b: A = {
+      class AA extends A
+      new AA
+    }
+    lazy val c: A = {
+      object AA extends A
+      AA
+    }
+  }
+  trait T {
+    lazy val a: A = new A { }
+    lazy val b: A = {
+      class AA extends A
+      new AA
+    }
+    lazy val c: A = {
+      object AA extends A
+      AA
+    }
   }
 }

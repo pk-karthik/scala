@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2002-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 
@@ -17,13 +21,13 @@ import scala.annotation.tailrec
  * Here's an example:
  * {{{
  *   val name = "James"
- *   println(s"Hello, $name")  // Hello, James
+ *   println(s"Hello, \$name")  // Hello, James
  * }}}
  *
  * Any processed string literal is rewritten as an instantiation and
  * method call against this class.   For example:
  * {{{
- *   s"Hello, $name"
+ *   s"Hello, \$name"
  * }}}
  *
  * is rewritten to be:
@@ -41,7 +45,7 @@ import scala.annotation.tailrec
  *    implicit class JsonHelper(private val sc: StringContext) extends AnyVal {
  *      def json(args: Any*): JSONObject = ...
  *    }
- *    val x: JSONObject = json"{ a: $a }"
+ *    val x: JSONObject = json"{ a: \$a }"
  * }}}
  *
  *  Here the `JsonHelper` extension class implicitly adds the `json` method to
@@ -73,14 +77,14 @@ case class StringContext(parts: String*) {
    *  Here's an example of usage:
    *  {{{
    *    val name = "James"
-   *    println(s"Hello, $name")  // Hello, James
+   *    println(s"Hello, \$name")  // Hello, James
    *  }}}
-   *  In this example, the expression $name is replaced with the `toString` of the
+   *  In this example, the expression \$name is replaced with the `toString` of the
    *  variable `name`.
    *  The `s` interpolator can take the `toString` of any arbitrary expression within
-   *  a `${}` block, for example:
+   *  a `\${}` block, for example:
    *  {{{
-   *    println(s"1 + 1 = ${1 + 1}")
+   *    println(s"1 + 1 = \${1 + 1}")
    *  }}}
    *  will print the string `1 + 1 = 2`.
    *
@@ -91,6 +95,8 @@ case class StringContext(parts: String*) {
    *  @throws StringContext.InvalidEscapeException
    *          if a `parts` string contains a backslash (`\`) character
    *          that does not start a valid escape sequence.
+   *  @note   The Scala compiler may replace a call to this method with an equivalent, but more efficient,
+   *          use of a StringBuilder.
    */
   def s(args: Any*): String = standardInterpolator(treatEscapes, args)
 
@@ -113,6 +119,8 @@ case class StringContext(parts: String*) {
    *  @throws IllegalArgumentException
    *          if the number of `parts` in the enclosing `StringContext` does not exceed
    *          the number of arguments `arg` by exactly 1.
+   *  @note   The Scala compiler may replace a call to this method with an equivalent, but more efficient,
+   *          use of a StringBuilder.
    */
   def raw(args: Any*): String = standardInterpolator(identity, args)
 
@@ -141,7 +149,7 @@ case class StringContext(parts: String*) {
    *  {{{
    *    val height = 1.9d
    *    val name = "James"
-   *    println(f"$name%s is $height%2.2f meters tall")  // James is 1.90 meters tall
+   *    println(f"\$name%s is \$height%2.2f meters tall")  // James is 1.90 meters tall
    *  }}}
    *
    *  @param `args` The arguments to be inserted into the resulting string.

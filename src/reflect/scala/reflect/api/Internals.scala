@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala
 package reflect
 package api
@@ -60,7 +72,7 @@ trait Internals { self: Universe =>
     /** Creates an importer that moves reflection artifacts between universes.
      *  @see [[Importer]]
      */
-    // SI-6241: move importers to a mirror
+    // scala/bug#6241: move importers to a mirror
     def createImporter(from0: Universe): Importer { val from: from0.type }
 
     /**
@@ -361,6 +373,19 @@ trait Internals { self: Universe =>
     /** A creator for `BoundedWildcardType` types.
      */
     def boundedWildcardType(bounds: TypeBounds): BoundedWildcardType
+
+    /** Mark the given `DefDef` for later processing by the `async` phase of the compiler
+     *
+     * @param owner current owner the owner of the call site being transformed into an async state machine
+     * @param method A method of the form `def $name($paramName: $ParamType): $T = $CODE`, where calls to `$CODE`
+     *               `awaitSymbol` in `$CODE` mark continuation points.
+     * @param awaitSymbol The `await` method, of a typically of a type like `[T](Future[T): T`
+     * @param config      Untyped channel for additional configuration parameters. This currently allows
+     *                     - "postAnfTransform" : A function from `Block => Block`
+     *                     - "stateDiagram"     : A function from `(Symbol, Tree) => Option[String => Unit]` that can
+     *                                            opt to receive a .dot diagram of the state machine.
+     */
+    def markForAsyncTransform(owner: Symbol, method: DefDef, awaitSymbol: Symbol, config: Map[String, AnyRef]): DefDef = method
 
     /** Syntactic conveniences for additional internal APIs for trees, symbols and types */
     type Decorators <: DecoratorApi
@@ -902,7 +927,7 @@ trait Internals { self: Universe =>
    *
    *  @group Internal
    */
-  // SI-6241: move importers to a mirror
+  // scala/bug#6241: move importers to a mirror
   trait Importer {
     /** The source universe of reflection artifacts that will be processed.
      *  The target universe is universe that created this importer with `mkImporter`.
@@ -1012,7 +1037,7 @@ trait Internals { self: Universe =>
      */
     def origin: String
 
-    /** The valus this symbol refers to
+    /** The value this symbol refers to
      *
      *  @group FreeTerm
      */

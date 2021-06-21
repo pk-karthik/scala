@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -15,6 +19,12 @@ import generic._
 /** This class implements priority queues using a heap.
  *  To prioritize elements of type A there must be an implicit
  *  Ordering[A] available at creation.
+ * 
+ *  If multiple elements have the same priority in the ordering of this
+ *  PriorityQueue, no guarantees are made regarding the order in which elements
+ *  are returned by `dequeue` or `dequeueAll`. In particular, that means this
+ *  class does not guarantee first in first out behaviour that may be
+ *  incorrectly inferred from the Queue part of the name of this class.
  *
  *  Only the `dequeue` and `dequeueAll` methods will return elements in priority
  *  order (while removing elements from the heap).  Standard collection methods
@@ -36,7 +46,6 @@ import generic._
  *  @param ord   implicit ordering used to compare the elements of type `A`.
  *
  *  @author  Matthias Zenger
- *  @version 1.0, 03/05/2004
  *  @since   1
  *
  *  @define Coll PriorityQueue
@@ -46,6 +55,7 @@ import generic._
  *  @define mayNotTerminateInf
  *  @define willNotTerminateInf
  */
+@SerialVersionUID(736425014438295802L)
 sealed class PriorityQueue[A](implicit val ord: Ordering[A])
    extends AbstractIterable[A]
       with Iterable[A]
@@ -58,6 +68,7 @@ sealed class PriorityQueue[A](implicit val ord: Ordering[A])
 {
   import ord._
 
+  @SerialVersionUID(3491656538574147683L)
   private class ResizableArrayAccess[A] extends AbstractSeq[A] with ResizableArray[A] with Serializable {
     def p_size0 = size0
     def p_size0_=(s: Int) = size0 = s
@@ -331,8 +342,8 @@ sealed class PriorityQueue[A](implicit val ord: Ordering[A])
     val pq = new PriorityQueue[A]
     val n = resarr.p_size0
     pq.resarr.p_ensureSize(n)
+    java.lang.System.arraycopy(resarr.p_array, 1, pq.resarr.p_array, 1, n-1)
     pq.resarr.p_size0 = n
-    scala.compat.Platform.arraycopy(resarr.p_array, 1, pq.resarr.p_array, 1, n-1)
     pq
   }
 }
@@ -357,7 +368,6 @@ object PriorityQueue extends OrderedTraversableFactory[PriorityQueue] {
   *  `Ordered[T]` class.
   *
   *  @author  Matthias Zenger
-  *  @version 1.0, 03/05/2004
   *  @since   1
   */
 @deprecated("proxying is deprecated due to lack of use and compiler-level support", "2.11.0")
@@ -442,7 +452,6 @@ sealed abstract class PriorityQueueProxy[A](implicit ord: Ordering[A]) extends P
   *  @param ord   implicit ordering used to compared elements of type `A`
   *
   *  @author  Matthias Zenger
-  *  @version 1.0, 03/05/2004
   *  @since   1
   *  @define Coll `SynchronizedPriorityQueue`
   *  @define coll synchronized priority queue

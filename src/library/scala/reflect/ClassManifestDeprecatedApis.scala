@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2007-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package reflect
@@ -143,8 +147,8 @@ trait ClassManifestDeprecatedApis[T] extends OptManifest[T] {
  *  This is done to prevent avalanches of deprecation warnings in the code that calls methods with manifests.
  *
  *  In a perfect world, we would just remove the @deprecated annotation from `ClassManifest` the object
- *  and then delete it in 2.11. After all, that object is explicitly marked as internal, so noone should use it.
- *  However a lot of existing libraries disregarded the scaladoc that comes with `ClassManifest`,
+ *  and then delete it in 2.11. After all, that object is explicitly marked as internal, so no one should use it.
+ *  However a lot of existing libraries disregarded the Scaladoc that comes with `ClassManifest`,
  *  so we need to somehow nudge them into migrating prior to removing stuff out of the blue.
  *  Hence we've introduced this design decision as the lesser of two evils.
  */
@@ -205,15 +209,18 @@ object ClassManifestFactory {
     case m: ClassManifest[_] => m.asInstanceOf[ClassManifest[T]].arrayManifest
   }
 
+  @SerialVersionUID(1L)
+  private class AbstractTypeClassManifest[T](prefix: OptManifest[_], name: String, clazz: jClass[_], args: OptManifest[_]*) extends ClassManifest[T] {
+    override def runtimeClass = clazz
+    override val typeArguments = args.toList
+    override def toString = prefix.toString+"#"+name+argString
+  }
+
   /** ClassManifest for the abstract type `prefix # name`. `upperBound` is not
     * strictly necessary as it could be obtained by reflection. It was
     * added so that erasure can be calculated without reflection. */
   def abstractType[T](prefix: OptManifest[_], name: String, clazz: jClass[_], args: OptManifest[_]*): ClassManifest[T] =
-    new ClassManifest[T] {
-      override def runtimeClass = clazz
-      override val typeArguments = args.toList
-      override def toString = prefix.toString+"#"+name+argString
-    }
+    new AbstractTypeClassManifest(prefix, name, clazz)
 
   /** ClassManifest for the abstract type `prefix # name`. `upperBound` is not
     * strictly necessary as it could be obtained by reflection. It was
@@ -221,15 +228,12 @@ object ClassManifestFactory {
     * todo: remove after next bootstrap
     */
   def abstractType[T](prefix: OptManifest[_], name: String, upperbound: ClassManifest[_], args: OptManifest[_]*): ClassManifest[T] =
-    new ClassManifest[T] {
-      override def runtimeClass = upperbound.runtimeClass
-      override val typeArguments = args.toList
-      override def toString = prefix.toString+"#"+name+argString
-    }
+    new AbstractTypeClassManifest(prefix, name, upperbound.runtimeClass)
 }
 
 /** Manifest for the class type `clazz[args]`, where `clazz` is
   * a top-level or static class */
+@SerialVersionUID(1L)
 private class ClassTypeManifest[T](
   prefix: Option[OptManifest[_]],
   val runtimeClass: jClass[_],

@@ -1,3 +1,4 @@
+// scalac: -Ypartial-unification
 trait Foo[F[_]]
 trait Bar[F[_], A]
 
@@ -35,5 +36,5 @@ class Test {
   //
   // This is done so that it does not escape its defining scope.
   // However, one this is done, higher kinded inference
-  // no longer is able to unify F with `StringOr` (SI-2712)
+  // no longer is able to unify F with `StringOr` (scala/bug#2712)
 }

@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2006-2013 LAMP/EPFL
- * @author  Paul Phillips
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools
@@ -10,7 +17,7 @@ import scala.util.PropertiesTrait
 import java.security.AccessControlException
 
 /** For placing a wrapper function around property functions.
- *  Motivated by places like google app engine throwing exceptions
+ *  Motivated by places like Google App Engine throwing exceptions
  *  on property lookups.
  */
 trait WrappedProperties extends PropertiesTrait {
@@ -30,7 +37,7 @@ trait WrappedProperties extends PropertiesTrait {
   def systemProperties: List[(String, String)] = {
     import scala.collection.JavaConverters._
     wrap {
-      // SI-7269,7775 Avoid `ConcurrentModificationException` and nulls if another thread modifies properties
+      // scala/bug#7269,7775 Avoid `ConcurrentModificationException` and nulls if another thread modifies properties
       val props = System.getProperties
       val it = props.stringPropertyNames().asScala.iterator map (k => (k, props getProperty k)) filter (_._2 ne null)
       it.toList

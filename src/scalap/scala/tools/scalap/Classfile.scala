@@ -1,10 +1,14 @@
-/*     ___ ____ ___   __   ___   ___
-**    / _// __// _ | / /  / _ | / _ \    Scala classfile decoder
-**  __\ \/ /__/ __ |/ /__/ __ |/ ___/    (c) 2003-2013, LAMP/EPFL
-** /____/\___/_/ |_/____/_/ |_/_/
-**
-*/
-
+/*
+ * Scala classfile decoder (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala.tools.scalap
 
@@ -79,6 +83,9 @@ class Classfile(in: ByteArrayReader) {
     case class DoubleConst(x: Double) extends PoolEntry(CONSTANT_DOUBLE)
     case class NameAndType(nameId: Int, typeId: Int) extends PoolEntry(CONSTANT_NAMEANDTYPE)
     case object Empty extends PoolEntry(0) { }
+    case class MethodHandle(kindId: Int, refId: Int) extends PoolEntry(CONSTANT_METHODHANDLE)
+    case class InvokeDynamic(bootMethodId: Int, nameTypeId: Int) extends PoolEntry(CONSTANT_INVDYNAMIC)
+    case class MethodType(descId: Int) extends PoolEntry(CONSTANT_METHODTYPE)
 
     val entries = {
       val pool = new Array[PoolEntry](in.nextChar.toInt)
@@ -102,6 +109,9 @@ class Classfile(in: ByteArrayReader) {
           case CONSTANT_NAMEANDTYPE     => NameAndType(in.nextChar, in.nextChar)
           case CONSTANT_INTEGER         => IntegerConst(in.nextInt)
           case CONSTANT_FLOAT           => FloatConst(in.nextFloat)
+          case CONSTANT_METHODHANDLE    => MethodHandle(in.nextByte, in.nextChar)
+          case CONSTANT_METHODTYPE      => MethodType(in.nextChar)
+          case CONSTANT_INVDYNAMIC      => InvokeDynamic(in.nextChar, in.nextChar)
         }
 
         i += 1

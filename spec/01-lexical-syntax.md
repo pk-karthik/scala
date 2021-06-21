@@ -23,7 +23,7 @@ hexDigit      ::= ‘0’ | … | ‘9’ | ‘A’ | … | ‘F’ | ‘a’ | 
 ```
 
 <!--
-TODO SI-4583: UnicodeEscape used to allow additional backslashes,
+TODO scala/bug#4583: UnicodeEscape used to allow additional backslashes,
 and there is something in the code `evenSlashPrefix` that alludes to it,
 but I can't make it work nor can I imagine how this would make sense,
 so I removed it for now.
@@ -35,13 +35,12 @@ classes (Unicode general category given in parentheses):
 1. Whitespace characters. `\u0020 | \u0009 | \u000D | \u000A`.
 1. Letters, which include lower case letters (`Ll`), upper case letters (`Lu`),
    titlecase letters (`Lt`), other letters (`Lo`), letter numerals (`Nl`) and the
-   two characters `\u0024 ‘$’` and `\u005F ‘_’`, which both count as upper case
-   letters.
+   two characters `\u0024 ‘$’` and `\u005F ‘_’`.
 1. Digits `‘0’ | … | ‘9’`.
 1. Parentheses `‘(’ | ‘)’ | ‘[’ | ‘]’ | ‘{’ | ‘}’ `.
 1. Delimiter characters ``‘`’ | ‘'’ | ‘"’ | ‘.’ | ‘;’ | ‘,’ ``.
 1. Operator characters. These consist of all printable ASCII characters
-   `\u0020` - `\u007F` which are in none of the sets above, mathematical
+   (`\u0020` - `\u007E`) that are in none of the sets above, mathematical
    symbols (`Sm`) and other symbols (`So`).
 
 ## Identifiers
@@ -55,7 +54,7 @@ plainid  ::=  upper idrest
            |  varid
            |  op
 id       ::=  plainid
-           |  ‘`’ stringLiteral ‘`’
+           |  ‘`’ { charNoBackQuoteOrNewline | UnicodeEscape | charEscapeSeq } ‘`’
 idrest   ::=  {letter | digit} [‘_’ op]
 ```
 
@@ -78,9 +77,13 @@ big_bob++=`def`
 ```
 
 decomposes into the three identifiers `big_bob`, `++=`, and
-`def`. The rules for pattern matching further distinguish between
+`def`.
+
+The rules for pattern matching further distinguish between
 _variable identifiers_, which start with a lower case letter, and
-_constant identifiers_, which do not.
+_constant identifiers_, which do not. For this purpose,
+underscore `‘_‘` is taken as lower case, and the ‘\$’ character
+is taken as upper case.
 
 The ‘\$’ character is reserved for compiler-synthesized identifiers.
 User programs should not define identifiers which contain ‘\$’ characters.
@@ -552,6 +555,20 @@ A multi-line comment is a sequence of characters between
 but are required to be properly nested.  Therefore, a comment like
 `/* /* */` will be rejected as having an unterminated
 comment.
+
+## Trailing Commas in Multi-line Expressions
+
+If a comma (`,`) is followed immediately, ignoring whitespace, by a newline and
+a closing parenthesis (`)`), bracket (`]`), or brace (`}`), then the comma is
+treated as a "trailing comma" and is ignored. For example:
+
+```scala
+foo(
+  23,
+  "bar",
+  true,
+)
+```
 
 ## XML mode
 

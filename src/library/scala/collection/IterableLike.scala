@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -39,7 +43,6 @@ import immutable.Stream
  *    `TraversableLike` by an iterator version.
  *
  *  @author Martin Odersky
- *  @version 2.8
  *  @since   2.8
  *  @tparam A    the element type of the collection
  *  @tparam Repr the type of the actual collection containing the elements.
@@ -177,14 +180,14 @@ self =>
     }
 
   /** Groups elements in fixed size blocks by passing a "sliding window"
-   *  over them (as opposed to partitioning them, as is done in grouped.)
-   *  "Sliding window" step is 1 by default.
+   *  over them (as opposed to partitioning them, as is done in `grouped`.)
+   *  The "sliding window" step is set to one.
    *  @see [[scala.collection.Iterator]], method `sliding`
    *
    *  @param size the number of elements per group
    *  @return An iterator producing ${coll}s of size `size`, except the
-   *          last and the only element will be truncated if there are
-   *          fewer elements than size.
+   *          last element (which may be the only element) will be truncated
+   *          if there are fewer than `size` elements remaining to be grouped.
    */
   def sliding(size: Int): Iterator[Repr] = sliding(size, 1)
 
@@ -196,8 +199,8 @@ self =>
    *  @param step the distance between the first elements of successive
    *         groups
    *  @return An iterator producing ${coll}s of size `size`, except the
-   *          last and the only element will be truncated if there are
-   *          fewer elements than size.
+   *          last element (which may be the only element) will be truncated
+   *          if there are fewer than `size` elements remaining to be grouped.
    */
   def sliding(size: Int, step: Int): Iterator[Repr] =
     for (xs <- iterator.sliding(size, step)) yield {
@@ -279,22 +282,44 @@ self =>
 
   def zipWithIndex[A1 >: A, That](implicit bf: CanBuildFrom[Repr, (A1, Int), That]): That = {
     val b = bf(repr)
+    val these = this.iterator
     var i = 0
-    for (x <- this) {
-      b += ((x, i))
+    while (these.hasNext) {
+      b += ((these.next(), i))
       i += 1
     }
     b.result()
   }
 
-  def sameElements[B >: A](that: GenIterable[B]): Boolean = {
-    val these = this.iterator
-    val those = that.iterator
-    while (these.hasNext && those.hasNext)
-      if (these.next != those.next)
-        return false
+  def sameElements[B >: A](that: GenIterable[B]): Boolean = (this.asInstanceOf[AnyRef] eq that.asInstanceOf[AnyRef]) || {
+    that match {
+      case thatVector: Vector[_] if this.isInstanceOf[Vector[_]] =>
+        val thisVector = this.asInstanceOf[Vector[_]]
+        (thisVector eq thatVector) || {
+          var equal = thisVector.length == thatVector.length
+          if (equal) {
+            val length = thatVector.length
+            var index = 0
+            while (index < length && equal) {
+              equal = thisVector(index) == thatVector(index)
+              index += 1
+            }
+          }
+          equal
+        }
+      case thatSet: GenSet[A] if this.isInstanceOf[GenSetLike[A,_]]=>
+        val thisSet = this.asInstanceOf[GenSetLike[A,_]]
+          thisSet.size == thatSet.size && thisSet.subsetOf(thatSet)
 
-    !these.hasNext && !those.hasNext
+      case _ =>
+        val these = this.iterator
+        val those = that.iterator
+        while (these.hasNext && those.hasNext)
+          if (these.next != those.next)
+            return false
+
+        !these.hasNext && !those.hasNext
+    }
   }
 
   override /*TraversableLike*/ def toStream: Stream[A] = iterator.toStream

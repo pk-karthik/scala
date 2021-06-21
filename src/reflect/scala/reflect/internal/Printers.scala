@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 // todo. we need to unify this prettyprinter with NodePrinters
@@ -188,13 +195,13 @@ trait Printers extends api.Printers { self: SymbolTable =>
     )
 
     def printFlags(flags: Long, privateWithin: String) = {
-      val mask: Long = if (settings.debug) -1L else PrintableFlags
+      val mask: Long = if (settings.isDebug) -1L else PrintableFlags
       val s = flagsToString(flags & mask, privateWithin)
       if (s != "") print(s + " ")
     }
 
     def printAnnotations(tree: MemberDef) = {
-      // SI-5885: by default this won't print annotations of not yet initialized symbols
+      // scala/bug#5885: by default this won't print annotations of not yet initialized symbols
       val annots = tree.symbol.annotations match {
         case Nil  => tree.mods.annotations
         case anns => anns
@@ -225,7 +232,7 @@ trait Printers extends api.Printers { self: SymbolTable =>
       printAnnotations(tree)
       printModifiers(tree, mods)
       print("def " + resultName)
-      printTypeParams(tparams);
+      printTypeParams(tparams)
       vparamss foreach {printValueParams(_)}
       printTypeSignature
       printRhs
@@ -284,7 +291,7 @@ trait Printers extends api.Printers { self: SymbolTable =>
 
     protected def printFunction(tree: Function)(printValueParams: => Unit) = {
       val Function(vparams, body) = tree
-      print("(");
+      print("(")
       printValueParams
       print(" => ", body, ")")
       if (printIds && tree.symbol != null)
@@ -453,7 +460,7 @@ trait Printers extends api.Printers { self: SymbolTable =>
         case th @ This(qual) =>
           printThis(th, symName(tree, qual))
 
-        case Select(qual: New, name) if !settings.debug =>
+        case Select(qual: New, name) if !settings.isDebug =>
           print(qual)
 
         case Select(qualifier, name) =>
@@ -689,15 +696,15 @@ trait Printers extends api.Printers { self: SymbolTable =>
 
           if (primaryCtorParam && !(hideCtorMods || hideCaseCtorMods)) {
             printModifiers(mods, primaryCtorParam)
-            print(if (mods.isMutable) "var " else "val ");
+            print(if (mods.isMutable) "var " else "val ")
           }
-          print(printedName(name), blankForName(name));
-          printOpt(": ", tp);
+          print(printedName(name), blankForName(name))
+          printOpt(": ", tp)
           printOpt(" = ", rhs)
         case TypeDef(_, name, tparams, rhs) =>
           printPosition(tree)
           print(printedName(name))
-          printTypeParams(tparams);
+          printTypeParams(tparams)
           print(rhs)
         case _ =>
           super.printParam(tree)
@@ -731,7 +738,7 @@ trait Printers extends api.Printers { self: SymbolTable =>
     override def printTree(tree: Tree): Unit = {
       parentsStack.push(tree)
       try {
-        processTreePrinting(tree);
+        processTreePrinting(tree)
         printTypesInfo(tree)
       } finally parentsStack.pop()
     }
@@ -775,7 +782,7 @@ trait Printers extends api.Printers { self: SymbolTable =>
             }
             // constructor's params processing (don't print single empty constructor param list)
             vparamss match {
-              case Nil | List(Nil) if (!mods.isCase && !ctorMods.hasFlag(AccessFlags)) =>
+              case Nil | List(Nil) if !mods.isCase && !ctorMods.hasFlag(AccessFlags) =>
               case _ => vparamss foreach printConstrParams
             }
             parents
@@ -836,7 +843,7 @@ trait Printers extends api.Printers { self: SymbolTable =>
             printColumn(bodyList, "", ";", "")
             print(" while (", cond, ") ")
           } else {
-            print(printedName(name)); printLabelParams(params);
+            print(printedName(name)); printLabelParams(params)
             printBlock(rhs)
           }
 
@@ -902,8 +909,8 @@ trait Printers extends api.Printers { self: SymbolTable =>
           val showBody = !(modBody.isEmpty && (self == noSelfType || self.isEmpty))
           if (showBody) {
             if (self.name != nme.WILDCARD) {
-              print(" { ", self.name);
-              printOpt(": ", self.tpt);
+              print(" { ", self.name)
+              printOpt(": ", self.tpt)
               print(" =>")
             } else if (self.tpt.nonEmpty) {
               print(" { _ : ", self.tpt, " =>")
@@ -1045,22 +1052,22 @@ trait Printers extends api.Printers { self: SymbolTable =>
             print("")
           }
 
-        case l @ Literal(x) =>
-          import Chars.LF
-          x match {
-            case Constant(v: String) if {
-              val strValue = x.stringValue
-              strValue.contains(LF) && strValue.contains("\"\"\"") && strValue.size > 1
-            } =>
-              val splitValue = x.stringValue.split(s"$LF").toList
-              val multilineStringValue = if (x.stringValue.endsWith(s"$LF")) splitValue :+ "" else splitValue
-              val trQuotes = "\"\"\""
-              print(trQuotes); printSeq(multilineStringValue) { print(_) } { print(LF) }; print(trQuotes)
-            case _ =>
-              // processing Float constants
-              val printValue = x.escapedStringValue + (if (x.value.isInstanceOf[Float]) "F" else "")
-              print(printValue)
+        case Literal(k @ Constant(s: String)) if s.contains(Chars.LF) =>
+          val tq = "\"" * 3
+          val lines = s.linesIterator.toList
+          if (lines.lengthCompare(1) <= 0) print(k.escapedStringValue)
+          else {
+            val tqp = """["]{3}""".r
+            val tqq = """""\\""""     // ""\" is triple-quote quoted
+            print(tq)
+            printSeq(lines.map(x => tqp.replaceAllIn(x, tqq)))(print(_))(print(Chars.LF))
+            print(tq)
           }
+
+        case Literal(x) =>
+          // processing Float constants
+          val suffix = x.value match { case _: Float => "F" case _ => "" }
+          print(s"${x.escapedStringValue}${suffix}")
 
         case an @ Annotated(ap, tree) =>
           val printParentheses = needsParentheses(tree)()
@@ -1095,7 +1102,7 @@ trait Printers extends api.Printers { self: SymbolTable =>
           }
 
         case ExistentialTypeTree(tpt, whereClauses) =>
-          print("(", tpt);
+          print("(", tpt)
           printColumn(whereClauses, " forSome { ", ";", "})")
 
         case EmptyTree =>

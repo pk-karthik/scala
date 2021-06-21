@@ -1,7 +1,15 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
+
 package scala
 package reflect
 package internal
@@ -28,10 +36,13 @@ import util.Statistics
 trait BaseTypeSeqs {
   this: SymbolTable =>
   import definitions._
-  import BaseTypeSeqsStats._
+  import statistics._
 
   protected def newBaseTypeSeq(parents: List[Type], elems: Array[Type]) =
     new BaseTypeSeq(parents, elems)
+
+  protected def newMappedBaseTypeSeq(orig: BaseTypeSeq, f: Type => Type) =
+    new MappedBaseTypeSeq(orig, f)
 
   /** Note: constructor is protected to force everyone to use the factory method newBaseTypeSeq instead.
    *  This is necessary because when run from reflection every base type sequence needs to have a
@@ -39,8 +50,17 @@ trait BaseTypeSeqs {
    */
   class BaseTypeSeq protected[reflect] (private[BaseTypeSeqs] val parents: List[Type], private[BaseTypeSeqs] val elems: Array[Type]) {
   self =>
-    if (Statistics.canEnable) Statistics.incCounter(baseTypeSeqCount)
-    if (Statistics.canEnable) Statistics.incCounter(baseTypeSeqLenTotal, elems.length)
+    if (settings.areStatisticsEnabled) statistics.incCounter(baseTypeSeqCount)
+    if (settings.areStatisticsEnabled) statistics.incCounter(baseTypeSeqLenTotal, elems.length)
+    private[this] val typeSymbols = {
+      val tmp = new Array[Int](elems.length)
+      var i = 0
+      while (i < elems.length) {
+        tmp(i) = elems(i).typeSymbol.id
+        i += 1
+      }
+      tmp
+    }
 
     /** The number of types in the sequence */
     def length: Int = elems.length
@@ -56,49 +76,66 @@ trait BaseTypeSeqs {
       if(pending contains i) {
         pending.clear()
         throw CyclicInheritance
-      } else
+      } else {
+        def computeLazyType(rtp: RefinedType): Type = {
+          devWarningIf(!isIntersectionTypeForLazyBaseType(rtp)) {
+            "unexpected RefinedType in base type seq, lazy BTS elements should be created via intersectionTypeForLazyBaseType: " + rtp
+          }
+          val variants = rtp.parents
+          // can't assert decls.isEmpty; see t0764
+          //if (!decls.isEmpty) abort("computing closure of "+this+":"+this.isInstanceOf[RefinedType]+"/"+closureCache(j))
+          //Console.println("compute closure of "+this+" => glb("+variants+")")
+          pending += i
+          try {
+            mergePrefixAndArgs(variants, Variance.Contravariant, lubDepth(variants)) match {
+              case NoType => typeError("no common type instance of base types " + (variants mkString ", and ") + " exists.")
+              case tp0 =>
+                pending(i) = false
+                elems(i) = tp0
+                tp0
+            }
+          }
+          catch {
+            case CyclicInheritance =>
+              typeError(
+                "computing the common type instance of base types " + (variants mkString ", and ") + " leads to a cycle.")
+          }
+        }
         elems(i) match {
-          case rtp @ RefinedType(variants, decls) =>
-            // can't assert decls.isEmpty; see t0764
-            //if (!decls.isEmpty) abort("computing closure of "+this+":"+this.isInstanceOf[RefinedType]+"/"+closureCache(j))
-            //Console.println("compute closure of "+this+" => glb("+variants+")")
-            pending += i
-            try {
-              mergePrefixAndArgs(variants, Variance.Contravariant, lubDepth(variants)) match {
-                case NoType => typeError("no common type instance of base types "+(variants mkString ", and ")+" exists.")
-                case tp0    =>
-                  pending(i) = false
-                  elems(i) = tp0
-                  tp0
-              }
-            }
-            catch {
-              case CyclicInheritance =>
-                typeError(
-                  "computing the common type instance of base types "+(variants mkString ", and ")+" leads to a cycle.")
-            }
+          case rtp@RefinedType(variants, decls) =>
+            computeLazyType(rtp)
+          case et @ ExistentialType(quantified, rtp: RefinedType) =>
+            existentialAbstraction(quantified, computeLazyType(rtp))
           case tp =>
             tp
         }
+      }
 
     def rawElem(i: Int) = elems(i)
 
-    /** The type symbol of the type at i'th position in this sequence;
-     *  no evaluation needed.
-     */
-    def typeSymbol(i: Int): Symbol = {
-      elems(i) match {
-        case RefinedType(v :: vs, _) => v.typeSymbol
-        case tp => tp.typeSymbol
+    /** The type symbol of the type at i'th position in this sequence */
+    def typeSymbol(i: Int): Symbol = elems(i).typeSymbol
+
+    final def baseTypeIndex(sym: Symbol): Int = {
+      val symId = sym.id
+      var i = 0
+      val len = length
+      while (i < len) {
+        if (typeSymbols(i) == symId) return i
+        i += 1
       }
+      -1
     }
 
     /** Return all evaluated types in this sequence as a list */
     def toList: List[Type] = elems.toList
 
+    /** Return an iterator over all evaluated types in this sequence */
+    def toIterator: Iterator[Type] = elems.iterator
+
     def copy(head: Type, offset: Int): BaseTypeSeq = {
       val arr = new Array[Type](elems.length + offset)
-      scala.compat.Platform.arraycopy(elems, 0, arr, offset, elems.length)
+      java.lang.System.arraycopy(elems, 0, arr, offset, elems.length)
       arr(0) = head
       newBaseTypeSeq(parents, arr)
     }
@@ -123,7 +160,7 @@ trait BaseTypeSeqs {
       newBaseTypeSeq(parents, arr)
     }
 
-    def lateMap(f: Type => Type): BaseTypeSeq = new MappedBaseTypeSeq(this, f)
+    def lateMap(f: Type => Type): BaseTypeSeq = newMappedBaseTypeSeq(this, f)
 
     def exists(p: Type => Boolean): Boolean = elems exists p
 
@@ -146,7 +183,7 @@ trait BaseTypeSeqs {
   /** A marker object for a base type sequence that's no yet computed.
    *  used to catch inheritance cycles
    */
-  val undetBaseTypeSeq: BaseTypeSeq = newBaseTypeSeq(List(), Array())
+  lazy val undetBaseTypeSeq: BaseTypeSeq = newBaseTypeSeq(List(), Array())
 
   /** Create a base type sequence consisting of a single type */
   def baseTypeSingletonSeq(tp: Type): BaseTypeSeq = newBaseTypeSeq(List(), Array(tp))
@@ -165,7 +202,7 @@ trait BaseTypeSeqs {
       val index = new Array[Int](nparents)
       var i = 0
       for (p <- parents) {
-        val parentBts = p.dealias.baseTypeSeq // dealias need for SI-8046.
+        val parentBts = p.dealias.baseTypeSeq // dealias need for scala/bug#8046.
         pbtss(i) =
           if (parentBts eq undetBaseTypeSeq) AnyClass.info.baseTypeSeq
           else parentBts
@@ -215,7 +252,7 @@ trait BaseTypeSeqs {
           }
           i += 1
         }
-        buf += intersectionType(minTypes)
+        buf += intersectionTypeForLazyBaseType(minTypes) // TODO this reverses the order. Does this matter? Or should this be minTypes.reverse?
         btsSize += 1
       }
     }
@@ -228,7 +265,6 @@ trait BaseTypeSeqs {
   class MappedBaseTypeSeq(orig: BaseTypeSeq, f: Type => Type) extends BaseTypeSeq(orig.parents map f, orig.elems) {
     override def apply(i: Int) = f(orig.apply(i))
     override def rawElem(i: Int) = f(orig.rawElem(i))
-    override def typeSymbol(i: Int) = orig.typeSymbol(i)
     override def toList = orig.toList map f
     override def copy(head: Type, offset: Int) = (orig map f).copy(head, offset)
     override def map(g: Type => Type) = lateMap(g)
@@ -241,7 +277,8 @@ trait BaseTypeSeqs {
   val CyclicInheritance = new Throwable
 }
 
-object BaseTypeSeqsStats {
-  val baseTypeSeqCount = Statistics.newCounter("#base type seqs")
-  val baseTypeSeqLenTotal = Statistics.newRelCounter("avg base type seq length", baseTypeSeqCount)
+trait BaseTypeSeqsStats {
+  self: Statistics =>
+  val baseTypeSeqCount = newCounter("#base type seqs")
+  val baseTypeSeqLenTotal = newRelCounter("avg base type seq length", baseTypeSeqCount)
 }

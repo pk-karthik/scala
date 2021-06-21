@@ -1,22 +1,26 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2012 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
-
-package scala
-package tools.nsc
-package backend
-package jvm
+package scala.tools.nsc
+package backend.jvm
 
 import scala.annotation.switch
-import scala.reflect.internal.Flags
-
+import scala.collection.mutable.ListBuffer
 import scala.tools.asm
-import GenBCode._
-import BackendReporting._
-import scala.tools.asm.tree.MethodInsnNode
+import scala.tools.asm.Opcodes
+import scala.tools.asm.tree.{MethodInsnNode, MethodNode}
 import scala.tools.nsc.backend.jvm.BCodeHelpers.{InvokeStyle, TestOp}
+import scala.tools.nsc.backend.jvm.BackendReporting._
+import scala.tools.nsc.backend.jvm.GenBCode._
 
 /*
  *
@@ -26,9 +30,11 @@ import scala.tools.nsc.backend.jvm.BCodeHelpers.{InvokeStyle, TestOp}
  */
 abstract class BCodeBodyBuilder extends BCodeSkelBuilder {
   import global._
-  import definitions._
   import bTypes._
   import coreBTypes._
+  import definitions._
+  import genBCode.postProcessor.backendUtils.addIndyLambdaImplMethod
+  import genBCode.postProcessor.callGraph.{inlineAnnotatedCallsites, noInlineAnnotatedCallsites}
 
   /*
    * Functionality to build the body of ASM MethodNode, except for `synchronized` and `try` expressions.
@@ -66,7 +72,7 @@ abstract class BCodeBodyBuilder extends BCodeSkelBuilder {
           if (!isStatic) { genLoadQualifier(lhs) }
           genLoad(rhs, symInfoTK(lhs.symbol))
           lineNumber(tree)
-          // receiverClass is used in the bytecode to access the field. using sym.owner may lead to IllegalAccessError, SI-4283
+          // receiverClass is used in the bytecode to access the field. using sym.owner may lead to IllegalAccessError, scala/bug#4283
           val receiverClass = qual.tpe.typeSymbol
           fieldStore(lhs.symbol, receiverClass)
 
@@ -160,14 +166,14 @@ abstract class BCodeBodyBuilder extends BCodeSkelBuilder {
 
       if (scalaPrimitives.isArrayGet(code)) {
         // load argument on stack
-        assert(args.length == 1, s"Too many arguments for array get operation: $tree");
+        assert(args.length == 1, s"Too many arguments for array get operation: $tree")
         genLoad(args.head, INT)
         generatedType = k.asArrayBType.componentType
         bc.aload(elementType)
       } else if (scalaPrimitives.isArraySet(code)) {
         val List(a1, a2) = args
         genLoad(a1, INT)
-        genLoad(a2)
+        genLoad(a2, elementType)
         generatedType = UNIT
         bc.astore(elementType)
       } else {
@@ -212,7 +218,7 @@ abstract class BCodeBodyBuilder extends BCodeSkelBuilder {
       val Apply(fun @ Select(receiver, _), _) = tree
       val code = scalaPrimitives.getPrimitive(sym, receiver.tpe)
 
-      import scalaPrimitives.{isArithmeticOp, isArrayOp, isLogicalOp, isComparisonOp}
+      import scalaPrimitives.{isArithmeticOp, isArrayOp, isComparisonOp, isLogicalOp}
 
       if (isArithmeticOp(code))                genArithmeticOp(tree, code)
       else if (code == scalaPrimitives.CONCAT) genStringConcat(tree)
@@ -269,8 +275,8 @@ abstract class BCodeBodyBuilder extends BCodeSkelBuilder {
           val Local(tk, _, idx, isSynth) = locals.getOrMakeLocal(sym)
           if (rhs == EmptyTree) { emitZeroOf(tk) }
           else { genLoad(rhs, tk) }
-          val localVarStart = currProgramPoint()
           bc.store(idx, tk)
+          val localVarStart = currProgramPoint()
           if (!isSynth) { // there are case <synthetic> ValDef's emitted by patmat
             varsInScope ::= (sym -> localVarStart)
           }
@@ -296,14 +302,14 @@ abstract class BCodeBodyBuilder extends BCodeSkelBuilder {
         case app : Apply =>
           generatedType = genApply(app, expectedType)
 
-        case app @ ApplyDynamic(qual, Literal(Constant(boostrapMethodRef: Symbol)) :: staticAndDynamicArgs) =>
-          val numStaticArgs = boostrapMethodRef.paramss.head.size - 3 /*JVM provided args*/
-          val (staticArgs, dynamicArgs) = staticAndDynamicArgs.splitAt(numStaticArgs)
-          val boostrapDescriptor = staticHandleFromSymbol(boostrapMethodRef)
+        case app @ ApplyDynamic(qual, Literal(Constant(bootstrapMethodRef: Symbol)) :: staticAndDynamicArgs) =>
+          val numDynamicArgs = qual.symbol.info.params.length
+          val (staticArgs, dynamicArgs) = staticAndDynamicArgs.splitAt(staticAndDynamicArgs.length - numDynamicArgs)
+          val bootstrapDescriptor = staticHandleFromSymbol(bootstrapMethodRef)
           val bootstrapArgs = staticArgs.map({case t @ Literal(c: Constant) => bootstrapMethodArg(c, t.pos)})
           val descriptor = methodBTypeFromMethodType(qual.symbol.info, false)
           genLoadArguments(dynamicArgs, qual.symbol.info.params.map(param => typeToBType(param.info)))
-          mnode.visitInvokeDynamicInsn(qual.symbol.name.encoded, descriptor.descriptor, boostrapDescriptor, bootstrapArgs : _*)
+          mnode.visitInvokeDynamicInsn(qual.symbol.name.encoded, descriptor.descriptor, bootstrapDescriptor, bootstrapArgs : _*)
 
         case ApplyDynamic(qual, args) => sys.error("No invokedynamic support yet.")
 
@@ -316,9 +322,13 @@ abstract class BCodeBodyBuilder extends BCodeSkelBuilder {
           }
           else {
             mnode.visitVarInsn(asm.Opcodes.ALOAD, 0)
-            generatedType =
-              if (tree.symbol == ArrayClass) ObjectRef
-              else classBTypeFromSymbol(claszSymbol)
+            // When compiling Array.scala, the constructor invokes `Array.this.super.<init>`. The expectedType
+            // is `[Object` (computed by typeToBType, the type of This(Array) is `Array[T]`). If we would set
+            // the generatedType to `Array` below, the call to adapt at the end would fail. The situation is
+            // similar for primitives (`I` vs `Int`).
+            if (tree.symbol != ArrayClass && !definitions.isPrimitiveValueClass(tree.symbol)) {
+              generatedType = classBTypeFromSymbol(claszSymbol)
+            }
           }
 
         case Select(Ident(nme.EMPTY_PACKAGE_NAME), module) =>
@@ -330,7 +340,7 @@ abstract class BCodeBodyBuilder extends BCodeSkelBuilder {
           generatedType = symInfoTK(sym)
           val qualSafeToElide = treeInfo isQualifierSafeToElide qualifier
           def genLoadQualUnlessElidable() { if (!qualSafeToElide) { genLoadQualifier(tree) } }
-          // receiverClass is used in the bytecode to access the field. using sym.owner may lead to IllegalAccessError, SI-4283
+          // receiverClass is used in the bytecode to access the field. using sym.owner may lead to IllegalAccessError, scala/bug#4283
           def receiverClass = qualifier.tpe.typeSymbol
           if (sym.isModule) {
             genLoadQualUnlessElidable()
@@ -487,16 +497,11 @@ abstract class BCodeBodyBuilder extends BCodeSkelBuilder {
           bc emitRETURN returnType
         case nextCleanup :: rest =>
           if (saveReturnValue) {
-            if (insideCleanupBlock) {
-              reporter.warning(r.pos, "Return statement found in finally-clause, discarding its return-value in favor of that of a more deeply nested return.")
-              bc drop returnType
-            } else {
-              // regarding return value, the protocol is: in place of a `return-stmt`, a sequence of `adapt, store, jump` are inserted.
-              if (earlyReturnVar == null) {
-                earlyReturnVar = locals.makeLocal(returnType, "earlyReturnVar")
-              }
-              locals.store(earlyReturnVar)
+            // regarding return value, the protocol is: in place of a `return-stmt`, a sequence of `adapt, store, jump` are inserted.
+            if (earlyReturnVar == null) {
+              earlyReturnVar = locals.makeLocal(returnType, "earlyReturnVar")
             }
+            locals.store(earlyReturnVar)
           }
           bc goTo nextCleanup
           shouldEmitCleanup = true
@@ -532,8 +537,10 @@ abstract class BCodeBodyBuilder extends BCodeSkelBuilder {
             else if (l.isPrimitive) {
               bc drop l
               if (cast) {
+                devWarning(s"Tried to emit impossible cast from primitive type $l to $r (at ${app.pos})")
                 mnode.visitTypeInsn(asm.Opcodes.NEW, jlClassCastExceptionRef.internalName)
                 bc dup ObjectRef
+                mnode.visitMethodInsn(asm.Opcodes.INVOKESPECIAL, jlClassCastExceptionRef.internalName, INSTANCE_CONSTRUCTOR_NAME, "()V", true)
                 emit(asm.Opcodes.ATHROW)
               } else {
                 bc boolconst false
@@ -555,7 +562,7 @@ abstract class BCodeBodyBuilder extends BCodeSkelBuilder {
 
           generatedType = genTypeApply()
 
-        case Apply(fun @ Select(Super(_, _), _), args) =>
+        case Apply(fun @ Select(sup @ Super(superQual, _), _), args) =>
           def initModule() {
             // we initialize the MODULE$ field immediately after the super ctor
             if (!isModuleInitialized &&
@@ -568,19 +575,15 @@ abstract class BCodeBodyBuilder extends BCodeSkelBuilder {
                 asm.Opcodes.PUTSTATIC,
                 thisBType.internalName,
                 strMODULE_INSTANCE_FIELD,
-                thisBType.descriptor
+                thisBTypeDescriptor
               )
             }
           }
-          // 'super' call: Note: since constructors are supposed to
-          // return an instance of what they construct, we have to take
-          // special care. On JVM they are 'void', and Scala forbids (syntactically)
-          // to call super constructors explicitly and/or use their 'returned' value.
-          // therefore, we can ignore this fact, and generate code that leaves nothing
-          // on the stack (contrary to what the type in the AST says).
-          mnode.visitVarInsn(asm.Opcodes.ALOAD, 0)
+
+          // scala/bug#10290: qual can be `this.$outer()` (not just `this`), so we call genLoad (not jsut ALOAD_0)
+          genLoad(superQual)
           genLoadArguments(args, paramTKs(app))
-          generatedType = genCallMethod(fun.symbol, InvokeStyle.Super, app.pos)
+          generatedType = genCallMethod(fun.symbol, InvokeStyle.Super, app.pos, sup.tpe.typeSymbol)
           initModule()
 
         // 'new' constructor call: Note: since constructors are
@@ -612,7 +615,7 @@ abstract class BCodeBodyBuilder extends BCodeSkelBuilder {
               }
               argsSize match {
                 case 1 => bc newarray elemKind
-                case _ => // this is currently dead code is Scalac, unlike in Dotty
+                case _ => // this is currently dead code in Scalac, unlike in Dotty
                   val descr = ("[" * argsSize) + elemKind.descriptor // denotes the same as: arrayN(elemKind, argsSize).descriptor
                   mnode.visitMultiANewArrayInsn(descr, argsSize)
               }
@@ -630,35 +633,40 @@ abstract class BCodeBodyBuilder extends BCodeSkelBuilder {
         case Apply(fun, args) if app.hasAttachment[delambdafy.LambdaMetaFactoryCapable] =>
           val attachment = app.attachments.get[delambdafy.LambdaMetaFactoryCapable].get
           genLoadArguments(args, paramTKs(app))
-          genInvokeDynamicLambda(attachment.target, attachment.arity, attachment.functionalInterface, attachment.sam)
+          genInvokeDynamicLambda(attachment)
           generatedType = methodBTypeFromSymbol(fun.symbol).returnType
 
-        case Apply(fun, List(expr)) if currentRun.runDefinitions.isBox(fun.symbol) =>
-          val nativeKind = tpeTK(expr)
+        case Apply(fun, expr :: Nil) if currentRun.runDefinitions.isBox(fun.symbol) =>
+          val nativeKind = typeToBType(fun.symbol.firstParam.info)
           genLoad(expr, nativeKind)
           val MethodNameAndType(mname, methodType) = srBoxesRuntimeBoxToMethods(nativeKind)
-          bc.invokestatic(srBoxesRunTimeRef.internalName, mname, methodType.descriptor, app.pos)
+          bc.invokestatic(srBoxesRunTimeRef.internalName, mname, methodType.descriptor, itf = false, app.pos)
           generatedType = boxResultType(fun.symbol)
 
-        case Apply(fun, List(expr)) if currentRun.runDefinitions.isUnbox(fun.symbol) =>
+        case Apply(fun, expr :: Nil) if currentRun.runDefinitions.isUnbox(fun.symbol) =>
           genLoad(expr)
           val boxType = unboxResultType(fun.symbol)
           generatedType = boxType
           val MethodNameAndType(mname, methodType) = srBoxesRuntimeUnboxToMethods(boxType)
-          bc.invokestatic(srBoxesRunTimeRef.internalName, mname, methodType.descriptor, app.pos)
+          bc.invokestatic(srBoxesRunTimeRef.internalName, mname, methodType.descriptor, itf = false, app.pos)
 
         case app @ Apply(fun, args) =>
           val sym = fun.symbol
 
           if (sym.isLabel) { // jump to a label
-            genLoadLabelArguments(args, labelDef(sym), app.pos)
+            def notFound() = abort("Not found: " + sym + " in " + labelDef)
+            genLoadLabelArguments(args, labelDef.getOrElse(sym, notFound()), app.pos)
             bc goTo programPoint(sym)
           } else if (isPrimitive(sym)) { // primitive method call
             generatedType = genPrimitiveOp(app, expectedType)
           } else { // normal method call
+            def isTraitSuperAccessorBodyCall = app.hasAttachment[UseInvokeSpecial.type]
             val invokeStyle =
-              if (sym.isStaticMember) InvokeStyle.Static
+              if (sym.isStaticMember)
+                InvokeStyle.Static
               else if (sym.isPrivate || sym.isClassConstructor) InvokeStyle.Special
+              else if (isTraitSuperAccessorBodyCall)
+                InvokeStyle.Special
               else InvokeStyle.Virtual
 
             if (invokeStyle.hasInstance) genLoadQualifier(fun)
@@ -918,7 +926,7 @@ abstract class BCodeBodyBuilder extends BCodeSkelBuilder {
         (args zip params) filterNot isTrivial
       }
 
-      // first push *all* arguments. This makes sure muliple uses of the same labelDef-var will all denote the (previous) value.
+      // first push *all* arguments. This makes sure multiple uses of the same labelDef-var will all denote the (previous) value.
       aps foreach { case (arg, param) => genLoad(arg, locals(param).tk) } // `locals` is known to contain `param` because `genDefDef()` visited `labelDefsAtOrUnder`
 
       // second assign one by one to the LabelDef's variables.
@@ -932,15 +940,15 @@ abstract class BCodeBodyBuilder extends BCodeSkelBuilder {
     }
 
     def genLoadArguments(args: List[Tree], btpes: List[BType]) {
-      (args zip btpes) foreach { case (arg, btpe) => genLoad(arg, btpe) }
+      foreach2(args, btpes) { case (arg, btpe) => genLoad(arg, btpe) }
     }
 
     def genLoadModule(tree: Tree): BType = {
       val module = (
         if (!tree.symbol.isPackageClass) tree.symbol
         else tree.symbol.info.packageObject match {
-          case NoSymbol => abort(s"SI-5604: Cannot use package as value: $tree")
-          case s        => abort(s"SI-5604: found package class where package object expected: $tree")
+          case NoSymbol => abort(s"scala/bug#5604: Cannot use package as value: $tree")
+          case s        => abort(s"scala/bug#5604: found package class where package object expected: $tree")
         }
       )
       lineNumber(tree)
@@ -1000,8 +1008,22 @@ abstract class BCodeBodyBuilder extends BCodeSkelBuilder {
           genCallMethod(String_valueOf, InvokeStyle.Static, arg.pos)
 
         case concatenations =>
-          bc.genStartConcat(tree.pos)
-          for (elem <- concatenations) {
+          val approxBuilderSize = concatenations.map {
+            case Literal(Constant(s: String)) => s.length
+            case Literal(c @ Constant(value)) if c.isNonUnitAnyVal => String.valueOf(c).length
+            case _ =>
+              // could add some guess based on types of primitive args.
+              // or, we could stringify all the args onto the stack, compute the exact size of
+              // the stringbuffer.
+              // or, just let http://openjdk.java.net/jeps/280 (or a re-implementation thereof in our 2.13.x stdlib) do all the hard work at link time
+              0
+          }.sum
+          bc.genStartConcat(tree.pos, approxBuilderSize)
+          def isEmptyString(t: Tree) = t match {
+            case Literal(Constant("")) => true
+            case _ => false
+          }
+          for (elem <- concatenations if !isEmptyString(elem)) {
             val loadedElem = elem match {
               case Apply(boxOp, value :: Nil) if currentRun.runDefinitions.isBox(boxOp.symbol) =>
                 // Eliminate boxing of primitive values. Boxing is introduced by erasure because
@@ -1022,14 +1044,14 @@ abstract class BCodeBodyBuilder extends BCodeSkelBuilder {
     /**
      * Generate a method invocation. If `specificReceiver != null`, it is used as receiver in the
      * invocation instruction, otherwise `method.owner`. A specific receiver class is needed to
-     * prevent an IllegalAccessError, (aladdin bug 455).
+     * prevent an IllegalAccessError, (aladdin bug 455). Same for super calls, scala/bug#7936.
      */
     def genCallMethod(method: Symbol, style: InvokeStyle, pos: Position, specificReceiver: Symbol = null): BType = {
       val methodOwner = method.owner
       // the class used in the invocation's method descriptor in the classfile
       val receiverClass = {
         if (specificReceiver != null)
-          assert(style.isVirtual || specificReceiver == methodOwner, s"specificReceiver can only be specified for virtual calls. $method - $specificReceiver")
+          assert(style.isVirtual || style.isSuper || specificReceiver == methodOwner, s"specificReceiver can only be specified for virtual calls. $method - $specificReceiver")
 
         val useSpecificReceiver = specificReceiver != null && !specificReceiver.isBottomClass
         val receiver = if (useSpecificReceiver) specificReceiver else methodOwner
@@ -1058,31 +1080,34 @@ abstract class BCodeBodyBuilder extends BCodeSkelBuilder {
       }
 
       receiverClass.info // ensure types the type is up to date; erasure may add lateINTERFACE to traits
-      val receiverName = internalName(receiverClass)
+      val receiverBType = classBTypeFromSymbol(receiverClass)
+      val receiverName = receiverBType.internalName
 
-      // super calls are only allowed to direct parents
-      if (style.isSuper && receiverClass.isTraitOrInterface && !cnode.interfaces.contains(receiverName)) {
-        thisBType.info.get.inlineInfo.lateInterfaces += receiverName
-        cnode.interfaces.add(receiverName)
-      }
+      val jname  = method.javaSimpleName.toString
+      val bmType = methodBTypeFromSymbol(method)
+      val mdescr = bmType.descriptor
 
-      def needsInterfaceCall(sym: Symbol) = {
-        sym.isTraitOrInterface ||
-          sym.isJavaDefined && sym.isNonBottomSubClass(definitions.ClassfileAnnotationClass)
-      }
-
-      val jname    = method.javaSimpleName.toString
-      val bmType   = methodBTypeFromSymbol(method)
-      val mdescr   = bmType.descriptor
-
+      val isInterface = receiverBType.isInterface.get
       import InvokeStyle._
-      style match {
-        case Static  =>                      bc.invokestatic   (receiverName, jname, mdescr, pos)
-        case Special =>                      bc.invokespecial  (receiverName, jname, mdescr, pos)
-        case Virtual =>
-          if (needsInterfaceCall(receiverClass)) bc.invokeinterface(receiverName, jname, mdescr, pos)
-          else                               bc.invokevirtual  (receiverName, jname, mdescr, pos)
-        case Super   =>                      bc.invokespecial  (receiverName, jname, mdescr, pos)
+      if (style == Super) {
+        if (receiverClass.isTrait && !method.isJavaDefined) {
+          val staticDesc = MethodBType(typeToBType(method.owner.info) :: bmType.argumentTypes, bmType.returnType).descriptor
+          val staticName = traitSuperAccessorName(method)
+          bc.invokestatic(receiverName, staticName, staticDesc, isInterface, pos)
+        } else {
+          if (receiverClass.isTraitOrInterface) {
+            // An earlier check in Mixin reports an error in this case, so it doesn't reach the backend
+            assert(cnode.interfaces.contains(receiverName), s"cannot invokespecial $receiverName.$jname, the interface is not a direct parent.")
+          }
+          bc.invokespecial(receiverName, jname, mdescr, isInterface, pos)
+        }
+      } else {
+        val opc = style match {
+          case Static => Opcodes.INVOKESTATIC
+          case Special => Opcodes.INVOKESPECIAL
+          case Virtual => if (isInterface) Opcodes.INVOKEINTERFACE else Opcodes.INVOKEVIRTUAL
+        }
+        bc.emitInvoke(opc, receiverName, jname, mdescr, isInterface, pos)
       }
 
       bmType.returnType
@@ -1098,15 +1123,21 @@ abstract class BCodeBodyBuilder extends BCodeSkelBuilder {
      * Returns a list of trees that each should be concatenated, from left to right.
      * It turns a chained call like "a".+("b").+("c") into a list of arguments.
      */
-    def liftStringConcat(tree: Tree): List[Tree] = tree match {
-      case Apply(fun @ Select(larg, method), rarg) =>
-        if (isPrimitive(fun.symbol) &&
-            scalaPrimitives.getPrimitive(fun.symbol) == scalaPrimitives.CONCAT)
-          liftStringConcat(larg) ::: rarg
-        else
-          tree :: Nil
-      case _ =>
-        tree :: Nil
+    def liftStringConcat(tree: Tree): List[Tree] = {
+      val result = ListBuffer[Tree]()
+      def loop(tree: Tree): Unit = {
+        tree match {
+          case Apply(fun@Select(larg, method), rarg :: Nil)
+            if (isPrimitive(fun.symbol) && scalaPrimitives.getPrimitive(fun.symbol) == scalaPrimitives.CONCAT) =>
+
+            loop(larg)
+            loop(rarg)
+          case _ =>
+            result += tree
+        }
+      }
+      loop(tree)
+      result.toList
     }
 
     /* Emit code to compare the two top-most stack values using the 'op' operator. */
@@ -1208,7 +1239,7 @@ abstract class BCodeBodyBuilder extends BCodeSkelBuilder {
       tree match {
 
         case Apply(fun, args) if isPrimitive(fun.symbol) =>
-          import scalaPrimitives.{ ZNOT, ZAND, ZOR, EQ, getPrimitive }
+          import scalaPrimitives._
 
           // lhs and rhs of test
           lazy val Select(lhs, _) = fun
@@ -1255,14 +1286,22 @@ abstract class BCodeBodyBuilder extends BCodeSkelBuilder {
     def genEqEqPrimitive(l: Tree, r: Tree, success: asm.Label, failure: asm.Label, targetIfNoJump: asm.Label, pos: Position) {
 
       /* True if the equality comparison is between values that require the use of the rich equality
-       * comparator (scala.runtime.Comparator.equals). This is the case when either side of the
+       * comparator (scala.runtime.BoxesRunTime.equals). This is the case when either side of the
        * comparison might have a run-time type subtype of java.lang.Number or java.lang.Character.
-       * When it is statically known that both sides are equal and subtypes of Number of Character,
-       * not using the rich equality is possible (their own equals method will do ok.)
+       *
+       * When it is statically known that both sides are equal and subtypes of Number or Character,
+       * not using the rich equality is possible (their own equals method will do ok), except for
+       * java.lang.Float and java.lang.Double: their `equals` have different behavior around `NaN`
+       * and `-0.0`, see Javadoc (scala-dev#329).
        */
       val mustUseAnyComparator: Boolean = {
-        val areSameFinals = l.tpe.isFinalType && r.tpe.isFinalType && (l.tpe =:= r.tpe)
-        !areSameFinals && platform.isMaybeBoxed(l.tpe.typeSymbol) && platform.isMaybeBoxed(r.tpe.typeSymbol)
+        platform.isMaybeBoxed(l.tpe.typeSymbol) && platform.isMaybeBoxed(r.tpe.typeSymbol) && {
+          val areSameFinals = l.tpe.isFinalType && r.tpe.isFinalType && (l.tpe =:= r.tpe) && {
+            val sym = l.tpe.typeSymbol
+            sym != BoxedFloatClass && sym != BoxedDoubleClass
+          }
+          !areSameFinals
+        }
       }
 
       if (mustUseAnyComparator) {
@@ -1287,7 +1326,7 @@ abstract class BCodeBodyBuilder extends BCodeSkelBuilder {
           genLoad(l, ObjectRef)
           genCZJUMP(success, failure, TestOp.EQ, ObjectRef, targetIfNoJump)
         } else if (isNonNullExpr(l)) {
-          // SI-7852 Avoid null check if L is statically non-null.
+          // scala/bug#7852 Avoid null check if L is statically non-null.
           genLoad(l, ObjectRef)
           genLoad(r, ObjectRef)
           genCallMethod(Object_equals, InvokeStyle.Virtual, pos)
@@ -1321,37 +1360,62 @@ abstract class BCodeBodyBuilder extends BCodeSkelBuilder {
     def genSynchronized(tree: Apply, expectedType: BType): BType
     def genLoadTry(tree: Try): BType
 
-    def genInvokeDynamicLambda(lambdaTarget: Symbol, arity: Int, functionalInterface: Symbol, sam: Symbol) {
-      val isStaticMethod = lambdaTarget.hasFlag(Flags.STATIC)
+    def genInvokeDynamicLambda(canLMF: delambdafy.LambdaMetaFactoryCapable) = {
+      import canLMF.{ lambdaTarget => originalTarget, _ }
+
+      val lambdaTarget = originalTarget.attachments.get[JustMethodReference].map(_.lambdaTarget).getOrElse(originalTarget)
       def asmType(sym: Symbol) = classBTypeFromSymbol(sym).toASMType
 
+      val isInterface = lambdaTarget.owner.isTrait || lambdaTarget.owner.hasJavaAnnotationFlag
+      val tag =
+        if (lambdaTarget.isStaticMember) Opcodes.H_INVOKESTATIC
+        else if (lambdaTarget.isPrivate) Opcodes.H_INVOKESPECIAL
+        //else if (lambdaTarget.isClassConstructor) Opcodes.H_NEWINVOKESPECIAL // to invoke Foo::new directly
+        else if (isInterface) Opcodes.H_INVOKEINTERFACE
+        else Opcodes.H_INVOKEVIRTUAL
       val implMethodHandle =
-        new asm.Handle(if (lambdaTarget.hasFlag(Flags.STATIC)) asm.Opcodes.H_INVOKESTATIC else if (lambdaTarget.owner.isTrait) asm.Opcodes.H_INVOKEINTERFACE else asm.Opcodes.H_INVOKEVIRTUAL,
+        new asm.Handle(
+          tag,
           classBTypeFromSymbol(lambdaTarget.owner).internalName,
           lambdaTarget.name.toString,
-          methodBTypeFromSymbol(lambdaTarget).descriptor)
-      val receiver = if (isStaticMethod) Nil else lambdaTarget.owner :: Nil
-      val (capturedParams, lambdaParams) = lambdaTarget.paramss.head.splitAt(lambdaTarget.paramss.head.length - arity)
-      // Requires https://github.com/scala/scala-java8-compat on the runtime classpath
-      val invokedType = asm.Type.getMethodDescriptor(asmType(functionalInterface), (receiver ::: capturedParams).map(sym => typeToBType(sym.info).toASMType): _*)
-
-      val constrainedType = new MethodBType(lambdaParams.map(p => typeToBType(p.tpe)), typeToBType(lambdaTarget.tpe.resultType)).toASMType
-      val samName = sam.name.toString
+          methodBTypeFromSymbol(lambdaTarget).descriptor,
+          /* itf = */ isInterface)
+      val (capturedParams, lambdaParams) = originalTarget.paramss.head.splitAt(originalTarget.paramss.head.length - arity)
+      val invokedType = asm.Type.getMethodDescriptor(asmType(functionalInterface), capturedParams.map(sym => typeToBType(sym.info).toASMType): _*)
+      val constrainedType = MethodBType(lambdaParams.map(p => typeToBType(p.tpe)), typeToBType(lambdaTarget.tpe.resultType)).toASMType
       val samMethodType = methodBTypeFromSymbol(sam).toASMType
-
-      val flags = java.lang.invoke.LambdaMetafactory.FLAG_SERIALIZABLE | java.lang.invoke.LambdaMetafactory.FLAG_MARKERS
-
-      val ScalaSerializable = classBTypeFromSymbol(definitions.SerializableClass).toASMType
-      bc.jmethod.visitInvokeDynamicInsn(samName, invokedType, lambdaMetaFactoryBootstrapHandle,
-        /* samMethodType          = */ samMethodType,
-        /* implMethod             = */ implMethodHandle,
-        /* instantiatedMethodType = */ constrainedType,
-        /* flags                  = */ flags.asInstanceOf[AnyRef],
-        /* markerInterfaceCount   = */ 1.asInstanceOf[AnyRef],
-        /* markerInterfaces[0]    = */ ScalaSerializable,
-        /* bridgeCount            = */ 0.asInstanceOf[AnyRef]
-      )
-      indyLambdaHosts += cnode.name
+      val markers = if (addScalaSerializableMarker) classBTypeFromSymbol(definitions.SerializableClass).toASMType :: Nil else Nil
+      val overriddenMethods = bridges.map(b => methodBTypeFromSymbol(b).toASMType)
+      visitInvokeDynamicInsnLMF(bc.jmethod, sam.name.toString, invokedType, samMethodType, implMethodHandle, constrainedType, overriddenMethods, isSerializable, markers)
+      if (isSerializable)
+        addIndyLambdaImplMethod(cnode.name, implMethodHandle)
     }
   }
+
+  private def visitInvokeDynamicInsnLMF(jmethod: MethodNode, samName: String, invokedType: String, samMethodType: asm.Type,
+                                        implMethodHandle: asm.Handle, instantiatedMethodType: asm.Type, overriddenMethodTypes: Seq[asm.Type],
+                                        serializable: Boolean, markerInterfaces: Seq[asm.Type]): Unit = {
+    import java.lang.invoke.LambdaMetafactory.{FLAG_BRIDGES, FLAG_MARKERS, FLAG_SERIALIZABLE}
+    // scala/bug#10334: make sure that a lambda object for `T => U` has a method `apply(T)U`, not only the `(Object)Object`
+    // version. Using the lambda a structural type `{def apply(t: T): U}` causes a reflective lookup for this method.
+    val needsGenericBridge = samMethodType != instantiatedMethodType
+    // scala/bug#10512: any methods which `samMethod` overrides need bridges made for them
+    // this is done automatically during erasure for classes we generate, but LMF needs to have them explicitly mentioned
+    // so we have to compute them at this relatively late point.
+    val bridges = (
+      if (needsGenericBridge)
+        instantiatedMethodType +: overriddenMethodTypes
+      else overriddenMethodTypes
+    ).distinct.filterNot(_ == samMethodType)
+
+    /* We're saving on precious BSM arg slots by not passing 0 as the bridge count */
+    val bridgeArgs = if (bridges.nonEmpty) Int.box(bridges.length) +: bridges else Nil
+
+    def flagIf(b: Boolean, flag: Int): Int = if (b) flag else 0
+    val flags = FLAG_MARKERS | flagIf(serializable, FLAG_SERIALIZABLE) | flagIf(bridges.nonEmpty, FLAG_BRIDGES)
+    val bsmArgs = Seq(samMethodType, implMethodHandle, instantiatedMethodType, Int.box(flags), Int.box(markerInterfaces.length)) ++ markerInterfaces ++ bridgeArgs
+
+    jmethod.visitInvokeDynamicInsn(samName, invokedType, lambdaMetaFactoryAltMetafactoryHandle, bsmArgs: _*)
+  }
+
 }

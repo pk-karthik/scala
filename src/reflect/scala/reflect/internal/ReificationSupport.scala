@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala
 package reflect
 package internal
@@ -266,7 +278,7 @@ trait ReificationSupport { self: SymbolTable =>
     }
 
     // undo gen.mkTemplate
-    protected object UnMkTemplate {
+    protected class UnMkTemplate(isCaseClass: Boolean) {
       def unapply(templ: Template): Option[(List[Tree], ValDef, Modifiers, List[List[ValDef]], List[Tree], List[Tree])] = {
         val Template(parents, selfType, _) = templ
         val tbody = treeInfo.untypecheckedTemplBody(templ)
@@ -285,6 +297,7 @@ trait ReificationSupport { self: SymbolTable =>
           val (gvdefs, etdefs) = rawEdefs.partition(treeInfo.isEarlyValDef)
           val (fieldDefs, UnCtor(ctorMods, ctorVparamss, lvdefs) :: body) = rest.splitAt(indexOfCtor(rest))
           val evdefs = gvdefs.zip(lvdefs).map {
+            // TODO: in traits, early val defs are defdefs
             case (gvdef @ ValDef(_, _, tpt: TypeTree, _), ValDef(_, _, _, rhs)) =>
               copyValDef(gvdef)(tpt = tpt.original, rhs = rhs)
             case (tr1, tr2) =>
@@ -295,8 +308,9 @@ trait ReificationSupport { self: SymbolTable =>
             result(ctorMods, Nil, edefs, body)
           else {
             // undo conversion from (implicit ... ) to ()(implicit ... ) when it's the only parameter section
+            // except that case classes require the explicit leading empty parameter list
             val vparamssRestoredImplicits = ctorVparamss match {
-              case Nil :: (tail @ ((head :: _) :: _)) if head.mods.isImplicit => tail
+              case Nil :: (tail @ ((head :: _) :: _)) if head.mods.isImplicit && !isCaseClass => tail
               case other => other
             }
             // undo flag modifications by merging flag info from constructor args and fieldDefs
@@ -313,7 +327,9 @@ trait ReificationSupport { self: SymbolTable =>
           }
         }
       }
+      def asCase = new UnMkTemplate(isCaseClass = true)
     }
+    protected object UnMkTemplate extends UnMkTemplate(isCaseClass = false)
 
     protected def mkSelfType(tree: Tree) = tree match {
       case vd: ValDef =>
@@ -345,9 +361,15 @@ trait ReificationSupport { self: SymbolTable =>
 
       def unapply(tree: Tree): Option[(Modifiers, TypeName, List[TypeDef], Modifiers, List[List[ValDef]],
                                        List[Tree], List[Tree], ValDef, List[Tree])] = tree match {
-        case ClassDef(mods, name, tparams, UnMkTemplate(parents, selfType, ctorMods, vparamss, earlyDefs, body))
-          if !ctorMods.isTrait && !ctorMods.hasFlag(JAVA) =>
-          Some((mods, name, tparams, ctorMods, vparamss, earlyDefs, parents, selfType, body))
+        case ClassDef(mods, name, tparams, impl) =>
+          val X = if (mods.isCase) UnMkTemplate.asCase else UnMkTemplate
+          impl match {
+            case X(parents, selfType, ctorMods, vparamss, earlyDefs, body)
+                if (!ctorMods.isTrait && !ctorMods.hasFlag(JAVA)) =>
+              Some((mods, name, tparams, ctorMods, vparamss, earlyDefs, parents, selfType, body))
+            case _ =>
+              None
+          }
         case _ =>
           None
       }
@@ -417,13 +439,13 @@ trait ReificationSupport { self: SymbolTable =>
 
     object SyntacticTuple extends SyntacticTupleExtractor {
       def apply(args: List[Tree]): Tree = {
-        require(args.isEmpty || TupleClass(args.length).exists, s"Tuples with ${args.length} arity aren't supported")
+        require(args.isEmpty || (TupleClass(args.length) != NoSymbol), s"Tuples with ${args.length} arity aren't supported")
         gen.mkTuple(args)
       }
 
       def unapply(tree: Tree): Option[List[Tree]] = tree match {
         case Literal(Constant(())) =>
-          Some(Nil)
+          SomeOfNil
         case Apply(MaybeTypeTreeOriginal(SyntacticTypeApplied(MaybeSelectApply(TupleCompanionRef(sym)), targs)), args)
           if sym == TupleClass(args.length).companionModule
           && (targs.isEmpty || targs.length == args.length) =>
@@ -437,13 +459,13 @@ trait ReificationSupport { self: SymbolTable =>
 
     object SyntacticTupleType extends SyntacticTupleExtractor {
       def apply(args: List[Tree]): Tree = {
-        require(args.isEmpty || TupleClass(args.length).exists, s"Tuples with ${args.length} arity aren't supported")
+        require(args.isEmpty || (TupleClass(args.length) != NoSymbol), s"Tuples with ${args.length} arity aren't supported")
         gen.mkTupleType(args)
       }
 
       def unapply(tree: Tree): Option[List[Tree]] = tree match {
         case MaybeTypeTreeOriginal(UnitClassRef(_)) =>
-          Some(Nil)
+          SomeOfNil
         case MaybeTypeTreeOriginal(AppliedTypeTree(TupleClassRef(sym), args))
           if sym == TupleClass(args.length) =>
           Some(args)
@@ -456,7 +478,7 @@ trait ReificationSupport { self: SymbolTable =>
 
     object SyntacticFunctionType extends SyntacticFunctionTypeExtractor {
       def apply(argtpes: List[Tree], restpe: Tree): Tree = {
-        require(FunctionClass(argtpes.length).exists, s"Function types with ${argtpes.length} arity aren't supported")
+        require(FunctionClass(argtpes.length) != NoSymbol, s"Function types with ${argtpes.length} arity aren't supported")
         gen.mkFunctionTypeTree(argtpes, restpe)
       }
 
@@ -497,7 +519,7 @@ trait ReificationSupport { self: SymbolTable =>
       def unapply(tree: Tree): Option[List[Tree]] = tree match {
         case bl @ self.Block(stats, SyntheticUnit()) => Some(treeInfo.untypecheckedBlockBody(bl))
         case bl @ self.Block(stats, expr)            => Some(treeInfo.untypecheckedBlockBody(bl) :+ expr)
-        case SyntheticUnit()                         => Some(Nil)
+        case SyntheticUnit()                         => SomeOfNil
         case _ if tree.isTerm && tree.nonEmpty       => Some(tree :: Nil)
         case _                                       => None
       }
@@ -656,7 +678,7 @@ trait ReificationSupport { self: SymbolTable =>
       def transformStats(trees: List[Tree]): List[Tree] = trees match {
         case Nil => Nil
         case ValDef(mods, _, SyntacticEmptyTypeTree(), Match(MaybeTyped(MaybeUnchecked(value), tpt), CaseDef(pat, EmptyTree, SyntacticTuple(ids)) :: Nil)) :: tail
-          if mods.hasFlag(SYNTHETIC) && mods.hasFlag(ARTIFACT) =>
+          if mods.hasAllFlags(SYNTHETIC | ARTIFACT) =>
           ids match {
             case Nil =>
               ValDef(NoMods, nme.QUASIQUOTE_PAT_DEF, Typed(pat, tpt), transform(value)) :: transformStats(tail)
@@ -694,7 +716,7 @@ trait ReificationSupport { self: SymbolTable =>
     protected object UnSyntheticParam {
       def unapply(tree: Tree): Option[TermName] = tree match {
         case ValDef(mods, name, _, EmptyTree)
-          if mods.hasFlag(SYNTHETIC) && mods.hasFlag(PARAM) =>
+          if mods.hasAllFlags(SYNTHETIC | PARAM) =>
           Some(name)
         case _ => None
       }
@@ -725,6 +747,7 @@ trait ReificationSupport { self: SymbolTable =>
     }
 
     // match call to either withFilter or filter
+    // TODO: now that we no longer rewrite `filter` to `withFilter`, maybe this extractor should only look for `withFilter`?
     protected object FilterCall {
       def unapply(tree: Tree): Option[(Tree,Tree)] = tree match {
         case Apply(Select(obj, nme.withFilter | nme.filter), arg :: Nil) =>
@@ -888,7 +911,7 @@ trait ReificationSupport { self: SymbolTable =>
           if pf.tpe != null && pf.tpe.typeSymbol.eq(PartialFunctionClass) &&
              abspf.tpe != null && abspf.tpe.typeSymbol.eq(AbstractPartialFunctionClass) &&
              ser.tpe != null && ser.tpe.typeSymbol.eq(SerializableClass) &&
-             clsMods.hasFlag(FINAL) && clsMods.hasFlag(SYNTHETIC) =>
+             clsMods.hasAllFlags(FINAL | SYNTHETIC) =>
           Some(cases)
         case _ => None
       }

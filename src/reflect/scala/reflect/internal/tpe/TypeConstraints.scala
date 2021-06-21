@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala
 package reflect
 package internal
@@ -5,6 +17,7 @@ package tpe
 
 import scala.collection.{ generic }
 import generic.Clearable
+import scala.collection.mutable.BitSet
 
 private[internal] trait TypeConstraints {
   self: SymbolTable =>
@@ -22,10 +35,14 @@ private[internal] trait TypeConstraints {
     //OPT this method is public so we can do `manual inlining`
     var log: UndoPairs = List()
 
-    // register with the auto-clearing cache manager
-    perRunCaches.recordCache(this)
+    if (isCompilerUniverse) {
+      // register with the auto-clearing cache manager
+      // perRunCaches isn't threadsafe so don't do this in runtime reflection, which doesn't (can't)
+      // ever call `perRunCaches.clearAll()` anyway
+      perRunCaches.recordCache(this)
+    }
 
-    /** Undo all changes to constraints to type variables upto `limit`. */
+    /** Undo all changes to constraints to type variables up to `limit`. */
     //OPT this method is public so we can do `manual inlining`
     def undoTo(limit: UndoPairs) {
       assertCorrectThread()
@@ -44,8 +61,8 @@ private[internal] trait TypeConstraints {
       log ::= UndoPair(tv, tv.constr.cloneInternal)
     }
 
-    def clear() {
-      if (settings.debug)
+    def clear(): Unit = {
+      if (settings.isDebug)
         self.log("Clearing " + log.size + " entries from the undoLog.")
       log = Nil
     }
@@ -84,8 +101,8 @@ private[internal] trait TypeConstraints {
       *  guarding addLoBound/addHiBound somehow broke raw types so it
       *  only guards against being created with them.]
       */
-    private var lobounds = lo0 filterNot typeIsNothing
-    private var hibounds = hi0 filterNot typeIsAny
+    private var lobounds = lo0 filterNot (_.isNothing)
+    private var hibounds = hi0 filterNot (_.isAny)
     private var numlo = numlo0
     private var numhi = numhi0
     private var avoidWidening = avoidWidening0
@@ -164,12 +181,12 @@ private[internal] trait TypeConstraints {
 
     override def toString = {
       val boundsStr = {
-        val lo = loBounds filterNot typeIsNothing match {
+        val lo = loBounds filterNot (_.isNothing) match {
           case Nil       => ""
           case tp :: Nil => " >: " + tp
           case tps       => tps.mkString(" >: (", ", ", ")")
         }
-        val hi = hiBounds filterNot typeIsAny match {
+        val hi = hiBounds filterNot (_.isAny) match {
           case Nil       => ""
           case tp :: Nil => " <: " + tp
           case tps       => tps.mkString(" <: (", ", ", ")")
@@ -183,32 +200,40 @@ private[internal] trait TypeConstraints {
 
   /** Solve constraint collected in types `tvars`.
     *
-    *  @param tvars      All type variables to be instantiated.
-    *  @param tparams    The type parameters corresponding to `tvars`
-    *  @param variances  The variances of type parameters; need to reverse
+    *  @param tvars    All type variables to be instantiated.
+    *  @param tparams  The type parameters corresponding to `tvars`
+    *  @param getVariance Function to extract variances of type parameters; we need to reverse
     *                    solution direction for all contravariant variables.
-    *  @param upper      When `true` search for max solution else min.
+    *  @param upper    When `true` search for max solution else min.
     */
-  def solve(tvars: List[TypeVar], tparams: List[Symbol], variances: List[Variance], upper: Boolean, depth: Depth): Boolean = {
+  def solve(tvars: List[TypeVar], tparams: List[Symbol], getVariance: Variance.Extractor[Symbol], upper: Boolean, depth: Depth): Boolean = {
+    assert(tvars.corresponds(tparams)((tvar, tparam) => tvar.origin.typeSymbol eq tparam), (tparams, tvars.map(_.origin.typeSymbol)))
+    val areContravariant: BitSet = BitSet.empty
+    foreachWithIndex(tparams){(tparam, ix) =>
+      if (getVariance(tparam).isContravariant) areContravariant += ix
+    }
 
-    def solveOne(tvar: TypeVar, tparam: Symbol, variance: Variance) {
+    def solveOne(tvar: TypeVar, ix: Int): Unit = {
+      val tparam = tvar.origin.typeSymbol
+      val isContravariant = areContravariant(ix)
       if (tvar.constr.inst == NoType) {
-        val up = if (variance.isContravariant) !upper else upper
+        val up = if (isContravariant) !upper else upper
         tvar.constr.inst = null
-        val bound: Type = if (up) tparam.info.bounds.hi else tparam.info.bounds.lo
+        val bound: Type = if (up) tparam.info.upperBound else tparam.info.lowerBound
         //Console.println("solveOne0(tv, tp, v, b)="+(tvar, tparam, variance, bound))
         var cyclic = bound contains tparam
-        foreach3(tvars, tparams, variances)((tvar2, tparam2, variance2) => {
+        foreachWithIndex(tvars){ (tvar2, jx) =>
+          val tparam2 = tvar2.origin.typeSymbol
           val ok = (tparam2 != tparam) && (
             (bound contains tparam2)
-              ||  up && (tparam2.info.bounds.lo =:= tparam.tpeHK)
-              || !up && (tparam2.info.bounds.hi =:= tparam.tpeHK)
+              ||  up && (tparam2.info.lowerBound =:= tparam.tpeHK)
+              || !up && (tparam2.info.upperBound =:= tparam.tpeHK)
             )
           if (ok) {
             if (tvar2.constr.inst eq null) cyclic = true
-            solveOne(tvar2, tparam2, variance2)
+            solveOne(tvar2, jx)
           }
-        })
+        }
         if (!cyclic) {
           if (up) {
             if (bound.typeSymbol != AnyClass) {
@@ -216,7 +241,7 @@ private[internal] trait TypeConstraints {
               tvar addHiBound bound.instantiateTypeParams(tparams, tvars)
             }
             for (tparam2 <- tparams)
-              tparam2.info.bounds.lo.dealias match {
+              tparam2.info.lowerBound.dealias match {
                 case TypeRef(_, `tparam`, _) =>
                   debuglog(s"$tvar addHiBound $tparam2.tpeHK.instantiateTypeParams($tparams, $tvars)")
                   tvar addHiBound tparam2.tpeHK.instantiateTypeParams(tparams, tvars)
@@ -228,7 +253,7 @@ private[internal] trait TypeConstraints {
               tvar addLoBound bound.instantiateTypeParams(tparams, tvars)
             }
             for (tparam2 <- tparams)
-              tparam2.info.bounds.hi.dealias match {
+              tparam2.info.upperBound.dealias match {
                 case TypeRef(_, `tparam`, _) =>
                   debuglog(s"$tvar addLoBound $tparam2.tpeHK.instantiateTypeParams($tparams, $tvars)")
                   tvar addLoBound tparam2.tpeHK.instantiateTypeParams(tparams, tvars)
@@ -248,7 +273,7 @@ private[internal] trait TypeConstraints {
             if (depth.isAnyDepth) lub(tvar.constr.loBounds)
             else lub(tvar.constr.loBounds, depth)
           }
-          )
+        )
 
         debuglog(s"$tvar setInst $newInst")
         tvar setInst newInst
@@ -257,7 +282,7 @@ private[internal] trait TypeConstraints {
     }
 
     // println("solving "+tvars+"/"+tparams+"/"+(tparams map (_.info)))
-    foreach3(tvars, tparams, variances)(solveOne)
+    foreachWithIndex(tvars)(solveOne)
 
     def logBounds(tv: TypeVar) = log {
       val what = if (!tv.instValid) "is invalid" else s"does not conform to bounds: ${tv.constr}"

@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala.reflect
 package quasiquotes
 
@@ -115,7 +127,7 @@ trait Holes { self: Quasiquotes =>
 
     private def lifted(tpe: Type)(tree: Tree): Tree = {
       val lifter = inferLiftable(tpe)
-      assert(lifter != EmptyTree, s"couldnt find a liftable for $tpe")
+      assert(lifter != EmptyTree, s"couldn't find a liftable for $tpe")
       val lifted = Apply(lifter, List(tree))
       atPos(tree.pos)(lifted)
     }

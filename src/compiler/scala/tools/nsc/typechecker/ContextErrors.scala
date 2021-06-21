@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
@@ -11,8 +18,10 @@ import scala.compat.Platform.EOL
 import scala.reflect.runtime.ReflectionUtils
 import scala.reflect.macros.runtime.AbortMacroException
 import scala.util.control.NonFatal
+import scala.tools.nsc.Reporting.WarningCategory
 import scala.tools.nsc.util.stackTraceString
 import scala.reflect.io.NoAbstractFile
+import scala.reflect.internal.util.NoSourceFile
 
 trait ContextErrors {
   self: Analyzer =>
@@ -20,7 +29,7 @@ trait ContextErrors {
   import global._
   import definitions._
 
-  sealed abstract class AbsTypeError extends Throwable {
+  sealed abstract class AbsTypeError {
     def errPos: Position
     def errMsg: String
     override def toString() = "[Type error at:" + errPos + "] " + errMsg
@@ -104,7 +113,12 @@ trait ContextErrors {
 
     def issueTypeError(err: AbsTypeError)(implicit context: Context) { context.issue(err) }
 
-    def typeErrorMsg(found: Type, req: Type) = "type mismatch" + foundReqMsg(found, req)
+    def typeErrorMsg(context: Context, found: Type, req: Type) =
+      if (context.openImplicits.nonEmpty && !settings.XlogImplicits.value && currentRun.isScala213)
+         // OPT: avoid error string creation for errors that won't see the light of day, but predicate
+        //       this on -Xsource:2.13 for bug compatibility with https://github.com/scala/scala/pull/7147#issuecomment-418233611
+        "type mismatch"
+      else "type mismatch" + foundReqMsg(found, req)
   }
 
   def notAnyRefMessage(found: Type): String = {
@@ -180,7 +194,7 @@ trait ContextErrors {
       }
 
       def AdaptTypeError(tree: Tree, found: Type, req: Type) = {
-        // SI-3971 unwrapping to the outermost Apply helps prevent confusion with the
+        // scala/bug#3971 unwrapping to the outermost Apply helps prevent confusion with the
         // error message point.
         def callee = {
           def unwrap(t: Tree): Tree = t match {
@@ -215,7 +229,7 @@ trait ContextErrors {
         assert(!foundType.isErroneous, s"AdaptTypeError - foundType is Erroneous: $foundType")
         assert(!req.isErroneous, s"AdaptTypeError - req is Erroneous: $req")
 
-        issueNormalTypeError(callee, withAddendum(callee.pos)(typeErrorMsg(foundType, req)))
+        issueNormalTypeError(callee, withAddendum(callee.pos)(typeErrorMsg(context, foundType, req)))
         infer.explainTypes(foundType, req)
       }
 
@@ -289,10 +303,13 @@ trait ContextErrors {
       def InvalidConstructorDefError(ddef: Tree) =
         issueNormalTypeError(ddef, "constructor definition not allowed here")
 
+      def ImplicitByNameError(param: Symbol) =
+        issueSymbolTypeError(param, "implicit parameters may not be call-by-name")
+
       def DeprecatedParamNameError(param: Symbol, name: Name) =
         issueSymbolTypeError(param, "deprecated parameter name "+ name +" has to be distinct from any other parameter name (deprecated or not).")
 
-      // computeParamAliases
+      // analyzeSuperConsructor
       def SuperConstrReferenceError(tree: Tree) =
         NormalTypeError(tree, "super constructor cannot be passed a self reference unless parameter is declared by-name")
 
@@ -375,7 +392,7 @@ trait ContextErrors {
         }
         issueNormalTypeError(sel, errMsg)
         // the error has to be set for the copied tree, otherwise
-        // the error remains persistent acros multiple compilations
+        // the error remains persistent across multiple compilations
         // and causes problems
         //setError(sel)
       }
@@ -430,11 +447,6 @@ trait ContextErrors {
       def MaxFunctionArityError(fun: Tree) = {
         issueNormalTypeError(fun, "implementation restricts functions to " + definitions.MaxFunctionArity + " parameters")
         setError(fun)
-      }
-
-      def WrongNumberOfParametersError(tree: Tree, argpts: List[Type]) = {
-        issueNormalTypeError(tree, "wrong number of parameters; expected = " + argpts.length)
-        setError(tree)
       }
 
       def MissingParameterTypeError(fun: Tree, vparam: ValDef, pt: Type, withTupleAddendum: Boolean) = {
@@ -566,7 +578,7 @@ trait ContextErrors {
           val unknowns = (namelessArgs zip args) collect {
             case (_: Assign, AssignOrNamedArg(Ident(name), _)) => name
           }
-          val suppl = 
+          val suppl =
             unknowns.size match {
               case 0 => ""
               case 1 => s"\nNote that '${unknowns.head}' is not a parameter name of the invoked method."
@@ -606,13 +618,13 @@ trait ContextErrors {
 
       //doTypedApply - patternMode
       def TooManyArgsPatternError(fun: Tree) =
-        NormalTypeError(fun, "too many arguments for unapply pattern, maximum = "+definitions.MaxTupleArity)
+        issueNormalTypeError(fun, "too many arguments for unapply pattern, maximum = "+definitions.MaxTupleArity)
 
       def BlackboxExtractorExpansion(fun: Tree) =
-        NormalTypeError(fun, "extractor macros can only be whitebox")
+        issueNormalTypeError(fun, "extractor macros can only be whitebox")
 
       def WrongShapeExtractorExpansion(fun: Tree) =
-        NormalTypeError(fun, "extractor macros can only expand into extractor calls")
+        issueNormalTypeError(fun, "extractor macros can only expand into extractor calls")
 
       def WrongNumberOfArgsError(tree: Tree, fun: Tree) =
         NormalTypeError(tree, "wrong number of arguments for "+ treeSymTypeMsg(fun))
@@ -621,8 +633,10 @@ trait ContextErrors {
         NormalTypeError(tree, fun.tpe+" does not take parameters")
 
       // Dynamic
-      def DynamicVarArgUnsupported(tree: Tree, name: Name) =
-        issueNormalTypeError(tree, name+ " does not support passing a vararg parameter")
+      def DynamicVarArgUnsupported(tree: Tree, name: Name) = {
+        issueNormalTypeError(tree, name + " does not support passing a vararg parameter")
+        setError(tree)
+      }
 
       def DynamicRewriteError(tree: Tree, err: AbsTypeError) = {
         issueTypeError(PosAndMsgTypeError(err.errPos, err.errMsg +
@@ -653,9 +667,6 @@ trait ContextErrors {
 
       def ParentFinalInheritanceError(parent: Tree, mixin: Symbol) =
         NormalTypeError(parent, "illegal inheritance from final "+mixin)
-
-      def ParentSealedInheritanceError(parent: Tree, psym: Symbol) =
-        NormalTypeError(parent, "illegal inheritance from sealed " + psym )
 
       def ParentSelfTypeConformanceError(parent: Tree, selfType: Type) =
         NormalTypeError(parent,
@@ -713,7 +724,7 @@ trait ContextErrors {
 
       // SelectFromTypeTree
       def TypeSelectionFromVolatileTypeError(tree: Tree, qual: Tree) = {
-        val hiBound = qual.tpe.bounds.hi
+        val hiBound = qual.tpe.upperBound
         val addendum = if (hiBound =:= qual.tpe) "" else s" (with upper bound ${hiBound})"
         issueNormalTypeError(tree, s"illegal type selection from volatile type ${qual.tpe}${addendum}")
         setError(tree)
@@ -757,22 +768,18 @@ trait ContextErrors {
       }
 
       def DefDefinedTwiceError(sym0: Symbol, sym1: Symbol) = {
-        // Most of this hard work is associated with SI-4893.
-        val isBug = sym0.isAbstractType && sym1.isAbstractType && (sym0.name startsWith "_$")
-        val addendums = List(
-          if (sym0.associatedFile eq sym1.associatedFile)
-            Some("conflicting symbols both originated in file '%s'".format(sym0.associatedFile.canonicalPath))
-          else if ((sym0.associatedFile ne NoAbstractFile) && (sym1.associatedFile ne NoAbstractFile))
-            Some("conflicting symbols originated in files '%s' and '%s'".format(sym0.associatedFile.canonicalPath, sym1.associatedFile.canonicalPath))
-          else None ,
-          if (isBug) Some("Note: this may be due to a bug in the compiler involving wildcards in package objects") else None
-        )
-        val addendum = addendums.flatten match {
-          case Nil    => ""
-          case xs     => xs.mkString("\n  ", "\n  ", "")
-        }
+        val addPref = s";\n  the conflicting $sym1 was defined"
+        val bugNote = "\n  Note: this may be due to a bug in the compiler involving wildcards in package objects"
 
-        issueSymbolTypeError(sym0, sym1+" is defined twice" + addendum)
+        // Most of this hard work is associated with scala/bug#4893.
+        val isBug = sym0.isAbstractType && sym1.isAbstractType && (sym0.name startsWith "_$")
+        val addendum = (
+          if (sym0.pos.source eq sym1.pos.source)   s"$addPref at line ${sym1.pos.line}:${sym1.pos.column}"
+          else if (sym1.pos.source ne NoSourceFile) s"$addPref at line ${sym1.pos.line}:${sym1.pos.column} of '${sym1.pos.source.path}'"
+          else if (sym1.associatedFile ne NoAbstractFile) s"$addPref in '${sym1.associatedFile.canonicalPath}'"
+          else "") + (if (isBug) bugNote else "")
+
+        issueSymbolTypeError(sym0, s"$sym0 is defined twice$addendum")
       }
 
       // cyclic errors
@@ -858,7 +865,7 @@ trait ContextErrors {
           } catch {
             // the code above tries various tricks to detect the relevant portion of the stack trace
             // if these tricks fail, just fall back to uninformative, but better than nothing, getMessage
-            case NonFatal(ex) => // currently giving a spurious warning, see SI-6994
+            case NonFatal(ex) => // currently giving a spurious warning, see scala/bug#6994
               macroLogVerbose("got an exception when processing a macro generated exception\n" +
                               "offender = " + stackTraceString(realex) + "\n" +
                               "error = " + stackTraceString(ex))
@@ -933,7 +940,7 @@ trait ContextErrors {
       }
 
       private def issueAmbiguousTypeErrorUnlessErroneous(pos: Position, pre: Type, sym1: Symbol, sym2: Symbol, rest: String): Unit = {
-        // To avoid stack overflows (SI-8890), we MUST (at least) report when either `validTargets` OR `ambiguousSuppressed`
+        // To avoid stack overflows (scala/bug#8890), we MUST (at least) report when either `validTargets` OR `ambiguousSuppressed`
         // More details:
         // If `!context.ambiguousErrors`, `reporter.issueAmbiguousError` (which `context.issueAmbiguousError` forwards to)
         // buffers ambiguous errors. In this case, to avoid looping, we must issue even if `!validTargets`. (TODO: why?)
@@ -1020,7 +1027,7 @@ trait ContextErrors {
       }
 
       def NoBestExprAlternativeError(tree: Tree, pt: Type, lastTry: Boolean) = {
-        issueNormalTypeError(tree, withAddendum(tree.pos)(typeErrorMsg(tree.symbol.tpe, pt)))
+        issueNormalTypeError(tree, withAddendum(tree.pos)(typeErrorMsg(context, tree.symbol.tpe, pt)))
         setErrorOnLastTry(lastTry, tree)
       }
 
@@ -1042,9 +1049,8 @@ trait ContextErrors {
       private[scala] def NotWithinBoundsErrorMessage(prefix: String, targs: List[Type], tparams: List[Symbol], explaintypes: Boolean) = {
         if (explaintypes) {
           val bounds = tparams map (tp => tp.info.instantiateTypeParams(tparams, targs).bounds)
-          (targs, bounds).zipped foreach ((targ, bound) => explainTypes(bound.lo, targ))
-          (targs, bounds).zipped foreach ((targ, bound) => explainTypes(targ, bound.hi))
-          ()
+          foreach2(targs, bounds)((targ, bound) => explainTypes(bound.lo, targ))
+          foreach2(targs, bounds)((targ, bound) => explainTypes(targ, bound.hi))
         }
 
         prefix + "type arguments " + targs.mkString("[", ",", "]") +
@@ -1175,6 +1181,9 @@ trait ContextErrors {
       def MissingParameterOrValTypeError(vparam: Tree) =
         issueNormalTypeError(vparam, "missing parameter type")
 
+      def ParentSealedInheritanceError(parent: Tree, psym: Symbol) =
+        NormalTypeError(parent, "illegal inheritance from sealed " + psym )
+
       def RootImportError(tree: Tree) =
         issueNormalTypeError(tree, "_root_ cannot be imported")
 
@@ -1214,7 +1223,7 @@ trait ContextErrors {
             "pass-by-name arguments not allowed for case class parameters"
 
           case AbstractVar =>
-            "only classes can have declared but undefined members" + abstractVarMessage(sym)
+            "only traits and abstract classes can have declared but undefined members" + abstractVarMessage(sym)
 
         }
         issueSymbolTypeError(sym, msg)
@@ -1285,7 +1294,7 @@ trait ContextErrors {
                sm"""|Note that implicit conversions are not applicable because they are ambiguous:
                     |${coreMsg}are possible conversion functions from $found to $req"""
           }
-          typeErrorMsg(found, req) + (
+          typeErrorMsg(context, found, req) + (
             if (explanation == "") "" else "\n" + explanation
           )
         }
@@ -1296,7 +1305,7 @@ trait ContextErrors {
           case _ => Nil
         }
 
-        context.issueAmbiguousError(AmbiguousImplicitTypeError(tree,
+        context0.issueAmbiguousError(AmbiguousImplicitTypeError(tree,
           (info1.sym, info2.sym) match {
             case (ImplicitAmbiguousMsg(msg), _) => msg.format(treeTypeArgs(tree1))
             case (_, ImplicitAmbiguousMsg(msg)) => msg.format(treeTypeArgs(tree2))
@@ -1337,11 +1346,15 @@ trait ContextErrors {
     def WarnAfterNonSilentRecursiveInference(param: Symbol, arg: Tree)(implicit context: Context) = {
       val note = "failed to determine if '"+ param.name + " = ...' is a named argument or an assignment expression.\n"+
                  "an explicit type is required for the definition mentioned in the error message above."
-      context.warning(arg.pos, note)
+      context.warning(arg.pos, note, WarningCategory.Other)
     }
 
-    def UnknownParameterNameNamesDefaultError(arg: Tree, name: Name)(implicit context: Context) = {
-      issueNormalTypeError(arg, "unknown parameter name: " + name)
+    def UnknownParameterNameNamesDefaultError(arg: Tree, name: Name, isVariableInScope: Boolean)(implicit context: Context) = {
+      val suffix =
+        if (isVariableInScope)
+          s"\nNote that assignments in argument position are no longer allowed since Scala 2.13.\nTo express the assignment expression, wrap it in brackets, e.g., `{ $name = ... }`."
+        else ""
+      issueNormalTypeError(arg, s"unknown parameter name: $name$suffix")
       setError(arg)
     }
 

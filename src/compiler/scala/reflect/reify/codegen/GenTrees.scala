@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala.reflect.reify
 package codegen
 
@@ -38,7 +50,7 @@ trait GenTrees {
     // which replaces all types with equivalent trees and works around non-idempotencies of the typechecker
     //
     // why bother? because this brings method to the madness
-    // the first prototype of reification reified all types and symbols for all trees => this quickly became unyieldy
+    // the first prototype of reification reified all types and symbols for all trees => this quickly became unwieldy
     // the second prototype reified external types, but avoided reifying ones local to the reifee => this created an ugly irregularity
     // current approach is uniform and compact
     var rtree: Tree = tree match {
@@ -97,7 +109,7 @@ trait GenTrees {
         } else {
           if (reifyDebug) println("splicing has succeeded")
           splicee match {
-            // we intentionally don't care about the prefix (the first underscore in the `RefiedTree` pattern match)
+            // we intentionally don't care about the prefix (the first underscore in the `ReifiedTree` pattern match)
             case ReifiedTree(_, _, inlinedSymtab, rtree, _, _, _) =>
               if (reifyDebug) println("inlining the splicee")
               // all free vars local to the enclosing reifee should've already been inlined by `Metalevels`

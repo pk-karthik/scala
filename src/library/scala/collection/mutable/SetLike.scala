@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -26,7 +30,6 @@ import parallel.mutable.ParSet
  *  @tparam This the type of the set itself.
  *
  *  @author  Martin Odersky
- *  @version 2.8
  *  @since 2.8
  *
  *  @define setNote
@@ -134,7 +137,7 @@ trait SetLike[A, +This <: SetLike[A, This] with Set[A]]
    *             are removed.
    */
   def retain(p: A => Boolean): Unit =
-    for (elem <- this.toList) // SI-7269 toList avoids ConcurrentModificationException
+    for (elem <- this.toList) // scala/bug#7269 toList avoids ConcurrentModificationException
       if (!p(elem)) this -= elem
 
   /** Removes all elements from the set. After this operation is completed,

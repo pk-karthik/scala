@@ -1,12 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
-
-
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -25,12 +27,17 @@ abstract class SortedMapFactory[CC[A, B] <: SortedMap[A, B] with SortedMapLike[A
 
   def empty[A, B](implicit ord: Ordering[A]): CC[A, B]
 
-  def apply[A, B](elems: (A, B)*)(implicit ord: Ordering[A]): CC[A, B] = (newBuilder[A, B](ord) ++= elems).result()
+  def apply[A, B](elems: (A, B)*)(implicit ord: Ordering[A]): CC[A, B] = {
+    if (elems.isEmpty) empty
+    else (newBuilder[A, B](ord) ++= elems).result()
+  }
 
   def newBuilder[A, B](implicit ord: Ordering[A]): Builder[(A, B), CC[A, B]] =
     new MapBuilder[A, B, CC[A, B]](empty(ord))
 
   class SortedMapCanBuildFrom[A, B](implicit ord: Ordering[A]) extends CanBuildFrom[Coll, (A, B), CC[A, B]] {
+    private[collection] def factory = SortedMapFactory.this
+    private[collection] def ordering = ord
     def apply(from: Coll) = newBuilder[A, B](ord)
     def apply() = newBuilder[A, B]
   }

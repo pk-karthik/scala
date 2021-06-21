@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -12,6 +16,7 @@ package immutable
 
 import generic._
 import scala.annotation.tailrec
+import scala.util.hashing.MurmurHash3
 
 /**
   * $factoryInfo
@@ -20,7 +25,7 @@ import scala.annotation.tailrec
   * n elements will take O(n^2^) time. This makes the builder suitable only for a small number of
   * elements.
   *
-  * @see [[http://docs.scala-lang.org/overviews/collections/concrete-immutable-collection-classes.html#list_maps "Scala's Collection Library overview"]]
+  * @see [[http://docs.scala-lang.org/overviews/collections/concrete-immutable-collection-classes.html#list-maps "Scala's Collection Library overview"]]
   * section on `List Maps` for more information.
   * @since 1
   * @define Coll ListMap
@@ -32,12 +37,18 @@ object ListMap extends ImmutableMapFactory[ListMap] {
     * $mapCanBuildFromInfo
     */
   implicit def canBuildFrom[A, B]: CanBuildFrom[Coll, (A, B), ListMap[A, B]] =
-    new MapCanBuildFrom[A, B]
+    ReusableCBF.asInstanceOf[CanBuildFrom[Coll, (A, B), ListMap[A, B]]]
+  private[this] val ReusableCBF = new MapCanBuildFrom[Any, Any]
 
   def empty[A, B]: ListMap[A, B] = EmptyListMap.asInstanceOf[ListMap[A, B]]
 
   @SerialVersionUID(-8256686706655863282L)
   private object EmptyListMap extends ListMap[Any, Nothing]
+
+  @tailrec private def foldRightInternal[A, B, Z](map: ListMap[A, B], prevValue: Z, op: ((A, B), Z) => Z): Z = {
+    if (map.isEmpty) prevValue
+    else foldRightInternal(map.init, op(map.last, prevValue), op)
+  }
 }
 
 /**
@@ -57,7 +68,6 @@ object ListMap extends ImmutableMapFactory[ListMap] {
   *
   * @author Matthias Zenger
   * @author Martin Odersky
-  * @version 2.0, 01/01/2007
   * @since 1
   * @define Coll ListMap
   * @define coll list map
@@ -68,7 +78,8 @@ object ListMap extends ImmutableMapFactory[ListMap] {
 sealed class ListMap[A, +B] extends AbstractMap[A, B]
   with Map[A, B]
   with MapLike[A, B, ListMap[A, B]]
-  with Serializable {
+  with Serializable
+  with HasForeachEntry[A,B] {
 
   override def empty = ListMap.empty
 
@@ -76,6 +87,24 @@ sealed class ListMap[A, +B] extends AbstractMap[A, B]
   override def isEmpty: Boolean = true
 
   def get(key: A): Option[B] = None
+
+  private[immutable] def foreachEntry[U](f: (A, B) => U): Unit = {
+    var current = this
+    while (!current.isEmpty) {
+      f(current.key, current.value)
+      current = current.next
+    }
+  }
+
+  override def hashCode(): Int = {
+    if (isEmpty) {
+      MurmurHash3.emptyMapHash
+    } else {
+      val hasher = new Map.HashCodeAccumulator()
+      foreachEntry(hasher)
+      hasher.finalizeHash
+    }
+  }
 
   override def updated[B1 >: B](key: A, value: B1): ListMap[A, B1] = new Node[B1](key, value)
 
@@ -103,6 +132,7 @@ sealed class ListMap[A, +B] extends AbstractMap[A, B]
   protected def value: B = throw new NoSuchElementException("value of empty map")
   protected def next: ListMap[A, B] = throw new NoSuchElementException("next of empty map")
 
+  override def foldRight[Z](z: Z)(op: ((A, B), Z) => Z): Z = ListMap.foldRightInternal(this, z, op)
   override def stringPrefix = "ListMap"
 
   /**

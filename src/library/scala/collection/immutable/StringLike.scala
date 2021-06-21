@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2002-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -125,7 +129,7 @@ self =>
   /** Return all lines in this string in an iterator, excluding trailing line
    *  end characters; i.e., apply `.stripLineEnd` to all lines
    *  returned by `linesWithSeparators`.
-   */
+   */ // TODO: deprecate on 2.13 to avoid conflict on Java 11, which introduces `String::lines` (this is why `linesIterator` has been un-deprecated)
   def lines: Iterator[String] =
     linesWithSeparators map (line => new WrappedString(line).stripLineEnd)
 
@@ -133,12 +137,12 @@ self =>
    *  end characters; i.e., apply `.stripLineEnd` to all lines
    *  returned by `linesWithSeparators`.
    */
-  @deprecated("use `lines` instead","2.11.0")
   def linesIterator: Iterator[String] =
     linesWithSeparators map (line => new WrappedString(line).stripLineEnd)
 
   /** Returns this string with first character converted to upper case.
    * If the first character of the string is capitalized, it is returned unchanged.
+   * This method does not convert characters outside the Basic Multilingual Plane (BMP).
    */
   def capitalize: String =
     if (toString == null) null
@@ -164,20 +168,14 @@ self =>
     if (toString.endsWith(suffix)) toString.substring(0, toString.length() - suffix.length)
     else toString
 
-  /** Replace all literal occurrences of `literal` with the string `replacement`.
-   *  This is equivalent to [[java.lang.String#replaceAll]] except that both arguments
-   *  are appropriately quoted to avoid being interpreted as metacharacters.
+  /** Replace all literal occurrences of `literal` with the literal string `replacement`.
+   *  This method is equivalent to [[java.lang.String#replace]].
    *
    *  @param    literal     the string which should be replaced everywhere it occurs
    *  @param    replacement the replacement string
    *  @return               the resulting string
    */
-  def replaceAllLiterally(literal: String, replacement: String): String = {
-    val arg1 = Regex.quote(literal)
-    val arg2 = Regex.quoteReplacement(replacement)
-
-    toString.replaceAll(arg1, arg2)
-  }
+  def replaceAllLiterally(literal: String, replacement: String): String = toString.replace(literal, replacement)
 
   /** For every line in this string:
    *

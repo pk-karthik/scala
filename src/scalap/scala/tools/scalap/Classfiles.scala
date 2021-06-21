@@ -1,10 +1,14 @@
-/*     ___ ____ ___   __   ___   ___
-**    / _// __// _ | / /  / _ | / _ \    Scala classfile decoder
-**  __\ \/ /__/ __ |/ /__/ __ |/ ___/    (c) 2003-2013, LAMP/EPFL
-** /____/\___/_/ |_/____/_/ |_/_/        http://scala-lang.org/
-**
-*/
-
+/*
+ * Scala classfile decoder (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala.tools.scalap
 
@@ -26,6 +30,9 @@ object Classfiles {
   final val CONSTANT_METHODREF = 10
   final val CONSTANT_INTFMETHODREF = 11
   final val CONSTANT_NAMEANDTYPE = 12
+  final val CONSTANT_METHODHANDLE = 15
+  final val CONSTANT_METHODTYPE = 16
+  final val CONSTANT_INVDYNAMIC = 18
 
   final val constantTagToString = Map(
     CONSTANT_UTF8 -> "UTF8",
@@ -39,7 +46,10 @@ object Classfiles {
     CONSTANT_FIELDREF -> "Field",
     CONSTANT_METHODREF -> "Method",
     CONSTANT_INTFMETHODREF -> "InterfaceMethod",
-    CONSTANT_NAMEANDTYPE -> "NameAndType"
+    CONSTANT_NAMEANDTYPE -> "NameAndType",
+    CONSTANT_METHODHANDLE -> "MethodHandle",
+    CONSTANT_METHODTYPE -> "MethodType",
+    CONSTANT_INVDYNAMIC -> "InvokeDynamic"
   )
 }
 

@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
@@ -25,11 +32,11 @@ trait EtaExpansion { self: Analyzer =>
     *
     * ```
     * {
-    *   private synthetic val eta$f   = p.f   // if p is not stable
+    *   private synthetic val eta\$f   = p.f   // if p is not stable
     *   ...
-    *   private synthetic val eta$e_i = e_i   // if e_i is not stable
+    *   private synthetic val eta\$e_i = e_i   // if e_i is not stable
     *   ...
-    *   (ps_1 => ... => ps_m => eta$f([es_1])...([es_m])(ps_1)...(ps_m))
+    *   (ps_1 => ... => ps_m => eta\$f([es_1])...([es_m])(ps_1)...(ps_m))
     * }
     * ```
     *
@@ -42,7 +49,7 @@ trait EtaExpansion { self: Analyzer =>
     var cnt = 0 // for NoPosition
     def freshName() = {
       cnt += 1
-      unit.freshTermName("eta$" + (cnt - 1) + "$")
+      freshTermName("eta$" + (cnt - 1) + "$")(typer.fresh)
     }
     val defs = new ListBuffer[Tree]
 
@@ -58,7 +65,7 @@ trait EtaExpansion { self: Analyzer =>
           defs += atPos(tree.pos) {
             val rhs = if (byName) {
               val res = typer.typed(Function(List(), tree))
-              new ChangeOwnerTraverser(typer.context.owner, res.symbol) traverse tree // SI-6274
+              new ChangeOwnerTraverser(typer.context.owner, res.symbol) traverse tree // scala/bug#6274
               res
             } else tree
             ValDef(Modifiers(SYNTHETIC), vname.toTermName, TypeTree(), rhs)
@@ -88,7 +95,7 @@ trait EtaExpansion { self: Analyzer =>
         case TypeApply(fn, args) =>
           treeCopy.TypeApply(tree, liftoutPrefix(fn), args).clearType()
         case Select(qual, name) =>
-          val name = tree.symbol.name // account for renamed imports, SI-7233
+          val name = tree.symbol.name // account for renamed imports, scala/bug#7233
           treeCopy.Select(tree, liftout(qual, byName = false), name).clearType() setSymbol NoSymbol
         case Ident(name) =>
           tree
@@ -104,8 +111,8 @@ trait EtaExpansion { self: Analyzer =>
           sym =>
             val origTpe = sym.tpe
             val isRepeated = definitions.isRepeatedParamType(origTpe)
-            // SI-4176 Don't leak A* in eta-expanded function types. See t4176b.scala
-            val droppedStarTpe = if (settings.etaExpandKeepsStar) origTpe else dropIllegalStarTypes(origTpe)
+            // scala/bug#4176 Don't leak A* in eta-expanded function types. See t4176b.scala
+            val droppedStarTpe = dropIllegalStarTypes(origTpe)
             val valDef = ValDef(Modifiers(SYNTHETIC | PARAM), sym.name.toTermName, TypeTree(droppedStarTpe), EmptyTree)
             (valDef, isRepeated)
         }

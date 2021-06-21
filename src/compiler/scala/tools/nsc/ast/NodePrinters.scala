@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
@@ -146,7 +153,7 @@ abstract class NodePrinters {
       str.toString
     }
     def printModifiers(tree: MemberDef) {
-      // SI-5885: by default this won't print annotations of not yet initialized symbols
+      // scala/bug#5885: by default this won't print annotations of not yet initialized symbols
       val annots0 = tree.symbol.annotations match {
         case Nil  => tree.mods.annotations
         case xs   => xs map annotationInfoToString

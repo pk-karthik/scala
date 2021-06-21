@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala
 package reflect
 package internal
@@ -9,7 +21,7 @@ trait Transforms { self: SymbolTable =>
 
   /** We need to encode laziness by hand here because the three components refChecks, uncurry and erasure
    *  are overwritten by objects in Global.
-   *  It would be best of objects could override lazy values. See SI-5187.
+   *  It would be best of objects could override lazy values. See scala/bug#5187.
    *  In the absence of this, the Lazy functionality should probably be somewhere
    *  in the standard library. Or is it already?
    */
@@ -23,12 +35,10 @@ trait Transforms { self: SymbolTable =>
     }
   }
 
-  private val refChecksLazy   = new Lazy(new { val global: Transforms.this.type = self } with RefChecks)
   private val uncurryLazy     = new Lazy(new { val global: Transforms.this.type = self } with UnCurry)
   private val erasureLazy     = new Lazy(new { val global: Transforms.this.type = self } with Erasure)
   private val postErasureLazy = new Lazy(new { val global: Transforms.this.type = self } with PostErasure)
 
-  def refChecks = refChecksLazy.force
   def uncurry = uncurryLazy.force
   def erasure = erasureLazy.force
   def postErasure = postErasureLazy.force
@@ -36,8 +46,7 @@ trait Transforms { self: SymbolTable =>
   def transformedType(sym: Symbol) =
     postErasure.transformInfo(sym,
       erasure.transformInfo(sym,
-        uncurry.transformInfo(sym,
-          refChecks.transformInfo(sym, sym.info))))
+        uncurry.transformInfo(sym, sym.info)))
 
   def transformedType(tpe: Type) =
     postErasure.elimErasedValueType(erasure.scalaErasure(uncurry.uncurry(tpe)))

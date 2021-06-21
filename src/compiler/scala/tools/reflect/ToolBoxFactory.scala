@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala
 package tools
 package reflect
@@ -6,9 +18,8 @@ import scala.tools.cmd.CommandLineParser
 import scala.tools.nsc.reporters._
 import scala.tools.nsc.CompilerCommand
 import scala.tools.nsc.io.{AbstractFile, VirtualDirectory}
-import scala.reflect.internal.util.AbstractFileClassLoader
+import scala.reflect.internal.util.{AbstractFileClassLoader, NoSourceFile}
 import scala.reflect.internal.Flags._
-import scala.reflect.internal.util.NoSourceFile
 import java.lang.{Class => jClass}
 import scala.compat.Platform.EOL
 import scala.reflect.NameTransformer
@@ -41,7 +52,7 @@ abstract class ToolBoxFactory[U <: JavaUniverse](val u: U) { factorySelf =>
     extends ReflectGlobal(settings, reporter0, toolBoxSelf.classLoader) {
       import definitions._
 
-      private val trace = scala.tools.nsc.util.trace when settings.debug.value
+      private val trace = scala.tools.nsc.util.trace when settings.isDebug
 
       private var wrapCount = 0
 
@@ -60,7 +71,7 @@ abstract class ToolBoxFactory[U <: JavaUniverse](val u: U) { factorySelf =>
         undoLog.clear()
         analyzer.lastTreeToTyper = EmptyTree
         lastSeenSourceFile = NoSourceFile
-        lastSeenContext = null
+        lastSeenContext = analyzer.NoContext
       }
 
       def verify(expr: Tree): Tree = {
@@ -69,7 +80,7 @@ abstract class ToolBoxFactory[U <: JavaUniverse](val u: U) { factorySelf =>
         // then ran it, which typechecked it again, and only then launched the
         // reflective compiler.
         //
-        // However, as observed in https://issues.scala-lang.org/browse/SI-5464
+        // However, as observed in https://github.com/scala/bug/issues/5464
         // current implementation typechecking is not always idempotent.
         // That's why we cannot allow inputs of toolboxes to be typechecked,
         // at least not until the aforementioned issue is closed.
@@ -234,7 +245,7 @@ abstract class ToolBoxFactory[U <: JavaUniverse](val u: U) { factorySelf =>
             case _ => NoSymbol
           }
           trace("wrapping ")(defOwner(expr) -> meth)
-          val methdef = DefDef(meth, expr changeOwner (defOwner(expr) -> meth))
+          val methdef = DefDef(meth, expr changeOwner (defOwner(expr), meth))
 
           val moduledef = ModuleDef(
               obj,
@@ -256,7 +267,7 @@ abstract class ToolBoxFactory[U <: JavaUniverse](val u: U) { factorySelf =>
         val msym = wrapInPackageAndCompile(mdef.name, mdef)
 
         val className = msym.fullName
-        if (settings.debug) println("generated: "+className)
+        if (settings.isDebug) println("generated: "+className)
         def moduleFileName(className: String) = className + "$"
         val jclazz = jClass.forName(moduleFileName(className), true, classLoader)
         val jmeth = jclazz.getDeclaredMethods.find(_.getName == wrapperMethodName).get

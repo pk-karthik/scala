@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -31,8 +35,6 @@ object OpenHashMap {
   final private class OpenEntry[Key, Value](var key: Key,
                                             var hash: Int,
                                             var value: Option[Value])
-
-  private[mutable] def nextPositivePowerOfTwo(i : Int) = 1 << (32 - Integer.numberOfLeadingZeros(i - 1))
 }
 
 /** A mutable hash map based on an open hashing scheme. The precise scheme is
@@ -67,7 +69,7 @@ extends AbstractMap[Key, Value]
 
   override def empty: OpenHashMap[Key, Value] = OpenHashMap.empty[Key, Value]
 
-  private[this] val actualInitialSize = OpenHashMap.nextPositivePowerOfTwo(initialSize)
+  private[this] val actualInitialSize = HashTable.nextPositivePowerOfTwo(initialSize)
 
   private var mask = actualInitialSize - 1
 
@@ -81,7 +83,7 @@ extends AbstractMap[Key, Value]
   private var _size = 0
   private var deleted = 0
 
-  // Used for tracking inserts so that iterators can determine in concurrent modification has occurred.
+  // Used for tracking inserts so that iterators can determine if concurrent modification has occurred.
   private[this] var modCount = 0
 
   override def size = _size

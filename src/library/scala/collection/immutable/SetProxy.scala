@@ -1,19 +1,20 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
-
-
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
 package immutable
 
-/** This is a simple wrapper class for <a href="Set.html"
- *  target="contentFrame">`scala.collection.immutable.Set`</a>.
+/** This is a simple wrapper class for [[scala.collection.immutable.Set]].
  *
  *  It is most useful for assembling customized set abstractions
  *  dynamically using object composition and forwarding.

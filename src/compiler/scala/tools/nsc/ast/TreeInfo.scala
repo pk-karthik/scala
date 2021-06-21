@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Martin Odersky
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
@@ -74,7 +81,7 @@ abstract class TreeInfo extends scala.reflect.internal.TreeInfo {
     }
   }
 
-  // TODO these overrides, and the slow trickle of bugs that they solve (e.g. SI-8479),
+  // TODO these overrides, and the slow trickle of bugs that they solve (e.g. scala/bug#8479),
   //      suggest that we should pursue an alternative design in which the DocDef nodes
   //      are eliminated from the tree before typer, and instead are modelled as tree
   //      attachments.
@@ -96,5 +103,24 @@ abstract class TreeInfo extends scala.reflect.internal.TreeInfo {
   override def isPureDef(tree: Tree): Boolean = tree match {
     case DocDef(_, definition) => isPureDef(definition)
     case _ => super.isPureDef(tree)
+  }
+
+  override def firstConstructor(stats: List[Tree]): Tree = {
+    def unwrap(stat: Tree): Tree = stat match {
+      case DocDef(_, defn) => unwrap(defn)
+      case tree => tree
+    }
+    super.firstConstructor(stats map unwrap)
+  }
+
+  object ArrayInstantiation {
+    def unapply(tree: Apply) = tree match {
+      case Apply(Select(New(tpt), name), arg :: Nil) if tpt.tpe != null && tpt.tpe.typeSymbol == definitions.ArrayClass =>
+        tpt.tpe match {
+          case erasure.GenericArray(level, componentType) => Some(level, componentType, arg)
+          case _ => None
+        }
+      case _ => None
+    }
   }
 }

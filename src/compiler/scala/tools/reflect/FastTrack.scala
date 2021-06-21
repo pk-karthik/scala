@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala.tools
 package reflect
 
@@ -54,6 +66,6 @@ class FastTrack[MacrosAndAnalyzer <: Macros with Analyzer](val macros: MacrosAnd
       makeBlackbox(ReflectRuntimeCurrentMirror) { case _                                          => c => currentMirror(c).tree },
       makeWhitebox(  QuasiquoteClass_api_apply) { case _                                          => _.expandQuasiquote },
       makeWhitebox(QuasiquoteClass_api_unapply) { case _                                          => _.expandQuasiquote }
-    )
+     )
   }
 }

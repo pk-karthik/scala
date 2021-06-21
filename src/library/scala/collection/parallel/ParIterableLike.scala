@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection.parallel
@@ -570,7 +574,11 @@ self: ParIterableLike[T, Repr, Sequential] =>
       def apply() = shared
       def doesShareCombiners = true
     } else new CombinerFactory[T, Repr] {
-      def apply() = newCombiner
+      def apply() = {
+        val r = newCombiner
+        r.combinerTaskSupport = tasksupport
+        r
+      }
       def doesShareCombiners = false
     }
   }
@@ -583,7 +591,11 @@ self: ParIterableLike[T, Repr, Sequential] =>
       def apply() = shared
       def doesShareCombiners = true
     } else new CombinerFactory[S, That] {
-      def apply() = cbf()
+      def apply() = {
+        val r = cbf()
+        r.combinerTaskSupport = tasksupport
+        r
+      }
       def doesShareCombiners = false
     }
   }
@@ -1468,8 +1480,10 @@ self: ParIterableLike[T, Repr, Sequential] =>
 
   /* alias methods */
 
+  @deprecated("Use foldLeft instead of /:", "2.12.10")
   def /:[S](z: S)(op: (S, T) => S): S = foldLeft(z)(op)
 
+  @deprecated("Use foldRight instead of :\\", "2.12.10")
   def :\[S](z: S)(op: (T, S) => S): S = foldRight(z)(op)
 
   /* debug information */

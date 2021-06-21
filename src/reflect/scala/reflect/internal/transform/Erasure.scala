@@ -1,3 +1,15 @@
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
+
 package scala
 package reflect
 package internal
@@ -19,7 +31,7 @@ trait Erasure {
       /* A Java Array<T> is erased to Array[Object] (T can only be a reference type), where as a Scala Array[T] is
        * erased to Object. However, there is only symbol for the Array class. So to make the distinction between
        * a Java and a Scala array, we check if the owner of T comes from a Java class.
-       * This however caused issue SI-5654. The additional test for EXSITENTIAL fixes it, see the ticket comments.
+       * This however caused issue scala/bug#5654. The additional test for EXISTENTIAL fixes it, see the ticket comments.
        * In short, members of an existential type (e.g. `T` in `forSome { type T }`) can have pretty arbitrary
        * owners (e.g. when computing lubs, <root> is used). All packageClass symbols have `isJavaDefined == true`.
        */
@@ -121,12 +133,12 @@ trait Erasure {
       case st: SubType =>
         apply(st.supertype)
       case tref @ TypeRef(pre, sym, args) =>
-        if (sym == ArrayClass)
+        if (sym eq ArrayClass)
           if (unboundedGenericArrayLevel(tp) == 1) ObjectTpe
           else if (args.head.typeSymbol.isBottomClass)  arrayType(ObjectTpe)
           else typeRef(apply(pre), sym, args map applyInArray)
-        else if (sym == AnyClass || sym == AnyValClass || sym == SingletonClass) ObjectTpe
-        else if (sym == UnitClass) BoxedUnitTpe
+        else if ((sym eq AnyClass) || (sym eq AnyValClass) || (sym eq SingletonClass)) ObjectTpe
+        else if (sym eq UnitClass) BoxedUnitTpe
         else if (sym.isRefinementClass) apply(mergeParents(tp.parents))
         else if (sym.isDerivedValueClass) eraseDerivedValueClassRef(tref)
         else if (sym.isClass) eraseNormalClassRef(tref)
@@ -147,18 +159,49 @@ trait Erasure {
       case AnnotatedType(_, atp) =>
         apply(atp)
       case ClassInfoType(parents, decls, clazz) =>
-        ClassInfoType(
-          if (clazz == ObjectClass || isPrimitiveValueClass(clazz)) Nil
-          else if (clazz == ArrayClass) ObjectTpe :: Nil
-          else removeLaterObjects(parents map this),
-          decls, clazz)
+        val newParents =
+          if (parents.isEmpty || (clazz eq ObjectClass) || isPrimitiveValueClass(clazz)) Nil
+          else if (clazz eq ArrayClass) ObjectTpe :: Nil
+          else {
+            val erasedParents = parents mapConserve this
+
+            // drop first parent for traits -- it has been normalized to a class by now,
+            // but we should drop that in bytecode
+            if (clazz.hasFlag(Flags.TRAIT) && !clazz.hasFlag(Flags.JAVA))
+              ObjectTpe :: erasedParents.tail.filter(_.typeSymbol ne ObjectClass)
+            else erasedParents
+          }
+        if (newParents eq parents) tp
+        else ClassInfoType(newParents, decls, clazz)
+
+      // can happen while this map is being used before erasure (e.g. when reasoning about sam types)
+      // the regular mapOver will cause a class cast exception because TypeBounds don't erase to TypeBounds
+      case _: BoundedWildcardType => tp // skip
+
       case _ =>
         mapOver(tp)
     }
 
-    def applyInArray(tp: Type): Type = tp match {
-      case tref @ TypeRef(_, sym, _) if sym.isDerivedValueClass => eraseNormalClassRef(tref)
-      case _ => apply(tp)
+    /* scala/bug#10551, scala/bug#10646:
+     *
+     * There are a few contexts in which it's important to erase types referencing
+     * derived value classes to the value class itself, not the underlying. As
+     * of right now, those are:
+     *   - inside of `classOf`
+     *   - the element type of an `ArrayValue`
+     * In those cases, the value class needs to be detected and erased using
+     * `javaErasure`, which treats refs to value classes the same as any other
+     * `TypeRef`. This used to be done by matching on `tr@TypeRef(_,sym,_)`, and
+     * checking whether `sym.isDerivedValueClass`, but there are more types with
+     * `typeSymbol.isDerivedValueClass` than just `TypeRef`s (`ExistentialType`
+     * is one of the easiest to bump into, e.g. `classOf[VC[_]]`).
+     *
+     * tl;dr if you're trying to erase a value class ref to the value class itself
+     * and not going through this method, you're inviting trouble into your life.
+     */
+    def applyInArray(tp: Type): Type = {
+      if (tp.typeSymbol.isDerivedValueClass) javaErasure(tp)
+      else apply(tp)
     }
   }
 
@@ -333,23 +376,30 @@ trait Erasure {
     }
   }
 
-  /**  The symbol's erased info. This is the type's erasure, except for the following symbols:
-   *
-   *   - For $asInstanceOf      : [T]T
-   *   - For $isInstanceOf      : [T]scala#Boolean
-   *   - For class Array        : [T]C where C is the erased classinfo of the Array class.
-   *   - For Array[T].<init>    : {scala#Int)Array[T]
-   *   - For a type parameter   : A type bounds type consisting of the erasures of its bounds.
-   */
+  /** The symbol's erased info. This is the type's erasure, except for the following primitive symbols:
+    *
+    *   - $asInstanceOf    --> [T]T
+    *   - $isInstanceOf    --> [T]scala#Boolean
+    *   - synchronized     --> [T](x: T)T
+    *   - class Array      --> [T]C where C is the erased classinfo of the Array class.
+    *   - Array[T].<init>  --> {scala#Int)Array[T]
+    *
+    * An abstract type's info erases to a TypeBounds type consisting of the erasures of the abstract type's bounds.
+    */
   def transformInfo(sym: Symbol, tp: Type): Type = {
-    if (sym == Object_asInstanceOf)
+    // Do not erase the primitive `synchronized` method's info or the info of its parameter.
+    // We do erase the info of its type param so that subtyping can relate its bounds after erasure.
+    def synchronizedPrimitive(sym: Symbol) =
+      sym == Object_synchronized || (sym.owner == Object_synchronized && sym.isTerm)
+
+    if (sym == Object_asInstanceOf || synchronizedPrimitive(sym))
       sym.info
     else if (sym == Object_isInstanceOf || sym == ArrayClass)
       PolyType(sym.info.typeParams, specialErasure(sym)(sym.info.resultType))
     else if (sym.isAbstractType)
-      TypeBounds(WildcardType, WildcardType)
+      TypeBounds(WildcardType, WildcardType) // TODO why not use the erasure of the type's bounds, as stated in the doc?
     else if (sym.isTerm && sym.owner == ArrayClass) {
-      if (sym.isClassConstructor)
+      if (sym.isClassConstructor) // TODO: switch on name for all branches -- this one is sym.name == nme.CONSTRUCTOR
         tp match {
           case MethodType(params, TypeRef(pre, sym1, args)) =>
             MethodType(cloneSymbolsAndModify(params, specialErasure(sym)),
@@ -366,12 +416,14 @@ trait Erasure {
     } else if (
       sym.owner != NoSymbol &&
       sym.owner.owner == ArrayClass &&
-      sym == Array_update.paramss.head(1)) {
+      sym == Array_update.paramss.head(1)) { // TODO: can we simplify the guard, perhaps cache the symbol to compare to?
       // special case for Array.update: the non-erased type remains, i.e. (Int,A)Unit
       // since the erasure type map gets applied to every symbol, we have to catch the
       // symbol here
       tp
     } else {
+      // TODO OPT: altogether, there are 9 symbols that we special-case.
+      // Could we get to the common case more quickly by looking them up in a set?
       specialErasure(sym)(tp)
     }
   }

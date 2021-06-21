@@ -1,6 +1,13 @@
-/* NSC -- new Scala compiler
- * Copyright 2005-2013 LAMP/EPFL
- * @author  Paul Phillips
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
  */
 
 package scala.tools.nsc
@@ -22,7 +29,7 @@ trait TypersTracking {
 
   def fullSiteString(context: Context): String = {
     def owner_long_s = (
-      if (settings.debug.value) {
+      if (settings.isDebug) {
         def flags_s = context.owner.debugFlagString match {
           case "" => ""
           case s  => " with flags " + inLightMagenta(s)
@@ -63,7 +70,7 @@ trait TypersTracking {
 
     private def truncAndOneLine(s: String): String = {
       val s1 = s.replaceAll("\\s+", " ")
-      if (s1.length < 60 || settings.debug.value) s1 else s1.take(57) + "..."
+      if (s1.length < 60 || settings.isDebug) s1 else s1.take(57) + "..."
     }
 
     private class Frame(val tree: Tree) { }
@@ -138,6 +145,16 @@ trait TypersTracking {
         runWith(tree) { pushFn ; showPop(body) }
     )
 
+    def beforeNextTyped(tree: Tree, mode: Mode, pt: Type, context: Context): Boolean = if (noPrintTyping(tree)) false else {
+      push(tree)
+      showPush(tree, mode, pt, context)
+      true
+    }
+    def afterNextTyped(tree: Tree, typedTree: Tree): Unit = {
+      showPop(typedTree)
+      pop(tree)
+    }
+
     @inline final def printTyping(tree: Tree, s: => String) = {
       if (printTypings && !noPrintTyping(tree))
         show(indented(s))
@@ -156,7 +173,7 @@ trait TypersTracking {
   // Some trees which are typed with mind-numbing frequency and
   // which add nothing by being printed. Did () type to Unit? Let's
   // gamble on yes.
-  def printingOk(t: Tree) = printTypings && (settings.debug.value || !noPrint(t))
+  def printingOk(t: Tree) = printTypings && (settings.isDebug || !noPrint(t))
   def noPrintTyping(t: Tree) = (t.tpe ne null) || !printingOk(t)
   def noPrintAdapt(tree1: Tree, tree2: Tree) = !printingOk(tree1) || (
        (tree1.tpe == tree2.tpe)

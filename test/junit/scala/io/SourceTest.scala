@@ -6,8 +6,6 @@ import org.junit.Assert._
 import org.junit.runner.RunWith
 import org.junit.runners.JUnit4
 
-import scala.tools.testing.AssertUtil._
-
 import java.io.{ Console => _, _ }
 
 @RunWith(classOf[JUnit4])
@@ -26,7 +24,7 @@ class SourceTest {
   private def in = new ByteArrayInputStream(sampler.getBytes)
 
   @Test def canIterateLines() = {
-    assertEquals(sampler.lines.size, (Source fromString sampler).getLines.size)
+    assertEquals(sampler.linesIterator.size, (Source fromString sampler).getLines.size)
   }
   @Test def loadFromResource() = {
     val res = Source.fromResource("rootdoc.txt")

@@ -1,10 +1,14 @@
-/*                     __                                               *\
-**     ________ ___   / /  ___     Scala API                            **
-**    / __/ __// _ | / /  / _ |    (c) 2003-2013, LAMP/EPFL             **
-**  __\ \/ /__/ __ |/ /__/ __ |    http://scala-lang.org/               **
-** /____/\___/_/ |_/____/_/ | |                                         **
-**                          |/                                          **
-\*                                                                      */
+/*
+ * Scala (https://www.scala-lang.org)
+ *
+ * Copyright EPFL and Lightbend, Inc.
+ *
+ * Licensed under Apache License 2.0
+ * (http://www.apache.org/licenses/LICENSE-2.0).
+ *
+ * See the NOTICE file distributed with this work for
+ * additional information regarding copyright ownership.
+ */
 
 package scala
 package collection
@@ -42,7 +46,6 @@ import scala.math.Ordering
  *
  *  @author  Martin Odersky
  *  @author  Matthias Zenger
- *  @version 1.0, 16/07/2003
  *  @since   2.8
  *
  *  @define Coll `Seq`
@@ -113,13 +116,12 @@ trait SeqLike[+A, +Repr] extends Any with IterableLike[A, Repr] with GenSeqLike[
   }
 
   def indexWhere(p: A => Boolean, from: Int): Int = {
-    var i = from
+    var i = math.max(from, 0)
     val it = iterator.drop(from)
     while (it.hasNext) {
       if (p(it.next())) return i
       else i += 1
     }
-
     -1
   }
 
@@ -233,7 +235,13 @@ trait SeqLike[+A, +Repr] extends Any with IterableLike[A, Repr] with GenSeqLike[
       if (idx < 0)
         _hasNext = false
       else {
-        var sum = nums.slice(idx + 1, nums.length).sum + 1
+        // OPT: hand rolled version of `sum = nums.view(idx + 1, nums.length).sum + 1`
+        var sum = 1
+        var i = idx + 1
+        while (i < nums.length) {
+          sum += nums(i)
+          i += 1
+        }
         nums(idx) -= 1
         for (k <- (idx+1) until nums.length) {
           nums(k) = sum min cnts(k)
@@ -499,15 +507,19 @@ trait SeqLike[+A, +Repr] extends Any with IterableLike[A, Repr] with GenSeqLike[
    *  @return  A new $coll which contains the first occurrence of every element of this $coll.
    */
   def distinct: Repr = {
-    val b = newBuilder
-    val seen = mutable.HashSet[A]()
-    for (x <- this) {
-      if (!seen(x)) {
-        b += x
-        seen += x
+    val isImmutable = this.isInstanceOf[immutable.Seq[_]]
+    if (isImmutable && lengthCompare(1) <= 0) repr
+    else {
+      val b = newBuilder
+      val seen = new mutable.HashSet[A]()
+      var it = this.iterator
+      var different = false
+      while (it.hasNext) {
+        val next = it.next
+        if (seen.add(next)) b += next else different = true
       }
+      if (different || !isImmutable) b.result() else repr
     }
-    b.result()
   }
 
   def patch[B >: A, That](from: Int, patch: GenSeq[B], replaced: Int)(implicit bf: CanBuildFrom[Repr, B, That]): That = {
